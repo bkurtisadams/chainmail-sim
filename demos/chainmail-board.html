@@ -1,0 +1,1012 @@
+<!doctype html>
+<!-- chainmail-board.html · v0.2.0 · Slice 5: Battlefield  ·  + zoom/pan, sage field -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chainmail — Battlefield · v0.1.0</title>
+<style>
+  :root {
+    --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
+    --side-a:#3a6e90; --side-a-d:#27516c; --side-b:#9c3b2c; --side-b-d:#73291d;
+    --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a; --rank-hi:#ecd08a;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:"Avenir Next Condensed","Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
+  .page { max-width: 1280px; margin: 0 auto; padding: 22px 26px 50px; }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 18px; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 18px; }
+  .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; color: var(--ink); margin: 0 0 10px; }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--rule); padding: 10px 14px;
+    border-radius: 6px; margin-bottom: 12px; font-family: var(--sans); }
+  .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
+    border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
+  .toolbar .hint { font-size: 11px; color: var(--ink-soft); margin-left: auto; letter-spacing: 0.4px; }
+  button { font-family: var(--sans); font-size: 11.5px; letter-spacing: 1.8px; text-transform: uppercase;
+    font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 8px 12px;
+    border-radius: 3px; cursor: pointer; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button.gold { background: var(--gold); color: var(--ink); }
+  button.danger { background: var(--rear); }
+
+  .layout { display: grid; grid-template-columns: 1fr 300px; gap: 12px; }
+  #board { width: 100%; height: auto; aspect-ratio: 960 / 540;
+    background: var(--field); border: 2px solid var(--field-edge); border-radius: 6px;
+    cursor: default; user-select: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18); }
+  #board.spawning { cursor: crosshair; }
+  #board.panning  { cursor: grabbing; }
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; }
+  .panel h2 { font-family: var(--sans); font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase;
+    font-weight: 700; margin: 0 0 10px; color: var(--ink); }
+  .panel .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px;
+    vertical-align: -1px; }
+  .field { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .field label { width: 76px; font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.4px;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .field select, .field input { flex: 1; padding: 4px 6px; font-family: var(--serif); font-size: 13px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink); }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0;
+    border-bottom: 1px dashed var(--rule); }
+  .stat:last-child { border-bottom: 0; }
+  .stat .k { font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--ink-soft); }
+  .stat .v { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
+
+  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px;
+    min-height: 200px; max-height: 360px; overflow-y: auto; font-size: 13.5px; line-height: 1.55; }
+  #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
+    font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .turn { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed var(--rule); }
+  .turn:last-child { border-bottom: 0; }
+  .turn-head { font-family: var(--sans); font-size: 10.5px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 6px; }
+  .step { padding: 2px 0 2px 12px; border-left: 2px solid var(--rule); margin-bottom: 3px; }
+  .verdict { font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 3px; font-weight: 700; display: inline-block; margin-top: 5px; }
+  .v-continues, .v-noeffect { background: rgba(110,96,71,0.16); color: var(--ink-soft); }
+  .v-back1, .v-back2 { background: rgba(192,137,46,0.22); color: var(--flank); }
+  .v-retreat, .v-rout { background: rgba(176,57,44,0.20); color: var(--rear); }
+  .v-surrender, .v-removed { background: rgba(176,57,44,0.32); color: var(--rear); }
+  .v-stable, .v-killed { background: rgba(47,125,79,0.22); color: var(--front); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Battlefield</h1>
+  <div class="sub">Chainmail HTML Sim · Slice 5 · free placement · facing · engagement · live resolver wiring</div>
+  <hr>
+
+  <div class="toolbar">
+    <button id="btn-melee" disabled>Resolve melee</button>
+    <button id="btn-missile" disabled>Fire missiles</button>
+    <button id="btn-clear-sel" class="secondary">Clear selection</button>
+    <button id="btn-reset-view" class="secondary">Reset view</button>
+    <button id="btn-reset" class="danger">Reset board</button>
+    <span class="phase-tag" id="phase">Phase: Setup</span>
+    <span class="hint">click → select · shift+click → target · drag → move · [ ] → rotate · arrows → nudge · wheel → zoom · middle-drag → pan</span>
+  </div>
+
+  <div class="layout">
+    <svg id="board" viewBox="0 0 960 540"></svg>
+    <aside>
+      <div class="panel">
+        <h2>Selected <span class="swatch" style="background:var(--side-a)"></span></h2>
+        <div id="selected-pane" class="empty">none</div>
+      </div>
+      <div class="panel">
+        <h2>Target <span class="swatch" style="background:var(--side-b)"></span></h2>
+        <div id="target-pane" class="empty">none</div>
+      </div>
+      <div class="panel">
+        <h2>New unit</h2>
+        <div class="field"><label>Side</label><select id="f-side">
+          <option value="A">A (blue)</option><option value="B">B (red)</option>
+        </select></div>
+        <div class="field"><label>Type</label><select id="f-type"></select></div>
+        <div class="field"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
+        <div class="field"><label>Formation</label><select id="f-form">
+          <option value="line">Line</option>
+          <option value="column">Column</option>
+          <option value="square">Square</option>
+          <option value="hedgehog">Hedgehog</option>
+        </select></div>
+        <div class="field"><label>Spacing</label><select id="f-spacing">
+          <option value="close">Close (≤ 1″)</option><option value="open">Open (&gt; 1″)</option>
+        </select></div>
+        <div class="field"><label>Missile</label><select id="f-weapon">
+          <option value="">none</option>
+          <option value="short_bow">Short Bow (15″)</option>
+          <option value="longbow">Longbow (21″)</option>
+          <option value="composite">Composite (24″)</option>
+          <option value="light_crossbow">Light Crossbow (18″)</option>
+          <option value="heavy_crossbow">Heavy Crossbow (24″)</option>
+          <option value="arquebus">Arquebus (18″)</option>
+        </select></div>
+        <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
+      </div>
+    </aside>
+  </div>
+
+  <hr>
+  <div class="sec-head">Log</div>
+  <div id="log"></div>
+</div>
+
+<script type="module">
+const SIM_VERSION = '0.2.0';
+const PX_PER_INCH = 24;
+const BOARD_W = 960;
+const BOARD_H = 540;
+const MELEE_RANGE_IN = 3; // inches of contact, per rules
+
+/* === A. RNG ============================================================ */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const d6      = (rng) => 1 + Math.floor(rng() * 6);
+const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+
+/* === B. DATA =========================================================== */
+const TYPES = Object.freeze([
+  { id:'PE',  name:'Peasants',         cls:'LF', morale:3, loss:{ pct:0.25, score:8 } },
+  { id:'LV',  name:'Levies',           cls:'HF', morale:4, loss:{ pct:0.25, score:8 } },
+  { id:'LF',  name:'Light Foot',       cls:'LF', morale:4, loss:{ pct:0.25, score:8 } },
+  { id:'HF',  name:'Heavy Foot',       cls:'HF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'EHF', name:'Elite Heavy Foot', cls:'HF', morale:6, loss:{ pct:1/3,  score:6 } },
+  { id:'AF',  name:'Armored Foot',     cls:'AF', morale:7, loss:{ pct:1/3,  score:6 } },
+  { id:'LH',  name:'Light Horse',      cls:'LH', morale:6, loss:{ pct:0.25, score:8 } },
+  { id:'MH',  name:'Medium Horse',     cls:'MH', morale:7, loss:{ pct:1/3,  score:7 } },
+  { id:'HH',  name:'Heavy Horse',      cls:'HH', morale:8, loss:{ pct:0.50, score:6 } },
+  { id:'SP',  name:'Swiss Pikemen',    cls:'HF', morale:9, loss:{ pct:0.50, score:5 } },
+  { id:'MK',  name:'Mounted Knights',  cls:'HH', morale:8, loss:{ pct:0.50, score:4 } },
+]);
+const typeById = (id) => TYPES.find(t => t.id === id);
+
+const COMBAT = Object.freeze({
+  LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
+        LH:{dice:1,perMen:2,kills:[6]},     MH:{dice:1,perMen:3,kills:[6]},     HH:{dice:1,perMen:4,kills:[6]} },
+  HF: { LF:{dice:1,perMen:1,kills:[5,6]},   HF:{dice:1,perMen:1,kills:[6]},     AF:{dice:1,perMen:2,kills:[6]},
+        LH:{dice:1,perMen:2,kills:[6]},     MH:{dice:1,perMen:3,kills:[6]},     HH:{dice:1,perMen:4,kills:[6]} },
+  AF: { LF:{dice:1,perMen:1,kills:[4,5,6]}, HF:{dice:1,perMen:1,kills:[5,6]},   AF:{dice:1,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[6]},     MH:{dice:1,perMen:2,kills:[6]},     HH:{dice:1,perMen:3,kills:[6]} },
+  LH: { LF:{dice:2,perMen:1,kills:[5,6]},   HF:{dice:2,perMen:1,kills:[6]},     AF:{dice:1,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[6]},     MH:{dice:1,perMen:2,kills:[6]},     HH:{dice:1,perMen:3,kills:[6]} },
+  MH: { LF:{dice:2,perMen:1,kills:[4,5,6]}, HF:{dice:2,perMen:1,kills:[5,6]},   AF:{dice:2,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[5,6]},   MH:{dice:1,perMen:1,kills:[6]},     HH:{dice:1,perMen:2,kills:[6]} },
+  HH: { LF:{dice:4,perMen:1,kills:[5,6]},   HF:{dice:3,perMen:1,kills:[5,6]},   AF:{dice:2,perMen:1,kills:[5,6]},
+        LH:{dice:2,perMen:1,kills:[5,6]},   MH:{dice:1,perMen:1,kills:[5,6]},   HH:{dice:1,perMen:1,kills:[6]} },
+});
+const POLEARM_CLASSES = new Set(['HF', 'AF']);
+const IMPETUS_CLASSES = new Set(['HF', 'AF', 'LH', 'MH', 'HH']);
+const CLASS_UP   = { LF:'HF', HF:'AF', LH:'MH', MH:'HH' };
+const CLASS_DOWN = { HH:'MH', MH:'LH', LH:'AF' };
+
+const REACTION_BANDS = Object.freeze([
+  { max:19,       tag:'continues', text:'melee continues' },
+  { max:39,       tag:'back2',     text:'back 2 moves, good order' },
+  { max:59,       tag:'back1',     text:'back 1 move, good order' },
+  { max:79,       tag:'retreat',   text:'retreat 1 move' },
+  { max:99,       tag:'rout',      text:'rout 1½ moves' },
+  { max:Infinity, tag:'surrender', text:'surrender' },
+]);
+
+const MASS_MISSILE = Object.freeze({
+  unarmored: { label:'Unarmored', dieBands:[[1,2],[3,6]], maxGroup:10,
+    firingBands:[
+      { range:[1,2], low:0, high:1 }, { range:[3,4], low:1, high:2 }, { range:[5,6], low:2, high:3 },
+      { range:[7,8], low:3, high:4 }, { range:[9,10], low:4, high:5 },
+    ] },
+  half: { label:'½ Armor or Shield', dieBands:[[1,3],[4,6]], maxGroup:10,
+    firingBands:[
+      { range:[1,2], low:0, high:0 }, { range:[3,4], low:0, high:1 }, { range:[5,6], low:2, high:2 },
+      { range:[7,8], low:2, high:3 }, { range:[9,10], low:3, high:3 },
+    ] },
+  fully: { label:'Fully Armored', dieBands:[[1,4],[5,6]], maxGroup:20,
+    firingBands:[
+      { range:[4,8], low:0, high:1 }, { range:[9,12], low:1, high:2 },
+      { range:[13,16], low:2, high:3 }, { range:[17,20], low:3, high:3 },
+    ] },
+});
+const INDIRECT_BUMP = { unarmored:'half', half:'fully', fully:'arrow_proof' };
+
+// Type → mass missile armor group
+const MASS_ARMOR_BY_TYPE = {
+  PE:'unarmored', LF:'unarmored', LV:'half',
+  HF:'half', EHF:'half', SP:'half', AF:'fully',
+  LH:'half', MH:'half', HH:'fully', MK:'fully',
+};
+
+// Move allowances (p.9)
+const MOVE_ALLOWANCE = {
+  PE:9, LV:12, LF:12, HF:9, EHF:9, SP:6, AF:6,
+  LH:24, MH:18, HH:12, MK:12,
+};
+
+// Missile weapon ranges (p.11)
+const WEAPON_RANGES = {
+  short_bow:15, horsebow:18, light_crossbow:18, longbow:21,
+  composite:24, heavy_crossbow:24, arquebus:18,
+};
+
+// Initial formation → cols/rows from count
+function formationDims(formation, count) {
+  if (formation === 'column') {
+    const c = Math.min(2, count);
+    return { cols: c, rows: Math.ceil(count / c), hedgehog: false };
+  }
+  if (formation === 'square' || formation === 'hedgehog') {
+    const c = Math.max(2, Math.ceil(Math.sqrt(count)));
+    return { cols: c, rows: Math.ceil(count / c), hedgehog: formation === 'hedgehog' };
+  }
+  // line (default)
+  const c = Math.min(10, count);
+  return { cols: c, rows: Math.ceil(count / c), hedgehog: false };
+}
+
+/* === C. ENGINES (mass melee, morale, loss, mass missile) =============== */
+function effectiveAttackerClass(cls, mods) {
+  if (mods.flank || mods.rear) return CLASS_UP[cls] || cls;
+  return cls;
+}
+function classBumpsToBonus(cls, mods) {
+  return (mods.flank || mods.rear) && !(cls in CLASS_UP);
+}
+function effectiveDefenderReturnClass(cls, standing) {
+  if (!standing) return cls;
+  return CLASS_DOWN[cls] || cls;
+}
+function applyDieBonus(kills, bonus) {
+  if (!bonus) return kills.slice();
+  const out = new Set(kills);
+  const min = Math.min(...kills);
+  for (let v = min - bonus; v < min; v++) if (v >= 1 && v <= 6) out.add(v);
+  return [...out].sort((a, b) => a - b);
+}
+function rollKills(numDice, kills, rng) {
+  const dice = []; let n = 0;
+  for (let i = 0; i < numDice; i++) {
+    const r = d6(rng); dice.push(r);
+    if (kills.includes(r)) n++;
+  }
+  return { dice, kills: n };
+}
+
+function resolveMassMelee({ attacker, defender, rng }) {
+  const aT = typeById(attacker.type), dT = typeById(defender.type);
+  const result = { attacker:{}, defender:{} };
+
+  const aEff   = effectiveAttackerClass(aT.cls, attacker);
+  const aBonus = classBumpsToBonus(aT.cls, attacker);
+  const aRow   = COMBAT[aEff]?.[dT.cls];
+  if (!aRow) throw new Error(`no combat row: ${aEff} vs ${dT.cls}`);
+  let aDPM = aRow.dice / aRow.perMen;
+  const aPolearm = POLEARM_CLASSES.has(aT.cls) && attacker.polearm;
+  if (aPolearm) aDPM += 1;
+  if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
+  const aTotal = Math.floor(attacker.count * aDPM);
+  const aKills = applyDieBonus(aRow.kills, aBonus ? 1 : 0);
+  const aRoll = rollKills(aTotal, aKills, rng);
+  result.attacker = {
+    type:aT.id, startCount:attacker.count, effectiveClass:aEff, dicePerMan:aDPM, totalDice:aTotal,
+    polearmApplied:aPolearm, impetusApplied:IMPETUS_CLASSES.has(aT.cls) && attacker.impetus,
+    flankBumpToBonus:aBonus, killScores:aKills, dice:aRoll.dice, killsDealt:aRoll.kills,
+  };
+
+  if (attacker.rear) {
+    result.defender = { type:dT.id, startCount:defender.count, effectiveClass:dT.cls,
+      dicePerMan:0, totalDice:0, dice:[], killsDealt:0, noReturn:true };
+  } else {
+    const dRetCls = effectiveDefenderReturnClass(dT.cls, !!defender.standingHorseFirstRound);
+    const dRow = COMBAT[dRetCls]?.[aT.cls];
+    let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
+    const dPolearm = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
+    if (dPolearm) dDPM += 1;
+    if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
+    const dTotal = Math.floor(defender.count * dDPM);
+    const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng) : { dice:[], kills:0 };
+    result.defender = {
+      type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
+      dicePerMan:dDPM, totalDice:dTotal, polearmApplied:dPolearm,
+      impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
+      standingHorseApplied: dRetCls !== dT.cls, killScores:dRow ? dRow.kills : [],
+      dice:dRoll.dice, killsDealt:dRoll.kills,
+    };
+  }
+  result.attacker.casualties = result.defender.killsDealt;
+  result.attacker.surviving  = Math.max(0, attacker.count - result.defender.killsDealt);
+  result.defender.casualties = result.attacker.killsDealt;
+  result.defender.surviving  = Math.max(0, defender.count - result.attacker.killsDealt);
+  return result;
+}
+
+function reactionFor(diff) { return REACTION_BANDS.find(b => diff <= b.max); }
+
+function resolvePostMelee({ a, b, rng }) {
+  const aSurv = a.startCount - a.casualties;
+  const bSurv = b.startCount - b.casualties;
+  let fewerSide=null, casDiff=0, casDie=0, casBonus=0;
+  if (a.casualties !== b.casualties) {
+    fewerSide = a.casualties < b.casualties ? 'A' : 'B';
+    casDiff = Math.abs(a.casualties - b.casualties);
+    casDie = d6(rng);
+    casBonus = casDiff * casDie;
+  }
+  let moreSide=null, survDiff=0;
+  if (aSurv !== bSurv) {
+    moreSide = aSurv > bSurv ? 'A' : 'B';
+    survDiff = Math.abs(aSurv - bSurv);
+  }
+  const aRating = a.morale * aSurv;
+  const bRating = b.morale * bSurv;
+  const aTotal = aRating + (fewerSide==='A'?casBonus:0) + (moreSide==='A'?survDiff:0);
+  const bTotal = bRating + (fewerSide==='B'?casBonus:0) + (moreSide==='B'?survDiff:0);
+  let diff = Math.abs(aTotal - bTotal);
+  const doubled = (a.startCount < 20 || b.startCount < 20);
+  if (doubled) diff *= 2;
+  const loser = aTotal === bTotal ? null : (aTotal < bTotal ? 'A' : 'B');
+  return {
+    a:{ surviving:aSurv, ratingScore:aRating, total:aTotal },
+    b:{ surviving:bSurv, ratingScore:bRating, total:bTotal },
+    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus },
+    survivorBonus:{ side:moreSide, diff:survDiff, value:survDiff },
+    rawDiff: Math.abs(aTotal - bTotal), diff, doubled, loser, reaction: reactionFor(diff),
+  };
+}
+
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng }) {
+  const t = typeById(type);
+  const pct = casualties / startCount;
+  if (pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
+  const dice = roll2d6(rng);
+  const passed = dice.sum >= t.loss.score;
+  return { triggered:true, pct, threshold:t.loss, dice, passed,
+    action: passed ? 'stable' : (surrounded ? 'surrender' : 'removed') };
+}
+
+function splitFiringGroups(count, maxGroup) {
+  if (count <= maxGroup) return [count];
+  const n = Math.ceil(count / maxGroup);
+  const base = Math.floor(count / n), rem = count % n;
+  return Array.from({ length:n }, (_, i) => base + (i < rem ? 1 : 0));
+}
+function findFiringBand(count, bands) {
+  if (count < bands[0].range[0]) return null;
+  for (const b of bands) if (count >= b.range[0] && count <= b.range[1]) return b;
+  return bands[bands.length - 1];
+}
+function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=false, rng }) {
+  let group = armorGroup, bumped = false;
+  if (indirect) {
+    const next = INDIRECT_BUMP[group];
+    if (next === 'arrow_proof') return { armorGroup:group, arrowProof:true, totalRaw:0, totalKills:0, groups:[] };
+    group = next; bumped = true;
+  }
+  const tab = MASS_MISSILE[group];
+  const subs = splitFiringGroups(firingCount, tab.maxGroup);
+  const results = []; let total = 0;
+  for (const s of subs) {
+    const die = d6(rng);
+    const band = findFiringBand(s, tab.firingBands);
+    if (!band) { results.push({ count:s, die, kills:0, reason:'below minimum band' }); continue; }
+    const isLow = die >= tab.dieBands[0][0] && die <= tab.dieBands[0][1];
+    const kills = isLow ? band.low : band.high;
+    results.push({ count:s, die, isLow, band, kills });
+    total += kills;
+  }
+  return { armorGroup:group, indirectApplied:bumped, groups:results,
+    totalRaw:total, totalKills: cover ? Math.floor(total/2) : total, coverApplied:cover };
+}
+
+/* === D. STATE ========================================================== */
+const state = {
+  units: [],          // { id, side, type, count, startCount, cols, rows, spacing, weapon, hedgehog, x, y, facing }
+  selectedId: null,
+  targetId: null,
+  nextId: 1,
+  dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
+  panning: null,      // { clientX0, clientY0, vb0 }
+  viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
+  rng: mulberry32(Date.now() & 0xffff),
+};
+
+/* === E. GEOMETRY ======================================================= */
+const inchesToPx = (i) => i * PX_PER_INCH;
+const pxToInches = (p) => p / PX_PER_INCH;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function unitBounds(u) {
+  const pip = 6;
+  const gap = u.spacing === 'close' ? 2 : 5;
+  const pad = 4;
+  const w = u.cols * pip + (u.cols - 1) * gap + 2 * pad;
+  const h = u.rows * pip + (u.rows - 1) * gap + 2 * pad;
+  return { w, h, pip, gap, pad };
+}
+
+// Which edge of `defender` is `attacker` hitting, based on geometry.
+function engagementEdge(attacker, defender) {
+  const dx = attacker.x - defender.x;
+  const dy = attacker.y - defender.y;
+  // Defender's "north" (front) is rotated by `facing` degrees clockwise from screen-up.
+  // Rotate the displacement INTO defender's local frame by -facing.
+  const f = -defender.facing * Math.PI / 180;
+  const lx = dx * Math.cos(f) - dy * Math.sin(f);
+  const ly = dx * Math.sin(f) + dy * Math.cos(f);
+  // Local frame: -y = front, +y = rear, ±x = flanks. Bucket by 90° wedges.
+  const angle = Math.atan2(lx, -ly) * 180 / Math.PI;  // 0 = front, ±90 = flanks, ±180 = rear
+  if (Math.abs(angle) < 45)  return 'front';
+  if (Math.abs(angle) > 135) return 'rear';
+  return angle > 0 ? 'right' : 'left';
+}
+
+// Approximate contact: center-to-center distance ≤ MELEE_RANGE + half-widths.
+function inMeleeContact(a, b) {
+  const range = inchesToPx(MELEE_RANGE_IN);
+  const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
+  const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
+  return dist(a, b) <= range + aMax + bMax;
+}
+
+function inMissileRange(firer, target) {
+  if (!firer.weapon) return { ok:false, reason:'no weapon' };
+  const maxRangePx = inchesToPx(WEAPON_RANGES[firer.weapon]);
+  const centerDistPx = dist(firer, target);
+  if (centerDistPx > maxRangePx) {
+    return { ok:false, reason:`out of range (${pxToInches(centerDistPx).toFixed(1)}″ > ${WEAPON_RANGES[firer.weapon]}″)` };
+  }
+  return { ok:true, distanceIn: pxToInches(centerDistPx) };
+}
+
+/* === F. RENDER ========================================================= */
+const $ = (sel) => document.querySelector(sel);
+function fillSelect(id, items, render, value) {
+  const sel = $(id);
+  sel.innerHTML = '';
+  items.forEach(it => {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = render(it);
+    sel.appendChild(o);
+  });
+  if (value) sel.value = value;
+}
+fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
+
+function renderBoard() {
+  const board = $('#board');
+  applyViewBox();
+  board.innerHTML =
+    renderBg() +
+    `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
+    `<g id="overlay">${renderOverlay()}${renderDragRuler()}</g>`;
+  for (const u of state.units) {
+    const node = board.querySelector(`[data-id="${u.id}"]`);
+    if (node) node.addEventListener('mousedown', e => onUnitMouseDown(e, u.id));
+  }
+  updateSidebar();
+  updateButtons();
+}
+
+function renderBg() {
+  // Inch tick marks along the borders for measuring
+  const ticks = [];
+  for (let i = 0; i <= BOARD_W / PX_PER_INCH; i++) {
+    const x = i * PX_PER_INCH;
+    const big = (i % 6 === 0);
+    ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${big?9:5}" stroke="rgba(0,0,0,0.3)" stroke-width="${big?0.8:0.5}"/>`);
+    ticks.push(`<line x1="${x}" y1="${BOARD_H-(big?9:5)}" x2="${x}" y2="${BOARD_H}" stroke="rgba(0,0,0,0.3)" stroke-width="${big?0.8:0.5}"/>`);
+  }
+  for (let i = 0; i <= BOARD_H / PX_PER_INCH; i++) {
+    const y = i * PX_PER_INCH;
+    const big = (i % 6 === 0);
+    ticks.push(`<line x1="0" y1="${y}" x2="${big?9:5}" y2="${y}" stroke="rgba(0,0,0,0.3)" stroke-width="${big?0.8:0.5}"/>`);
+    ticks.push(`<line x1="${BOARD_W-(big?9:5)}" y1="${y}" x2="${BOARD_W}" y2="${y}" stroke="rgba(0,0,0,0.3)" stroke-width="${big?0.8:0.5}"/>`);
+  }
+  return `<g id="bg">${ticks.join('')}</g>`;
+}
+
+function renderUnit(u) {
+  if (u.destroyed) return '';
+  const b = unitBounds(u);
+  const { w, h, pip, gap, pad } = b;
+  const sideC  = u.side === 'A' ? 'var(--side-a)'   : 'var(--side-b)';
+  const sideD  = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+  const sel = state.selectedId === u.id;
+  const tgt = state.targetId   === u.id;
+
+  // Pips
+  let pips = '';
+  let placed = 0;
+  for (let r = 0; r < u.rows; r++) {
+    for (let c = 0; c < u.cols; c++) {
+      if (placed >= u.count) break;
+      const px = c * (pip + gap) + pad - w/2;
+      const py = r * (pip + gap) + pad - h/2;
+      const isFront = (r === 0 && !u.hedgehog);
+      const fill = isFront ? 'var(--rank-hi)' : sideC;
+      pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.6"/>`;
+      placed++;
+    }
+  }
+
+  // Edges
+  const xL = -w/2, xR = w/2, yT = -h/2, yB = h/2;
+  let edges = '';
+  if (u.hedgehog) {
+    // All four edges drawn in front-color (defends all around)
+    edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="1.5" stroke-dasharray="3 3"/>`;
+  } else {
+    edges += `<line x1="${xL}" y1="${yT}" x2="${xR}" y2="${yT}" stroke="var(--front)" stroke-width="2.2" stroke-linecap="round"/>`;
+    edges += `<line x1="${xR}" y1="${yT}" x2="${xR}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
+    edges += `<line x1="${xL}" y1="${yB}" x2="${xR}" y2="${yB}" stroke="var(--rear)"  stroke-width="1.4"/>`;
+    edges += `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
+  }
+
+  // Arc of fire (missile-armed)
+  let arc = '';
+  if (u.weapon && !u.hedgehog) {
+    const radius = inchesToPx(WEAPON_RANGES[u.weapon]) || inchesToPx(18);
+    const half = Math.PI / 4; // 45° foot
+    const lx = -radius * Math.sin(half), ly = yT - radius * Math.cos(half);
+    const rx =  radius * Math.sin(half), ry = yT - radius * Math.cos(half);
+    arc = `<path d="M 0 ${yT} L ${lx} ${ly} A ${radius} ${radius} 0 0 1 ${rx} ${ry} Z"
+      fill="rgba(216,178,90,0.06)" stroke="rgba(216,178,90,0.32)" stroke-width="0.6" stroke-dasharray="2 4" pointer-events="none"/>`;
+  }
+
+  // Selection / target outline (inside the rotated group so it tracks facing)
+  let outline = '';
+  if (sel) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+  else if (tgt) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+
+  const T = typeById(u.type);
+  return `
+    <g class="unit-group" data-id="${u.id}" style="cursor:grab">
+      ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
+      <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
+        <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
+        ${pips}
+        ${edges}
+        ${outline}
+      </g>
+      <text x="${u.x}" y="${u.y + Math.max(b.w, b.h)/2 + 14}" font-family="sans-serif" font-size="10.5" font-weight="700"
+            fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
+        ${u.side} · ${T.name} · ${u.count}/${u.startCount}
+      </text>
+    </g>
+  `;
+}
+
+function renderOverlay() {
+  // Engagement arrow when both selected and in melee contact
+  if (state.selectedId && state.targetId && state.selectedId !== state.targetId) {
+    const a = state.units.find(u => u.id === state.selectedId);
+    const d = state.units.find(u => u.id === state.targetId);
+    if (!a || !d || a.destroyed || d.destroyed) return '';
+    if (inMeleeContact(a, d)) {
+      const edge = engagementEdge(a, d);
+      const colors = { front:'var(--front)', left:'var(--flank)', right:'var(--flank)', rear:'var(--rear)' };
+      const labels = { front:'frontal', left:'left flank', right:'right flank', rear:'rear' };
+      const c = colors[edge];
+      const mx = (a.x + d.x)/2, my = (a.y + d.y)/2;
+      return `
+        <line x1="${a.x}" y1="${a.y}" x2="${d.x}" y2="${d.y}" stroke="${c}" stroke-width="2" stroke-dasharray="3 3" pointer-events="none"/>
+        <rect x="${mx-50}" y="${my-22}" width="100" height="20" rx="3" fill="${c}" opacity="0.85" pointer-events="none"/>
+        <text x="${mx}" y="${my-8}" font-family="sans-serif" font-size="10.5" font-weight="700" fill="white" text-anchor="middle" pointer-events="none" letter-spacing="1.2">${labels[edge].toUpperCase()}</text>
+      `;
+    }
+  }
+  return '';
+}
+
+function renderDragRuler() {
+  if (!state.dragging) return '';
+  const u = state.units.find(u => u.id === state.dragging.unitId);
+  if (!u) return '';
+  const distIn = pxToInches(Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY));
+  const allow = MOVE_ALLOWANCE[u.type] || 12;
+  const over = distIn > allow;
+  const c = over ? 'var(--rear)' : 'var(--side-a-d)';
+  return `
+    <line x1="${state.dragging.originX}" y1="${state.dragging.originY}"
+          x2="${u.x}" y2="${u.y}" stroke="${c}" stroke-width="1.4" stroke-dasharray="4 4" pointer-events="none"/>
+    <circle cx="${state.dragging.originX}" cy="${state.dragging.originY}" r="3" fill="${c}" pointer-events="none"/>
+    <text x="${u.x + 12}" y="${u.y - 8}" font-family="sans-serif" font-size="11" font-weight="700" fill="${c}" pointer-events="none">${distIn.toFixed(1)}″ / ${allow}″${over?' OVER':''}</text>
+  `;
+}
+
+function updateSidebar() {
+  for (const [pane, id] of [['#selected-pane', state.selectedId], ['#target-pane', state.targetId]]) {
+    const el = $(pane);
+    if (!id) { el.className = 'empty'; el.textContent = 'none'; continue; }
+    const u = state.units.find(u => u.id === id);
+    if (!u || u.destroyed) { el.className = 'empty'; el.textContent = 'none'; continue; }
+    el.className = '';
+    const T = typeById(u.type);
+    const pct = u.startCount ? (100 * (u.startCount - u.count) / u.startCount).toFixed(0) : 0;
+    el.innerHTML =
+      `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
+      `<div class="stat"><span class="k">Type</span><span class="v">${T.name}</span></div>` +
+      `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
+      `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
+      `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
+      `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
+      (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` : '');
+  }
+}
+
+function updateButtons() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
+  $('#btn-melee').disabled   = !(valid && inMeleeContact(a, d));
+  $('#btn-missile').disabled = !(valid && a.weapon && inMissileRange(a, d).ok);
+}
+
+/* === G. INTERACTION ==================================================== */
+function svgPoint(evt) {
+  const svg = $('#board');
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function applyViewBox() {
+  const v = state.viewBox;
+  $('#board').setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
+}
+
+function zoomAt(clientX, clientY, factor) {
+  const pt = svgPoint({ clientX, clientY });
+  const newW = state.viewBox.w * factor;
+  const newH = state.viewBox.h * factor;
+  if (newW < BOARD_W * 0.25 || newW > BOARD_W * 4) return;
+  state.viewBox = {
+    x: pt.x - (pt.x - state.viewBox.x) * factor,
+    y: pt.y - (pt.y - state.viewBox.y) * factor,
+    w: newW, h: newH,
+  };
+  applyViewBox();
+}
+
+function onWheel(evt) {
+  evt.preventDefault();
+  const factor = evt.deltaY > 0 ? 1.15 : 1 / 1.15;
+  zoomAt(evt.clientX, evt.clientY, factor);
+}
+
+function resetView() {
+  state.viewBox = { x: 0, y: 0, w: BOARD_W, h: BOARD_H };
+  applyViewBox();
+}
+
+function onBoardMouseDown(evt) {
+  // Middle-click → pan; ignore on units (their handlers stopPropagation)
+  if (evt.button === 1) {
+    evt.preventDefault();
+    state.panning = { clientX0: evt.clientX, clientY0: evt.clientY, vb0: { ...state.viewBox } };
+    $('#board').classList.add('panning');
+  }
+}
+
+function onUnitMouseDown(evt, unitId) {
+  evt.stopPropagation();
+  const u = state.units.find(u => u.id === unitId);
+  if (!u || u.destroyed) return;
+  if (evt.shiftKey) {
+    state.targetId = unitId;
+    if (state.targetId === state.selectedId) state.targetId = null;
+    renderBoard();
+    return;
+  }
+  state.selectedId = unitId;
+  if (state.targetId === unitId) state.targetId = null;
+  // Begin drag
+  const pt = svgPoint(evt);
+  state.dragging = {
+    unitId, originX: u.x, originY: u.y,
+    grabOffsetX: pt.x - u.x, grabOffsetY: pt.y - u.y,
+  };
+  renderBoard();
+}
+
+function onBoardMouseMove(evt) {
+  if (state.panning) {
+    const svg = $('#board');
+    const rect = svg.getBoundingClientRect();
+    const scale = state.viewBox.w / rect.width;
+    const dx = (evt.clientX - state.panning.clientX0) * scale;
+    const dy = (evt.clientY - state.panning.clientY0) * scale;
+    state.viewBox = { ...state.panning.vb0, x: state.panning.vb0.x - dx, y: state.panning.vb0.y - dy };
+    applyViewBox();
+    return;
+  }
+  if (!state.dragging) return;
+  const u = state.units.find(u => u.id === state.dragging.unitId);
+  if (!u) return;
+  const pt = svgPoint(evt);
+  u.x = Math.max(20, Math.min(BOARD_W - 20, pt.x - state.dragging.grabOffsetX));
+  u.y = Math.max(20, Math.min(BOARD_H - 20, pt.y - state.dragging.grabOffsetY));
+  renderBoard();
+}
+function onBoardMouseUp() {
+  if (state.panning) { state.panning = null; $('#board').classList.remove('panning'); }
+  if (state.dragging) state.dragging = null;
+  renderBoard();
+}
+function onBoardClick(evt) {
+  // Click on empty space → deselect (unless shift)
+  if (evt.target.tagName === 'svg' || evt.target.id === 'bg') {
+    if (!evt.shiftKey) { state.selectedId = null; state.targetId = null; }
+    renderBoard();
+  }
+}
+function onKeyDown(evt) {
+  // Zoom hotkeys are global (selection-independent)
+  if (evt.key === '+' || evt.key === '=') {
+    const rect = $('#board').getBoundingClientRect();
+    zoomAt(rect.left + rect.width/2, rect.top + rect.height/2, 1/1.2);
+    evt.preventDefault(); return;
+  }
+  if (evt.key === '-' || evt.key === '_') {
+    const rect = $('#board').getBoundingClientRect();
+    zoomAt(rect.left + rect.width/2, rect.top + rect.height/2, 1.2);
+    evt.preventDefault(); return;
+  }
+  if (evt.key === '0') { resetView(); evt.preventDefault(); return; }
+
+  const u = state.units.find(u => u.id === state.selectedId);
+  if (!u || u.destroyed) return;
+  let handled = true;
+  if (evt.key === '[') u.facing = (u.facing - 15 + 360) % 360;
+  else if (evt.key === ']') u.facing = (u.facing + 15) % 360;
+  else if (evt.key === 'ArrowLeft')  u.x = Math.max(20, u.x - PX_PER_INCH/4);
+  else if (evt.key === 'ArrowRight') u.x = Math.min(BOARD_W-20, u.x + PX_PER_INCH/4);
+  else if (evt.key === 'ArrowUp')    u.y = Math.max(20, u.y - PX_PER_INCH/4);
+  else if (evt.key === 'ArrowDown')  u.y = Math.min(BOARD_H-20, u.y + PX_PER_INCH/4);
+  else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
+  else if (evt.key === 'Delete' || evt.key === 'Backspace') {
+    state.units = state.units.filter(x => x.id !== u.id);
+    state.selectedId = null;
+  }
+  else handled = false;
+  if (handled) { evt.preventDefault(); renderBoard(); }
+}
+
+/* === H. ENGINE CALLS (chained: melee → post-melee → loss) ============== */
+function appendTurn(headline, bodyHtml) {
+  const d = document.createElement('div');
+  d.className = 'turn';
+  d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
+  $('#log').appendChild(d);
+  d.scrollIntoView({ behavior:'smooth', block:'end' });
+}
+
+function applyCasualties(unit, n) {
+  unit.count = Math.max(0, unit.count - n);
+  if (unit.count === 0) { unit.destroyed = true; return; }
+  // Rear-rank-first attrition: shrink rows; if below cols, fold into one row.
+  if (unit.count < unit.cols) { unit.cols = unit.count; unit.rows = 1; }
+  else unit.rows = Math.ceil(unit.count / unit.cols);
+}
+
+function diceTrace(dice, kills) {
+  if (!dice.length) return '<small style="color:var(--ink-soft)">no dice</small>';
+  return `<small style="color:var(--ink-soft); font-family: var(--sans)">[ ${dice.map(v => kills.includes(v) ? `<b style="color:var(--ink)">${v}</b>` : String(v)).join(' ')} ]</small>`;
+}
+
+function onResolveMelee() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  if (!a || !d || a.destroyed || d.destroyed) return;
+  const edge = engagementEdge(a, d);
+
+  // Build attacker/defender param objects for the engine
+  const attackerParams = {
+    type: a.type, count: a.count,
+    polearm: a.type === 'SP' || a.type === 'HF' || a.type === 'AF',
+    impetus: false,
+    flank: edge === 'left' || edge === 'right',
+    rear: edge === 'rear',
+  };
+  const defenderParams = {
+    type: d.type, count: d.count,
+    polearm: d.type === 'SP' || d.type === 'HF' || d.type === 'AF',
+    impetus: false,
+    standingHorseFirstRound: false,
+  };
+  const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
+
+  const aT = typeById(a.type), dT = typeById(d.type);
+  let html = '';
+  const aMods = [];
+  if (melee.attacker.polearmApplied)  aMods.push('pike/halberd +1/man');
+  if (melee.attacker.impetusApplied)  aMods.push('impetus +1/man');
+  if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
+  if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
+  const dMods = [];
+  if (melee.defender.noReturn) dMods.push('rear attack → no return');
+  if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
+
+  html += `<div class="step"><b style="color:var(--side-a-d)">A · ${aT.name} × ${a.count}</b> attacks ${edge.toUpperCase()} → ` +
+          `${melee.attacker.totalDice} dice (${melee.attacker.dicePerMan.toFixed(2)}/man), kills on ${melee.attacker.killScores.join(',')} → ` +
+          `<b>${melee.attacker.killsDealt}</b> kills ${diceTrace(melee.attacker.dice, melee.attacker.killScores)}` +
+          (aMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${aMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step"><b style="color:var(--side-b-d)">B · ${dT.name} × ${d.count}</b> returns → ` +
+          `${melee.defender.totalDice} dice (${melee.defender.dicePerMan.toFixed(2)}/man), kills on ${(melee.defender.killScores||[]).join(',') || '—'} → ` +
+          `<b>${melee.defender.killsDealt}</b> kills ${diceTrace(melee.defender.dice, melee.defender.killScores||[])}` +
+          (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
+
+  // Post-melee morale
+  const pm = resolvePostMelee({
+    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aT.morale },
+    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dT.morale },
+    rng: state.rng,
+  });
+  html += `<div class="step">post-melee — A total ${pm.a.total} vs B total ${pm.b.total} · ` +
+          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}</div>`;
+  const tag = pm.reaction.tag;
+  const loserName = pm.loser ? (pm.loser === 'A' ? aT.name : dT.name) : null;
+  html += `<div class="verdict v-${tag}">${loserName ? `${pm.loser} · ${loserName} → ${pm.reaction.text}` : pm.reaction.text}</div>`;
+
+  // Apply casualties
+  applyCasualties(a, melee.attacker.casualties);
+  applyCasualties(d, melee.defender.casualties);
+
+  // Loss-morale check on whichever side(s) crossed threshold
+  for (const [label, unit, T] of [['A', a, aT], ['B', d, dT]]) {
+    if (unit.destroyed) continue;
+    const cas = unit.startCount - unit.count;
+    const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng });
+    if (!lr.triggered) continue;
+    const pct = (lr.pct*100).toFixed(1);
+    const thr = (lr.threshold.pct*100).toFixed(1);
+    html += `<div class="step">${label} · ${T.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+            `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b></div>`;
+    html += `<div class="verdict v-${lr.passed ? 'stable' : lr.action}">${label} ${lr.passed ? 'holds' : lr.action}</div>`;
+    if (!lr.passed) { unit.destroyed = true; }
+  }
+
+  appendTurn(`Melee · ${aT.name} (A) → ${dT.name} (B) · ${edge}`, html);
+  if (a.destroyed && state.selectedId === a.id) state.selectedId = null;
+  if (d.destroyed && state.targetId   === d.id) state.targetId = null;
+  renderBoard();
+}
+
+function onResolveMissile() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  if (!a || !d || !a.weapon) return;
+  const rng = state.rng;
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const armorGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
+  const reach = inMissileRange(a, d);
+  if (!reach.ok) return;
+  const res = resolveMassMissile({ firingCount:a.count, armorGroup, cover:false, indirect:false, rng });
+
+  let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} (${dT.cls}) · ` +
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}</div>`;
+  res.groups.forEach((g, i) => {
+    if (g.reason) {
+      html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
+    } else {
+      html += `<div class="step">group ${i+1} · ${g.count} firing (band ${g.band.range[0]}-${g.band.range[1]}) · ` +
+              `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
+    }
+  });
+  html += `<div class="verdict v-${res.totalKills>0?'killed':'noeffect'}">${res.totalKills} kill${res.totalKills===1?'':'s'}</div>`;
+
+  applyCasualties(d, res.totalKills);
+
+  // Loss-morale on defender if threshold crossed
+  if (!d.destroyed) {
+    const cas = d.startCount - d.count;
+    const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng });
+    if (lr.triggered) {
+      const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+      html += `<div class="step">B · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+              `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b></div>`;
+      html += `<div class="verdict v-${lr.passed?'stable':lr.action}">B ${lr.passed?'holds':lr.action}</div>`;
+      if (!lr.passed) d.destroyed = true;
+    }
+  }
+
+  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  if (d.destroyed && state.targetId === d.id) state.targetId = null;
+  renderBoard();
+}
+
+/* === I. UI WIRING ====================================================== */
+function spawnUnit() {
+  const side = $('#f-side').value;
+  const type = $('#f-type').value;
+  const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
+  const formation = $('#f-form').value;
+  const spacing = $('#f-spacing').value;
+  const weapon = $('#f-weapon').value || null;
+  const dims = formationDims(formation, count);
+  const u = {
+    id: state.nextId++,
+    side, type, count, startCount: count,
+    cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
+    spacing, weapon,
+    x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
+    y: BOARD_H/2 + (Math.random()-0.5)*60,
+    facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
+  };
+  state.units.push(u);
+  state.selectedId = u.id;
+  renderBoard();
+}
+
+function resetBoard() {
+  state.units = [];
+  state.selectedId = null;
+  state.targetId = null;
+  state.dragging = null;
+  state.nextId = 1;
+  $('#log').innerHTML = '';
+  renderBoard();
+}
+
+$('#btn-spawn').addEventListener('click', spawnUnit);
+$('#btn-melee').addEventListener('click', onResolveMelee);
+$('#btn-missile').addEventListener('click', onResolveMissile);
+$('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; state.targetId = null; renderBoard(); });
+$('#btn-reset-view').addEventListener('click', resetView);
+$('#btn-reset').addEventListener('click', resetBoard);
+$('#board').addEventListener('mousedown', onBoardMouseDown);
+$('#board').addEventListener('mousemove', onBoardMouseMove);
+$('#board').addEventListener('mouseup',   onBoardMouseUp);
+$('#board').addEventListener('mouseleave', onBoardMouseUp);
+$('#board').addEventListener('click', onBoardClick);
+$('#board').addEventListener('wheel', onWheel, { passive: false });
+$('#board').addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('keydown', onKeyDown);
+
+renderBoard();
+
+/* === J. TESTS (geometry + casualty + class bump) ====================== */
+(function tests() {
+  // engagementEdge — defender facing 0 (north), attacker at various positions
+  const def = { x:0, y:0, facing:0 };
+  console.assert(engagementEdge({x:0, y:-50}, def) === 'front', 'directly north → front');
+  console.assert(engagementEdge({x:50, y:0},  def) === 'right', 'east → right flank');
+  console.assert(engagementEdge({x:-50, y:0}, def) === 'left',  'west → left flank');
+  console.assert(engagementEdge({x:0, y:50},  def) === 'rear',  'south → rear');
+  // Defender facing 90° (east) — attacker from the screen-east should now be FRONT
+  const def2 = { x:0, y:0, facing:90 };
+  console.assert(engagementEdge({x:50, y:0}, def2)  === 'front', 'east-facing: east attacker → front');
+  console.assert(engagementEdge({x:0, y:50}, def2)  === 'right', 'east-facing: south attacker → right flank');
+  console.assert(engagementEdge({x:-50,y:0}, def2)  === 'rear',  'east-facing: west attacker → rear');
+  // Casualty application
+  const u = { count:20, startCount:20, cols:5, rows:4, spacing:'close' };
+  applyCasualties(u, 4); console.assert(u.count === 16 && u.rows === 4, '20-4 = 16, rows stay 4');
+  applyCasualties(u, 11); console.assert(u.count === 5 && u.rows === 1 && u.cols === 5, '5 left → 1 row of 5');
+  applyCasualties(u, 4); console.assert(u.count === 1 && u.cols === 1 && u.rows === 1, '1 left');
+  applyCasualties(u, 1); console.assert(u.destroyed === true, 'destroyed at 0');
+  // Class bump
+  console.assert(effectiveAttackerClass('HF', { flank:true }) === 'AF', 'HF flank → AF');
+  console.assert(classBumpsToBonus('HH', { rear:true }) === true, 'HH rear → +1/die bonus');
+  console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
+})();
+</script>
+</body>
+</html>

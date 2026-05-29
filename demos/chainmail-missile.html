@@ -1,0 +1,551 @@
+<!doctype html>
+<!-- chainmail-missile.html · v0.1.0 · Slice 3: Missile Fire (individual + mass) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chainmail — Missile Fire · v0.1.0</title>
+<style>
+  :root {
+    --bg:#ece0c4; --panel:#f5eedb; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
+    --side-a:#3a6e90; --side-b:#9c3b2c;
+    --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:"Avenir Next Condensed","Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
+  .page { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 22px; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 22px; }
+  section { margin-bottom: 22px; }
+  .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; color: var(--ink); margin: 0 0 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; }
+  .panel h2 { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .field label { width: 100px; font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .field select, .field input {
+    flex: 1; padding: 5px 7px; font-family: var(--serif); font-size: 14px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink);
+  }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; margin-top: 4px; }
+  .check { display: flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: 12.5px; }
+  .check input { accent-color: var(--ink); }
+  .controls { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+    font-family: var(--sans); margin-top: 14px; flex-wrap: wrap; }
+  .controls .lbl { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); }
+  .controls input { width: 90px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 3px;
+    background: #fff8e7; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+  button { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 9px 14px;
+    border-radius: 3px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button:hover { filter: brightness(1.1); }
+  /* range-band ribbon */
+  .ribbon { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 12px; }
+  .ribbon .seg { padding: 6px 8px; text-align: center; background: #fff8e7;
+    border: 1px solid var(--rule); border-radius: 3px;
+    font-family: var(--sans); font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--ink-soft); }
+  .ribbon .seg.active { background: var(--gold); color: var(--ink); border-color: var(--ink); font-weight: 700; }
+  .ribbon .seg.oor    { background: rgba(176,57,44,0.18); color: var(--rear); border-color: var(--rear); }
+  .ribbon .seg small  { display: block; font-family: var(--serif); font-size: 13px; letter-spacing: 0;
+    text-transform: none; color: var(--ink); margin-top: 2px; }
+  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px;
+    min-height: 220px; font-size: 14px; line-height: 1.55; }
+  #log:empty::before { content: "—  fire to see results";
+    color: var(--ink-soft); font-family: var(--sans); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .turn { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--rule); }
+  .turn:last-child { border-bottom: 0; }
+  .turn-head { font-family: var(--sans); font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 8px; }
+  .step { padding: 3px 0 3px 14px; border-left: 2px solid var(--rule); margin-bottom: 4px; }
+  .die-trace { font-family: var(--sans); font-size: 11.5px; color: var(--ink-soft); }
+  .verdict { font-family: var(--sans); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px; font-weight: 700; display: inline-block; margin-top: 6px; }
+  .v-kill { background: rgba(47,125,79,0.22);  color: var(--front); }
+  .v-miss { background: rgba(110,96,71,0.16);  color: var(--ink-soft); }
+  .v-oor  { background: rgba(176,57,44,0.18);  color: var(--rear); }
+  .v-ap   { background: rgba(110,96,71,0.16);  color: var(--ink-soft); }
+  small.note { font-family: var(--sans); color: var(--ink-soft); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Missile Fire</h1>
+  <div class="sub">Chainmail HTML Sim · Slice 3 · Appendix B individual · p.11 mass · range &middot; cover &middot; indirect</div>
+  <hr>
+
+  <!-- ============ INDIVIDUAL MISSILE ============ -->
+  <section>
+    <div class="sec-head">1 · Individual fires with missiles (Appendix B)</div>
+    <div class="panel">
+      <div class="row2">
+        <div>
+          <div class="field"><label>Weapon</label><select id="i-weapon"></select></div>
+          <div class="field"><label>Distance</label><input type="number" id="i-distance" value="10" min="1" max="36"></div>
+          <div class="field"><label>Armor</label><select id="i-armor"></select></div>
+        </div>
+        <div>
+          <div class="field"><label>Cover</label><select id="i-cover">
+            <option value="0">None</option><option value="1">Soft (−1)</option><option value="2">Hard (−2)</option>
+          </select></div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="i-indirect"> Indirect fire</label>
+          </div>
+          <small class="note">Indirect: range × ⅔, armor +1 class, archers/longbow only.</small>
+        </div>
+      </div>
+      <div class="ribbon" id="i-ribbon"></div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="i-seed" value="42">
+      <button id="btn-i-fire">Fire one arrow</button>
+      <small class="note">2d6 ≥ table threshold to kill · cover subtracts from roll · table values: 0=10, 1=11, 2=12, / = no kill</small>
+    </div>
+  </section>
+
+  <!-- ============ MASS MISSILE ============ -->
+  <section>
+    <div class="sec-head">2 · Mass missile fire (p.11)</div>
+    <div class="panel">
+      <div class="row2">
+        <div>
+          <div class="field"><label>Firing</label><input type="number" id="m-count" value="10" min="1"></div>
+          <div class="field"><label>Target armor</label><select id="m-armor">
+            <option value="unarmored">Unarmored</option>
+            <option value="half">½ Armor or Shield</option>
+            <option value="fully">Fully Armored</option>
+          </select></div>
+        </div>
+        <div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="m-cover"> Soft cover (½ casualties)</label>
+            <label class="check"><input type="checkbox" id="m-indirect"> Indirect (armor +1 category)</label>
+          </div>
+          <small class="note">Groups split equally to fit max-group · roll 1d6 per group · sums to total kills.</small>
+        </div>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="m-seed" value="11">
+      <button id="btn-m-fire">Volley</button>
+    </div>
+  </section>
+
+  <hr>
+  <div class="sec-head">Log</div>
+  <div id="log"></div>
+  <div style="margin-top:12px"><button id="btn-clear" class="secondary">Clear log</button></div>
+</div>
+
+<script type="module">
+const SIM_VERSION = '0.1.0';
+
+/* === A. RNG ============================================================ */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const d6      = (rng) => 1 + Math.floor(rng() * 6);
+const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+const stubRng = (vals) => { let i = 0; return () => vals[i++]; };
+
+/* === B. DATA =========================================================== */
+// Appendix B armor classes — same as melee (0-7 personal, 8-9 horse).
+const ARMOR = Object.freeze([
+  { id:'none',         label:'No armor' },
+  { id:'leather',      label:'Leather / padded' },
+  { id:'shield',       label:'Shield only' },
+  { id:'leather_sh',   label:'Leather + shield' },
+  { id:'chain',        label:'Chain / banded / studded / splint' },
+  { id:'chain_sh',     label:'Chain + shield' },
+  { id:'plate',        label:'Plate armor' },
+  { id:'plate_sh',     label:'Plate + shield' },
+  { id:'horse_none',   label:'Horse, no armor' },
+  { id:'horse_barded', label:'Horse, barded' },
+]);
+
+// Parse compact "X-Y-Z" cells where each token is a d6/d12 threshold:
+//   '5'..'9' = 5..9 · '0'=10 · '1'=11 · '2'=12 · '/' = no kill possible
+const parseRow = (s) => s.split('-').map(t => {
+  if (t === '/') return null;
+  if (t === '0') return 10;
+  if (t === '1') return 11;
+  if (t === '2') return 12;
+  return parseInt(t, 10);
+});
+
+// Appendix B (bottom): Individual Fires With Missiles.
+// rows[i] = "close-medium-max" thresholds at armor index i (1..10 in book → 0..9 here)
+const RANGED_WEAPONS = Object.freeze([
+  { id:'short_bow',      name:'Short Bow',      range:15, indirectAllowed:true,
+    rows:['6-7-8','6-7-8','6-7-8','7-8-9','8-9-0','9-0-1','1-2-/','2-/-/','0-2-/','2-/-/'] },
+    // ↑ short bow vs horse-no-armor is "0-?-/" in the OCR — encoded as 10-12-/ pending clean print
+  { id:'horsebow',       name:'Horsebow',       range:18, indirectAllowed:true, mountedFire:true,
+    rows:['5-6-7','5-6-8','5-6-8','6-7-8','8-9-0','9-0-1','1-2-/','2-/-/','9-0-1','2-/-/'] },
+  { id:'light_crossbow', name:'Light Crossbow', range:18, indirectAllowed:false,
+    rows:['5-6-7','5-7-8','5-7-8','6-7-9','8-9-0','0-1-/','1-2-/','2-/-/','9-0-/','2-/-/'] },
+  { id:'longbow',        name:'Longbow',        range:21, indirectAllowed:true,
+    rows:['5-6-7','5-6-7','5-6-7','5-6-8','6-7-9','8-9-0','9-1-/','1-2-/','7-9-2','9-1-/'] },
+  { id:'composite',      name:'Composite Bow',  range:24, indirectAllowed:true,
+    rows:['5-6-7','5-6-7','5-6-7','5-7-8','6-8-0','8-0-1','9-2-/','1-/-/','7-0-2','0-2-/'] },
+  { id:'heavy_crossbow', name:'Heavy Crossbow', range:24, indirectAllowed:false, halfRoF:true,
+    rows:['4-5-6','4-6-7','4-6-7','5-7-8','6-8-9','7-9-0','8-0-1','0-1-2','7-9-2','9-1-/'] },
+  { id:'arquebus',       name:'Arquebus',       range:18, indirectAllowed:false, halfRoF:true,
+    rows:['5-6-8','5-6-8','5-6-8','5-6-8','6-7-8','6-8-9','7-9-0','8-0-2','6-9-1','8-0-2'] },
+]);
+const weaponById = (id) => RANGED_WEAPONS.find(w => w.id === id);
+
+// p.11 Mass Missile Fire table. Best reading from the scan; flag for verification.
+// firingBands[i] = { range:[min,max], low, high }  → kills when d6 in low/high band.
+const MASS_MISSILE = Object.freeze({
+  unarmored: {
+    label: 'Unarmored',
+    dieBands: [[1,2], [3,6]], maxGroup: 10,
+    firingBands: [
+      { range:[1,2],  low:0, high:1 },
+      { range:[3,4],  low:1, high:2 },
+      { range:[5,6],  low:2, high:3 },
+      { range:[7,8],  low:3, high:4 },
+      { range:[9,10], low:4, high:5 },
+    ],
+  },
+  half: {
+    label: '½ Armor or Shield',
+    dieBands: [[1,3], [4,6]], maxGroup: 10,
+    firingBands: [
+      { range:[1,2],  low:0, high:0 },
+      { range:[3,4],  low:0, high:1 },
+      { range:[5,6],  low:2, high:2 },
+      { range:[7,8],  low:2, high:3 },
+      { range:[9,10], low:3, high:3 },
+    ],
+  },
+  fully: {
+    label: 'Fully Armored',
+    dieBands: [[1,4], [5,6]], maxGroup: 20,
+    firingBands: [
+      { range:[4,8],   low:0, high:1 },
+      { range:[9,12],  low:1, high:2 },
+      { range:[13,16], low:2, high:3 },
+      { range:[17,20], low:3, high:3 },
+    ],
+  },
+});
+const INDIRECT_BUMP = { unarmored:'half', half:'fully', fully:'arrow_proof' };
+
+/* === C. ENGINE ========================================================= */
+const BAND_INDEX = Object.freeze({ close:0, medium:1, max:2 });
+function rangeBand(distance, range) {
+  if (distance < 1 || distance > range) return null;
+  const t = range / 3;
+  if (distance <= t)     return 'close';
+  if (distance <= 2 * t) return 'medium';
+  return 'max';
+}
+function bandLimits(range) {
+  const t = range / 3;
+  return { close:[1, Math.floor(t)], medium:[Math.floor(t)+1, Math.floor(2*t)], max:[Math.floor(2*t)+1, range] };
+}
+
+// Individual missile resolution (Appendix B / p.11 supplementary).
+function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, indirect = false, rng }) {
+  let effRange = weapon.range;
+  let effArmor = armorIdx;
+  let arrowProof = false;
+  if (indirect) {
+    if (!weapon.indirectAllowed) return { ok:false, reason:'indirect not permitted for this weapon' };
+    effRange = Math.floor(weapon.range * 2 / 3);
+    effArmor = armorIdx + 1;
+    if (effArmor > 7) arrowProof = true; // beyond plate+shield bumps to arrow-proof
+  }
+  const band = rangeBand(distance, effRange);
+  if (!band) return { ok:false, reason:'out of range', effRange };
+  if (arrowProof) return { ok:true, band, target:null, arrowProof:true, kill:false };
+  const row = parseRow(weapon.rows[effArmor]);
+  const target = row[BAND_INDEX[band]];
+  if (target === null) return { ok:true, band, target:null, kill:false, reason:'no kill possible at this range/armor' };
+  const dice = roll2d6(rng);
+  const total = dice.sum - cover;
+  return {
+    ok:true, band, target, dice, cover, total,
+    kill: total >= target, effRange, effArmor, indirect,
+  };
+}
+
+function splitFiringGroups(count, maxGroup) {
+  if (count <= maxGroup) return [count];
+  const n = Math.ceil(count / maxGroup);
+  const base = Math.floor(count / n);
+  const rem  = count % n;
+  return Array.from({ length:n }, (_, i) => base + (i < rem ? 1 : 0));
+}
+function findFiringBand(count, bands) {
+  if (count < bands[0].range[0]) return null;
+  for (const b of bands) if (count >= b.range[0] && count <= b.range[1]) return b;
+  return bands[bands.length - 1];
+}
+
+// Mass missile fire (p.11). Returns per-group rolls and the total.
+function resolveMassMissile({ firingCount, armorGroup, cover = false, indirect = false, rng }) {
+  let group = armorGroup;
+  let bumped = false;
+  if (indirect) {
+    const next = INDIRECT_BUMP[group];
+    if (next === 'arrow_proof') return { armorGroup:group, arrowProof:true, totalRaw:0, totalKills:0, groups:[] };
+    group = next; bumped = true;
+  }
+  const tab = MASS_MISSILE[group];
+  const subs = splitFiringGroups(firingCount, tab.maxGroup);
+  const results = [];
+  let total = 0;
+  for (const s of subs) {
+    const die = d6(rng);
+    const band = findFiringBand(s, tab.firingBands);
+    if (!band) { results.push({ count:s, die, kills:0, reason:'below minimum band' }); continue; }
+    const isLow = die >= tab.dieBands[0][0] && die <= tab.dieBands[0][1];
+    const kills = isLow ? band.low : band.high;
+    results.push({ count:s, die, isLow, band, kills });
+    total += kills;
+  }
+  const finalKills = cover ? Math.floor(total / 2) : total;
+  return {
+    armorGroup:group, indirectApplied:bumped, groups:results,
+    totalRaw:total, totalKills:finalKills, coverApplied:cover,
+  };
+}
+
+/* === D. UI ============================================================= */
+const $ = (sel) => document.querySelector(sel);
+function fillSelect(id, items, render) {
+  const sel = $(id);
+  items.forEach(it => {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = render(it);
+    sel.appendChild(o);
+  });
+}
+fillSelect('#i-weapon', RANGED_WEAPONS, w => `${w.name} · ${w.range}″`);
+fillSelect('#i-armor',  ARMOR,          a => a.label);
+$('#i-weapon').value = 'longbow'; $('#i-armor').value = 'chain';
+
+/* range-band ribbon — re-renders on input change */
+function renderRibbon() {
+  const w = weaponById($('#i-weapon').value);
+  const d = parseInt($('#i-distance').value, 10) || 0;
+  const indirect = $('#i-indirect').checked;
+  const effRange = indirect && w.indirectAllowed ? Math.floor(w.range * 2/3) : w.range;
+  const lim = bandLimits(effRange);
+  const active = rangeBand(d, effRange);
+  const r = $('#i-ribbon'); r.innerHTML = '';
+  ['close','medium','max'].forEach(k => {
+    const seg = document.createElement('div');
+    seg.className = 'seg' + (active === k ? ' active' : '');
+    seg.innerHTML = `${k}<small>${lim[k][0]}–${lim[k][1]}″</small>`;
+    r.appendChild(seg);
+  });
+  if (active === null) {
+    const seg = document.createElement('div');
+    seg.className = 'seg oor';
+    seg.style.gridColumn = '1 / span 3';
+    seg.innerHTML = `Out of range (max ${effRange}″${indirect && w.indirectAllowed ? ' indirect' : ''})`;
+    r.innerHTML = ''; r.appendChild(seg);
+  }
+}
+['#i-weapon','#i-distance','#i-indirect'].forEach(s => $(s).addEventListener('input', renderRibbon));
+$('#i-indirect').addEventListener('change', renderRibbon);
+renderRibbon();
+
+function logEl() { return $('#log'); }
+function appendTurn(headline, bodyHtml) {
+  const d = document.createElement('div');
+  d.className = 'turn';
+  d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
+  logEl().appendChild(d);
+  d.scrollIntoView({ behavior:'smooth', block:'end' });
+}
+
+/* ---- individual fire handler ---- */
+$('#btn-i-fire').addEventListener('click', () => {
+  const w = weaponById($('#i-weapon').value);
+  const distance = parseInt($('#i-distance').value, 10);
+  const armorIdx = ARMOR.findIndex(a => a.id === $('#i-armor').value);
+  const cover    = parseInt($('#i-cover').value, 10);
+  const indirect = $('#i-indirect').checked;
+  const rng = mulberry32(parseInt($('#i-seed').value, 10) || 1);
+  const r = resolveIndividualMissile({ weapon:w, distance, armorIdx, cover, indirect, rng });
+
+  let html = '';
+  if (!r.ok) {
+    html += `<div class="step">${w.name} @ ${distance}″ vs ${ARMOR[armorIdx].label} — <b>${r.reason}</b>` +
+            (r.effRange ? ` <small class="note">(effective range ${r.effRange}″)</small>` : '') + `</div>`;
+    html += `<div class="verdict v-oor">no shot</div>`;
+  } else if (r.arrowProof) {
+    html += `<div class="step">${w.name} indirect → target bumped beyond plate+shield: <b>arrow proof</b></div>`;
+    html += `<div class="verdict v-ap">no kill possible</div>`;
+  } else if (r.target === null) {
+    html += `<div class="step">${w.name} @ ${distance}″ (${r.band}) vs ${ARMOR[r.effArmor].label}: table = "/" → <b>no kill</b></div>`;
+    html += `<div class="verdict v-miss">no shot can connect</div>`;
+  } else {
+    const modBits = [];
+    if (r.indirect) modBits.push(`indirect: range ⅔ → ${r.effRange}″, armor ${ARMOR[r.effArmor].label}`);
+    if (r.cover) modBits.push(`−${r.cover} cover`);
+    html += `<div class="step">${w.name} @ ${distance}″ (<b>${r.band}</b>) vs ${ARMOR[r.effArmor].label}: ` +
+            `2d6 = ${r.dice.a} + ${r.dice.b} = ${r.dice.sum}${r.cover ? ` − ${r.cover}` : ''} = <b>${r.total}</b> ` +
+            `vs target <b>${r.target}+</b>` +
+            (modBits.length ? ` <small class="note">· ${modBits.join(' · ')}</small>` : '') + `</div>`;
+    html += `<div class="verdict ${r.kill ? 'v-kill' : 'v-miss'}">${r.kill ? 'kill' : 'miss'}</div>`;
+  }
+  appendTurn(`Individual fire · seed ${$('#i-seed').value}`, html);
+});
+
+/* ---- mass volley handler ---- */
+$('#btn-m-fire').addEventListener('click', () => {
+  const firingCount = parseInt($('#m-count').value, 10);
+  const armorGroup  = $('#m-armor').value;
+  const cover       = $('#m-cover').checked;
+  const indirect    = $('#m-indirect').checked;
+  const rng = mulberry32(parseInt($('#m-seed').value, 10) || 1);
+  const r = resolveMassMissile({ firingCount, armorGroup, cover, indirect, rng });
+
+  let html = '';
+  if (r.arrowProof) {
+    html += `<div class="step">${MASS_MISSILE[armorGroup].label} + indirect → <b>arrow proof</b></div>`;
+    html += `<div class="verdict v-ap">no kills · 0</div>`;
+    appendTurn(`Mass volley · ${firingCount} firing · seed ${$('#m-seed').value}`, html);
+    return;
+  }
+  const finalLabel = MASS_MISSILE[r.armorGroup].label + (r.indirectApplied ? ' (indirect-bumped)' : '');
+  r.groups.forEach((g, i) => {
+    if (g.reason) {
+      html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b> kills</div>`;
+    } else {
+      const bandTxt = `${g.band.range[0]}-${g.band.range[1]}`;
+      const dieTxt  = `${g.die} (${g.isLow ? 'low' : 'high'})`;
+      html += `<div class="step">group ${i+1} · ${g.count} firing (band ${bandTxt}) vs ${finalLabel} · ` +
+              `d6 = ${dieTxt} → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
+    }
+  });
+  const verdict = `${r.totalRaw} raw` + (r.coverApplied ? ` → halved → ${r.totalKills}` : ` = ${r.totalKills}`);
+  html += `<div class="verdict ${r.totalKills > 0 ? 'v-kill' : 'v-miss'}">${verdict} kill${r.totalKills===1?'':'s'}</div>`;
+  appendTurn(`Mass volley · ${firingCount} firing vs ${MASS_MISSILE[armorGroup].label} · seed ${$('#m-seed').value}`, html);
+});
+
+$('#btn-clear').addEventListener('click', () => { logEl().innerHTML = ''; });
+
+/* === E. TESTS ========================================================== */
+(function tests() {
+  // Range bands (composite bow 24″ — book example: close 1-8, medium 9-16, max 17-24)
+  console.assert(rangeBand(1, 24)  === 'close',  '1″ vs 24 = close');
+  console.assert(rangeBand(8, 24)  === 'close',  '8″ vs 24 = close (boundary)');
+  console.assert(rangeBand(9, 24)  === 'medium', '9″ vs 24 = medium');
+  console.assert(rangeBand(16, 24) === 'medium', '16″ vs 24 = medium (boundary)');
+  console.assert(rangeBand(17, 24) === 'max',    '17″ vs 24 = max');
+  console.assert(rangeBand(24, 24) === 'max',    '24″ vs 24 = max (last)');
+  console.assert(rangeBand(25, 24) === null,     '25″ vs 24 = out of range');
+
+  // parseRow handling of /, 0, 1, 2
+  console.assert(parseRow('5-6-7').join(',')   === '5,6,7',         'parse 5-6-7');
+  console.assert(parseRow('1-2-/').join(',')   === '11,12,',        'parse 1-2-/ → 11,12,null');
+  console.assert(parseRow('0-1-/').join(',')   === '10,11,',        'parse 0-1-/ → 10,11,null');
+  console.assert(parseRow('/-/-/').join(',')   === ',,',            'parse all-slash');
+
+  // Spot lookups (no rng involved — verify table values)
+  const lb = weaponById('longbow');
+  console.assert(parseRow(lb.rows[0])[0] === 5, 'longbow vs no armor close = 5');
+  console.assert(parseRow(lb.rows[6])[2] === null, 'longbow vs plate max = /');
+  const hcb = weaponById('heavy_crossbow');
+  console.assert(parseRow(hcb.rows[7])[0] === 10, 'heavy crossbow vs plate+shield close = 10');
+
+  // Individual: deterministic with stub rng → 2d6 = 5 (0.4*6=2.4→3, 0.2*6=1.2→2 → 3+2=5)
+  const r1 = resolveIndividualMissile({
+    weapon:lb, distance:5, armorIdx:0, cover:0, indirect:false,
+    rng: stubRng([0.4, 0.2])
+  });
+  console.assert(r1.band === 'close' && r1.target === 5 && r1.total === 5 && r1.kill === true,
+    'longbow close vs no armor: 2d6=5 vs target 5 → kill');
+
+  // Out of range
+  const r2 = resolveIndividualMissile({
+    weapon:lb, distance:30, armorIdx:0, cover:0, indirect:false, rng: stubRng([0])
+  });
+  console.assert(!r2.ok && r2.reason === 'out of range', 'longbow @ 30″ out of range');
+
+  // Indirect: longbow @ 12″ becomes max (range 14″, third 4.67), armor +1
+  const r3 = resolveIndividualMissile({
+    weapon:lb, distance:12, armorIdx:0, cover:0, indirect:true,
+    rng: stubRng([0.9, 0.9]) // 2d6 = 12
+  });
+  console.assert(r3.ok && r3.indirect && r3.effRange === 14 && r3.effArmor === 1,
+    'longbow indirect: range 14″, armor → leather');
+
+  // Indirect not permitted: light crossbow
+  const r4 = resolveIndividualMissile({
+    weapon: weaponById('light_crossbow'), distance:5, armorIdx:0, indirect:true, rng: stubRng([0,0])
+  });
+  console.assert(!r4.ok && r4.reason.includes('not permitted'), 'light crossbow blocks indirect');
+
+  // Cover subtracts from 2d6
+  const r5 = resolveIndividualMissile({
+    weapon:lb, distance:5, armorIdx:0, cover:2, indirect:false,
+    rng: stubRng([0.5, 0.5]) // 2d6 = 4+4 = 8 → -2 cover = 6 ≥ 5 → still kill
+  });
+  console.assert(r5.kill === true && r5.total === 6 && r5.cover === 2, 'cover -2 on roll, still kills');
+
+  // splitFiringGroups
+  console.assert(splitFiringGroups(11, 10).join(',') === '6,5',     '11/10 → [6,5]');
+  console.assert(splitFiringGroups(25, 10).join(',') === '9,8,8',   '25/10 → [9,8,8]');
+  console.assert(splitFiringGroups(7, 10).join(',')  === '7',        '7/10 → [7]');
+
+  // Mass missile: 10 firing vs half armor, force d6=4 (high band 4-6) → 9-10 band → 3 kills
+  const m1 = resolveMassMissile({
+    firingCount:10, armorGroup:'half', rng: stubRng([0.5]) // 0.5*6=3 → d6=4
+  });
+  console.assert(m1.groups.length === 1 && m1.groups[0].die === 4 && !m1.groups[0].isLow,
+    'mass 10/half: 1 group, d6=4 high band');
+  console.assert(m1.totalKills === 3, 'mass 10/half/high → 3 kills');
+
+  // Mass missile with cover halves
+  const m2 = resolveMassMissile({
+    firingCount:10, armorGroup:'half', cover:true, rng: stubRng([0.5])
+  });
+  console.assert(m2.totalRaw === 3 && m2.totalKills === 1, 'cover halves 3 → 1');
+
+  // Mass missile indirect: unarmored bumps to half
+  const m3 = resolveMassMissile({
+    firingCount:10, armorGroup:'unarmored', indirect:true, rng: stubRng([0.5])
+  });
+  console.assert(m3.indirectApplied && m3.armorGroup === 'half', 'unarmored + indirect → half');
+
+  // Mass missile indirect fully → arrow proof
+  const m4 = resolveMassMissile({
+    firingCount:20, armorGroup:'fully', indirect:true, rng: stubRng([0.5])
+  });
+  console.assert(m4.arrowProof === true && m4.totalKills === 0, 'fully + indirect → arrow proof');
+
+  // Mass missile below band: 1 firing vs fully (min band 4-8)
+  const m5 = resolveMassMissile({
+    firingCount:1, armorGroup:'fully', rng: stubRng([0.5])
+  });
+  console.assert(m5.groups[0].reason === 'below minimum band' && m5.totalKills === 0,
+    '1 firing vs fully = below band → 0');
+
+  console.log(`[chainmail-missile v${SIM_VERSION}] tests OK`);
+})();
+</script>
+</body>
+</html>

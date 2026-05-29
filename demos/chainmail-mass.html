@@ -1,0 +1,633 @@
+<!doctype html>
+<!-- chainmail-mass.html · v0.1.0 · Slice 2: Mass Melee + Post-Melee Morale + Loss Table -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chainmail — Mass Melee + Morale · v0.1.0</title>
+<style>
+  :root {
+    --bg:#ece0c4; --panel:#f5eedb; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
+    --side-a:#3a6e90; --side-b:#9c3b2c;
+    --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:"Avenir Next Condensed","Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
+  .page { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 22px; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 22px; }
+  section { margin-bottom: 22px; }
+  .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; color: var(--ink); margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; }
+  .panel h2 { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .field label { width: 92px; font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .field select, .field input { flex: 1; padding: 5px 7px; font-family: var(--serif); font-size: 14px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink); }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; margin-top: 6px; }
+  .check { display: flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: 12.5px; }
+  .check input { accent-color: var(--ink); }
+  .controls { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+    font-family: var(--sans); margin-top: 14px; flex-wrap: wrap; }
+  .controls .lbl { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); }
+  .controls input { width: 90px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 3px;
+    background: #fff8e7; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+  button { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 9px 14px;
+    border-radius: 3px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button.gold { background: var(--gold); color: var(--ink); }
+  button:hover { filter: brightness(1.1); }
+  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px;
+    min-height: 240px; font-size: 14px; line-height: 1.55; }
+  #log:empty::before { content: "—  resolve a melee, post-melee, or loss morale to see breakdown";
+    color: var(--ink-soft); font-family: var(--sans); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .turn { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--rule); }
+  .turn:last-child { border-bottom: 0; }
+  .turn-head { font-family: var(--sans); font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 8px; }
+  .step { padding: 3px 0 3px 14px; border-left: 2px solid var(--rule); margin-bottom: 4px; }
+  .step .who { font-weight: 700; }
+  .step .who.attacker, .step .who.A { color: var(--side-a); }
+  .step .who.defender, .step .who.B { color: var(--side-b); }
+  .die-trace { font-family: var(--sans); font-size: 11.5px; color: var(--ink-soft); letter-spacing: 0.3px; }
+  .verdict { font-family: var(--sans); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px; font-weight: 700; display: inline-block; margin-top: 6px; }
+  .v-continues { background: rgba(110,96,71,0.18); color: var(--ink-soft); }
+  .v-back1, .v-back2 { background: rgba(192,137,46,0.22); color: var(--flank); }
+  .v-retreat, .v-rout { background: rgba(176,57,44,0.20); color: var(--rear); }
+  .v-surrender { background: rgba(176,57,44,0.32); color: var(--rear); }
+  .v-pass { background: rgba(47,125,79,0.22); color: var(--front); }
+  .v-fail { background: rgba(176,57,44,0.20); color: var(--rear); }
+  table.scoretab { width: 100%; font-size: 13px; border-collapse: collapse; margin-top: 6px; }
+  table.scoretab td { padding: 3px 6px; border-bottom: 1px dashed var(--rule); }
+  table.scoretab .label-col { width: 240px; font-family: var(--sans); font-size: 11.5px; letter-spacing: 0.6px;
+    color: var(--ink-soft); }
+  table.scoretab .num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.scoretab tr.total td { border-top: 1px solid var(--ink); border-bottom: 0; font-weight: 700; }
+  small.note { font-family: var(--sans); color: var(--ink-soft); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Mass Melee + Post-Melee Morale</h1>
+  <div class="sub">Chainmail HTML Sim · Slice 2 · Appendix A combat · p.15 morale · p.17 loss table</div>
+  <hr>
+
+  <!-- ============ MASS MELEE ============ -->
+  <section>
+    <div class="sec-head">1 · Mass melee (Appendix A)</div>
+    <div class="grid">
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-a)"></span> Side A (attacker)</h2>
+        <div class="field"><label>Type</label><select id="a-type"></select></div>
+        <div class="field"><label>Figures</label><input type="number" id="a-count" value="10" min="1"></div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="a-polearm"> Pike / halberd</label>
+          <label class="check"><input type="checkbox" id="a-impetus"> Charging (impetus)</label>
+          <label class="check"><input type="checkbox" id="a-flank"> Attacking from flank</label>
+          <label class="check"><input type="checkbox" id="a-rear"> Attacking from rear</label>
+        </div>
+      </div>
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-b)"></span> Side B (defender)</h2>
+        <div class="field"><label>Type</label><select id="b-type"></select></div>
+        <div class="field"><label>Figures</label><input type="number" id="b-count" value="20" min="1"></div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="b-polearm"> Pike / halberd</label>
+          <label class="check"><input type="checkbox" id="b-impetus"> Counter-charging</label>
+          <label class="check"><input type="checkbox" id="b-standing"> Standing horse (round 1)</label>
+        </div>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="melee-seed" value="42">
+      <button id="btn-melee">Resolve melee</button>
+      <small class="note">→ rolls dice, chains into post-melee morale &amp; loss checks</small>
+    </div>
+  </section>
+
+  <!-- ============ POST-MELEE MORALE ============ -->
+  <section>
+    <div class="sec-head">2 · Post-melee morale (p.15)</div>
+    <div class="grid">
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-a)"></span> Side A</h2>
+        <div class="field"><label>Start count</label><input type="number" id="pm-a-start" value="10"></div>
+        <div class="field"><label>Casualties</label><input type="number" id="pm-a-cas" value="2"></div>
+        <div class="field"><label>Morale rating</label><input type="number" id="pm-a-rating" value="9"></div>
+      </div>
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-b)"></span> Side B</h2>
+        <div class="field"><label>Start count</label><input type="number" id="pm-b-start" value="20"></div>
+        <div class="field"><label>Casualties</label><input type="number" id="pm-b-cas" value="8"></div>
+        <div class="field"><label>Morale rating</label><input type="number" id="pm-b-rating" value="5"></div>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="pm-seed" value="7">
+      <button id="btn-pm">Resolve morale</button>
+      <button id="btn-example" class="gold">Load p.15 worked example</button>
+      <small class="note">10 HH vs 20 HF · HH rating 9 (book's example, not the table's 8) · die = 3 → diff 52 → B back 1 move</small>
+    </div>
+  </section>
+
+  <!-- ============ LOSS TABLE ============ -->
+  <section>
+    <div class="sec-head">3 · Instability from excess casualties (p.17)</div>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>Type</label><select id="ls-type"></select></div>
+        <div class="field"><label>Start count</label><input type="number" id="ls-start" value="20"></div>
+        <div class="field"><label>Casualties</label><input type="number" id="ls-cas" value="7"></div>
+      </div>
+      <div class="checks" style="margin-top:0">
+        <label class="check"><input type="checkbox" id="ls-surrounded"> Surrounded (auto-surrender on fail)</label>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="ls-seed" value="11">
+      <button id="btn-loss">Check loss morale</button>
+      <small class="note">2d6 ≥ threshold to remain · below triggers removal (or surrender if surrounded)</small>
+    </div>
+  </section>
+
+  <hr>
+  <div class="sec-head">Log</div>
+  <div id="log"></div>
+  <div style="margin-top:12px"><button id="btn-clear" class="secondary">Clear log</button></div>
+</div>
+
+<script type="module">
+const SIM_VERSION = '0.1.0';
+
+/* === A. RNG ============================================================ */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const d6      = (rng) => 1 + Math.floor(rng() * 6);
+const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+// Stub RNG that returns pre-set [0,1) values in order (used by fixtures/tests).
+const stubRng = (vals) => { let i = 0; return () => vals[i++]; };
+
+/* === B. DATA =========================================================== */
+// Troop types — morale rating from p.15 (the table); loss thresholds from p.17.
+// HH morale is 8 per the table; the worked example on p.15-16 uses 9 instead —
+// expose `rating` per side so the engine can take either value.
+const TYPES = Object.freeze([
+  { id:'PE',  name:'Peasants',         cls:'LF', morale:3, loss:{ pct:0.25, score:8 } },
+  { id:'LV',  name:'Levies',           cls:'HF', morale:4, loss:{ pct:0.25, score:8 } },
+  { id:'LF',  name:'Light Foot',       cls:'LF', morale:4, loss:{ pct:0.25, score:8 } },
+  { id:'HF',  name:'Heavy Foot',       cls:'HF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'EHF', name:'Elite Heavy Foot', cls:'HF', morale:6, loss:{ pct:1/3,  score:6 } },
+  { id:'AF',  name:'Armored Foot',     cls:'AF', morale:7, loss:{ pct:1/3,  score:6 } },
+  { id:'LH',  name:'Light Horse',      cls:'LH', morale:6, loss:{ pct:0.25, score:8 } },
+  { id:'MH',  name:'Medium Horse',     cls:'MH', morale:7, loss:{ pct:1/3,  score:7 } },
+  { id:'HH',  name:'Heavy Horse',      cls:'HH', morale:8, loss:{ pct:0.50, score:6 } },
+  { id:'SP',  name:'Swiss Pikemen',    cls:'HF', morale:9, loss:{ pct:0.50, score:5 } },
+  { id:'MK',  name:'Mounted Knights',  cls:'HH', morale:8, loss:{ pct:0.50, score:4 } },
+]);
+const typeById = (id) => TYPES.find(t => t.id === id);
+
+// Appendix A combat tables — keyed by combat CLASS (LF/HF/AF/LH/MH/HH).
+// { dice, perMen, kills } reads as "roll N dice per M attacking figures, kill on each score".
+// HF and AF rows are the asterisked ones: pike/halberd adds an extra die per man.
+const COMBAT = Object.freeze({
+  LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
+        LH:{dice:1,perMen:2,kills:[6]},     MH:{dice:1,perMen:3,kills:[6]},     HH:{dice:1,perMen:4,kills:[6]} },
+  HF: { LF:{dice:1,perMen:1,kills:[5,6]},   HF:{dice:1,perMen:1,kills:[6]},     AF:{dice:1,perMen:2,kills:[6]},
+        LH:{dice:1,perMen:2,kills:[6]},     MH:{dice:1,perMen:3,kills:[6]},     HH:{dice:1,perMen:4,kills:[6]} },
+  AF: { LF:{dice:1,perMen:1,kills:[4,5,6]}, HF:{dice:1,perMen:1,kills:[5,6]},   AF:{dice:1,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[6]},     MH:{dice:1,perMen:2,kills:[6]},     HH:{dice:1,perMen:3,kills:[6]} },
+  LH: { LF:{dice:2,perMen:1,kills:[5,6]},   HF:{dice:2,perMen:1,kills:[6]},     AF:{dice:1,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[6]},     MH:{dice:1,perMen:2,kills:[6]},     HH:{dice:1,perMen:3,kills:[6]} },
+  MH: { LF:{dice:2,perMen:1,kills:[4,5,6]}, HF:{dice:2,perMen:1,kills:[5,6]},   AF:{dice:2,perMen:1,kills:[6]},
+        LH:{dice:1,perMen:1,kills:[5,6]},   MH:{dice:1,perMen:1,kills:[6]},     HH:{dice:1,perMen:2,kills:[6]} },
+  HH: { LF:{dice:4,perMen:1,kills:[5,6]},   HF:{dice:3,perMen:1,kills:[5,6]},   AF:{dice:2,perMen:1,kills:[5,6]},
+        LH:{dice:2,perMen:1,kills:[5,6]},   MH:{dice:1,perMen:1,kills:[5,6]},   HH:{dice:1,perMen:1,kills:[6]} },
+});
+// Pike/halberd extra-die applies only to HF and AF rows (asterisked in Appendix A).
+const POLEARM_CLASSES = new Set(['HF', 'AF']);
+// Impetus bonus (p.16): HF, AF, all horse get +1 die when charging across smooth terrain.
+const IMPETUS_CLASSES = new Set(['HF', 'AF', 'LH', 'MH', 'HH']);
+
+// Post-melee reaction bands (p.15). Note the band table reads as-printed —
+// 20-39 → back 2, 40-59 → back 1 looks inverted but matches the book's worked example (diff 52 → back 1).
+const REACTION_BANDS = Object.freeze([
+  { max: 19,        tag:'continues',  text:'melee continues' },
+  { max: 39,        tag:'back2',      text:'back 2 moves, good order' },
+  { max: 59,        tag:'back1',      text:'back 1 move, good order' },
+  { max: 79,        tag:'retreat',    text:'retreat 1 move' },
+  { max: 99,        tag:'rout',       text:'rout 1½ moves' },
+  { max: Infinity,  tag:'surrender',  text:'surrender' },
+]);
+
+/* === C. ENGINE ========================================================= */
+// Bump for flank/rear (p.16): attacker fights one class higher.
+// AF and HH have no higher class — they instead get +1 to each die (improves kill threshold by 1).
+const CLASS_UP = { LF:'HF', HF:'AF', LH:'MH', MH:'HH' };
+function effectiveAttackerClass(cls, mods) {
+  if (mods.flank || mods.rear) return CLASS_UP[cls] || cls;
+  return cls;
+}
+function classBumpsToBonus(cls, mods) {
+  return (mods.flank || mods.rear) && !(cls in CLASS_UP); // AF or HH
+}
+// Standing horse defender (p.17 melee optional) returns at next lower class — first round only.
+const CLASS_DOWN = { HH:'MH', MH:'LH', LH:'AF' };
+function effectiveDefenderReturnClass(cls, standing) {
+  if (!standing) return cls;
+  return CLASS_DOWN[cls] || cls;
+}
+// Lower the kill threshold by `bonus` (e.g. [6] + 1 → [5,6]).
+function applyDieBonus(kills, bonus) {
+  if (!bonus) return kills.slice();
+  const out = new Set(kills);
+  const min = Math.min(...kills);
+  for (let v = min - bonus; v < min; v++) if (v >= 1 && v <= 6) out.add(v);
+  return [...out].sort((a, b) => a - b);
+}
+function rollKills(numDice, kills, rng) {
+  const dice = [];
+  let n = 0;
+  for (let i = 0; i < numDice; i++) {
+    const r = d6(rng);
+    dice.push(r);
+    if (kills.includes(r)) n++;
+  }
+  return { dice, kills: n };
+}
+
+// Resolve one round of mass melee between two units. Simultaneous casualties.
+// attacker/defender: { type:TYPES.id, count, polearm, impetus, flank, rear, standingHorseFirstRound }
+function resolveMassMelee({ attacker, defender, rng }) {
+  const aT = typeById(attacker.type), dT = typeById(defender.type);
+  const result = { attacker:{}, defender:{} };
+
+  // --- Side A attacks Side B
+  const aEffClass = effectiveAttackerClass(aT.cls, attacker);
+  const aBonusOnly = classBumpsToBonus(aT.cls, attacker);
+  const aRow = COMBAT[aEffClass]?.[dT.cls];
+  if (!aRow) throw new Error(`no combat row: ${aEffClass} vs ${dT.cls}`);
+  let aDPM = aRow.dice / aRow.perMen;
+  const aPolearmEligible = POLEARM_CLASSES.has(aT.cls) && attacker.polearm;
+  if (aPolearmEligible) aDPM += 1;
+  if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
+  const aTotalDice = Math.floor(attacker.count * aDPM);
+  const aKills = applyDieBonus(aRow.kills, aBonusOnly ? 1 : 0);
+  const aRoll = rollKills(aTotalDice, aKills, rng);
+  result.attacker = {
+    type:aT.id, startCount:attacker.count,
+    effectiveClass:aEffClass, dicePerMan:aDPM, totalDice:aTotalDice,
+    polearmApplied:aPolearmEligible, impetusApplied: IMPETUS_CLASSES.has(aT.cls) && attacker.impetus,
+    flankBumpToBonus:aBonusOnly, killScores:aKills,
+    dice:aRoll.dice, killsDealt:aRoll.kills,
+  };
+
+  // --- Side B counter-attacks (unless rear-attack: no return)
+  if (attacker.rear) {
+    result.defender = {
+      type:dT.id, startCount:defender.count,
+      effectiveClass:dT.cls, dicePerMan:0, totalDice:0,
+      dice:[], killsDealt:0, noReturn:true,
+    };
+  } else {
+    const dRetCls = effectiveDefenderReturnClass(dT.cls, !!defender.standingHorseFirstRound);
+    const dRow = COMBAT[dRetCls]?.[aT.cls];
+    let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
+    const dPolearmEligible = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
+    if (dPolearmEligible) dDPM += 1;
+    if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
+    const dTotalDice = Math.floor(defender.count * dDPM);
+    const dRoll = dRow ? rollKills(dTotalDice, dRow.kills, rng) : { dice:[], kills:0 };
+    result.defender = {
+      type:dT.id, startCount:defender.count,
+      effectiveClass:dRetCls, dicePerMan:dDPM, totalDice:dTotalDice,
+      polearmApplied:dPolearmEligible, impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
+      standingHorseApplied: dRetCls !== dT.cls, killScores: dRow ? dRow.kills : [],
+      dice:dRoll.dice, killsDealt:dRoll.kills,
+    };
+  }
+  // Casualties (each side suffers what the other dealt)
+  result.attacker.casualties = result.defender.killsDealt;
+  result.attacker.surviving = Math.max(0, attacker.count - result.defender.killsDealt);
+  result.defender.casualties = result.attacker.killsDealt;
+  result.defender.surviving = Math.max(0, defender.count - result.attacker.killsDealt);
+  return result;
+}
+
+function reactionFor(diff) {
+  return REACTION_BANDS.find(b => diff <= b.max);
+}
+
+// Post-melee morale (p.15-16). Inputs already include start count, casualties, morale rating per side.
+// a, b: { label, startCount, casualties, morale }
+function resolvePostMelee({ a, b, rng, doubleForSmall = true }) {
+  const aSurv = a.startCount - a.casualties;
+  const bSurv = b.startCount - b.casualties;
+
+  // Step 1 — fewer-casualties side gets (positive diff × one die)
+  let fewerSide = null, casDiff = 0, casDie = 0, casBonus = 0;
+  if (a.casualties !== b.casualties) {
+    fewerSide = a.casualties < b.casualties ? 'A' : 'B';
+    casDiff = Math.abs(a.casualties - b.casualties);
+    casDie = d6(rng);
+    casBonus = casDiff * casDie;
+  }
+  // Step 2 — more-survivors side gets the survivor diff (no multiplier)
+  let moreSide = null, survDiff = 0;
+  if (aSurv !== bSurv) {
+    moreSide = aSurv > bSurv ? 'A' : 'B';
+    survDiff = Math.abs(aSurv - bSurv);
+  }
+  // Step 3 — rating × survivors for each
+  const aRating = a.morale * aSurv;
+  const bRating = b.morale * bSurv;
+  // Step 4 — totals
+  const aTotal = aRating + (fewerSide === 'A' ? casBonus : 0) + (moreSide === 'A' ? survDiff : 0);
+  const bTotal = bRating + (fewerSide === 'B' ? casBonus : 0) + (moreSide === 'B' ? survDiff : 0);
+
+  let diff = Math.abs(aTotal - bTotal);
+  const doubled = doubleForSmall && (a.startCount < 20 || b.startCount < 20);
+  if (doubled) diff *= 2;
+
+  const loser = aTotal === bTotal ? null : (aTotal < bTotal ? 'A' : 'B');
+  const reaction = reactionFor(diff);
+
+  return {
+    a:{ surviving:aSurv, ratingScore:aRating, total:aTotal },
+    b:{ surviving:bSurv, ratingScore:bRating, total:bTotal },
+    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus },
+    survivorBonus:{ side:moreSide, diff:survDiff, value:survDiff },
+    rawDiff: Math.abs(aTotal - bTotal),
+    diff, doubled, loser, reaction,
+  };
+}
+
+// Instability check (p.17). Triggered when cumulative casualties cross the type's threshold.
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng }) {
+  const t = typeById(type);
+  const pct = casualties / startCount;
+  if (pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
+  const dice = roll2d6(rng);
+  const passed = dice.sum >= t.loss.score;
+  return {
+    triggered:true, pct, threshold:t.loss, dice, passed,
+    action: passed ? 'stable' : (surrounded ? 'surrender' : 'removed'),
+  };
+}
+
+/* === D. UI ============================================================= */
+const $ = (sel) => document.querySelector(sel);
+function fillSelect(id, items, render) {
+  const sel = $(id);
+  items.forEach(it => {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = render(it);
+    sel.appendChild(o);
+  });
+}
+fillSelect('#a-type', TYPES, t => `${t.name} (${t.cls})`);
+fillSelect('#b-type', TYPES, t => `${t.name} (${t.cls})`);
+fillSelect('#ls-type', TYPES, t => `${t.name} — ${Math.round(t.loss.pct*100)}% / ${t.loss.score}+`);
+$('#a-type').value = 'HH';  $('#b-type').value = 'HF';  $('#ls-type').value = 'HF';
+
+function readSide(prefix) {
+  return {
+    type: $(`#${prefix}-type`).value,
+    count: parseInt($(`#${prefix}-count`).value, 10),
+    polearm:  $(`#${prefix}-polearm`)?.checked || false,
+    impetus:  $(`#${prefix}-impetus`)?.checked || false,
+    flank:    $(`#${prefix}-flank`)?.checked || false,
+    rear:     $(`#${prefix}-rear`)?.checked || false,
+    standingHorseFirstRound: $(`#${prefix}-standing`)?.checked || false,
+  };
+}
+
+function logEl() { return $('#log'); }
+function appendTurn(headline, bodyHtml) {
+  const d = document.createElement('div');
+  d.className = 'turn';
+  d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
+  logEl().appendChild(d);
+  d.scrollIntoView({ behavior:'smooth', block:'end' });
+}
+function diceTrace(dice, kills) {
+  if (!dice.length) return '<span class="die-trace">no dice</span>';
+  const parts = dice.map(v => kills.includes(v) ? `<b>${v}</b>` : String(v));
+  return `<span class="die-trace">[ ${parts.join(' ')} ]</span>`;
+}
+
+/* ---- melee handler ---- */
+$('#btn-melee').addEventListener('click', () => {
+  const A = readSide('a'), B = readSide('b');
+  const rng = mulberry32(parseInt($('#melee-seed').value, 10) || 1);
+  const r = resolveMassMelee({ attacker:A, defender:B, rng });
+  const aT = typeById(A.type), bT = typeById(B.type);
+  const aMods = [];
+  if (r.attacker.polearmApplied) aMods.push('pike/halberd +1/man');
+  if (r.attacker.impetusApplied) aMods.push('impetus charge +1/man');
+  if (r.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
+  if (A.flank || A.rear) aMods.push(`vs lookup as ${r.attacker.effectiveClass}`);
+  const bMods = [];
+  if (r.defender.noReturn) bMods.push('rear attack → no return');
+  if (r.defender.polearmApplied) bMods.push('pike/halberd +1/man');
+  if (r.defender.impetusApplied) bMods.push('impetus charge +1/man');
+  if (r.defender.standingHorseApplied) bMods.push(`standing horse → returns as ${r.defender.effectiveClass}`);
+
+  let html = '';
+  html += `<div class="step"><span class="who A">A · ${aT.name} × ${A.count}</span> rolls ${r.attacker.totalDice} dice ` +
+          `(${r.attacker.dicePerMan.toFixed(2)}/man), kills on ${r.attacker.killScores.join(',')} → ` +
+          `<b>${r.attacker.killsDealt}</b> kill${r.attacker.killsDealt===1?'':'s'} ${diceTrace(r.attacker.dice, r.attacker.killScores)}` +
+          (aMods.length ? ` <small class="note">· ${aMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step"><span class="who B">B · ${bT.name} × ${B.count}</span> rolls ${r.defender.totalDice} dice ` +
+          `(${r.defender.dicePerMan.toFixed(2)}/man), kills on ${(r.defender.killScores||[]).join(',') || '—'} → ` +
+          `<b>${r.defender.killsDealt}</b> kill${r.defender.killsDealt===1?'':'s'} ${diceTrace(r.defender.dice, r.defender.killScores||[])}` +
+          (bMods.length ? ` <small class="note">· ${bMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step">casualties — A: <b>${r.attacker.casualties}</b> · B: <b>${r.defender.casualties}</b> · ` +
+          `survivors A: ${r.attacker.surviving}, B: ${r.defender.surviving}</div>`;
+  appendTurn(`Mass melee · seed ${$('#melee-seed').value}`, html);
+
+  // Chain into post-melee morale using each side's default rating
+  const pmRng = mulberry32((parseInt($('#melee-seed').value, 10) || 1) ^ 0x9e3779b9);
+  const pm = resolvePostMelee({
+    a:{ label:'A', startCount:A.count, casualties:r.attacker.casualties, morale:aT.morale },
+    b:{ label:'B', startCount:B.count, casualties:r.defender.casualties, morale:bT.morale },
+    rng: pmRng,
+  });
+  appendTurn('Post-melee morale (auto)', renderMorale(pm, aT, bT));
+
+  // Loss-table check for each side that crossed its threshold
+  [['A', A, aT, r.attacker.casualties], ['B', B, bT, r.defender.casualties]].forEach(([label, side, T, cas]) => {
+    const lossRng = mulberry32((parseInt($('#melee-seed').value, 10) || 1) ^ (label === 'A' ? 0x12345 : 0x54321));
+    const lr = resolveLossMorale({ type:T.id, startCount:side.count, casualties:cas, surrounded:false, rng:lossRng });
+    if (lr.triggered) appendTurn(`Loss morale · ${label} · ${T.name}`, renderLoss(lr, T));
+  });
+});
+
+/* ---- post-melee handler ---- */
+function readMoraleSide(prefix) {
+  return {
+    label: prefix === 'a' ? 'A' : 'B',
+    startCount: parseInt($(`#pm-${prefix}-start`).value, 10),
+    casualties: parseInt($(`#pm-${prefix}-cas`).value, 10),
+    morale:     parseInt($(`#pm-${prefix}-rating`).value, 10),
+  };
+}
+$('#btn-pm').addEventListener('click', () => {
+  const a = readMoraleSide('a'), b = readMoraleSide('b');
+  const rng = mulberry32(parseInt($('#pm-seed').value, 10) || 1);
+  const pm = resolvePostMelee({ a, b, rng });
+  appendTurn(`Post-melee morale · seed ${$('#pm-seed').value}`, renderMorale(pm, { name:'A' }, { name:'B' }));
+});
+$('#btn-example').addEventListener('click', () => {
+  $('#pm-a-start').value = 10; $('#pm-a-cas').value = 2; $('#pm-a-rating').value = 9;
+  $('#pm-b-start').value = 20; $('#pm-b-cas').value = 8; $('#pm-b-rating').value = 5;
+  // Stub rng → d6 = 3 (value 0.4 → floor(0.4*6)+1 = 3)
+  const pm = resolvePostMelee({
+    a:{ label:'A', startCount:10, casualties:2, morale:9 },
+    b:{ label:'B', startCount:20, casualties:8, morale:5 },
+    rng: stubRng([0.4]),
+  });
+  appendTurn('Worked example (p.15-16) · HH rating = 9 (book) · die forced to 3',
+             renderMorale(pm, { name:'Heavy Horse' }, { name:'Heavy Foot' }));
+});
+
+function renderMorale(pm, aT, bT) {
+  const tag = pm.reaction.tag;
+  let html = `<table class="scoretab">`;
+  html += `<tr><td class="label-col">Casualty-diff bonus (Step 1)</td>` +
+          `<td class="num">${pm.casualtyBonus.side ? `${pm.casualtyBonus.side}: ${pm.casualtyBonus.diff} × d6=${pm.casualtyBonus.dieRoll} = ${pm.casualtyBonus.value}` : '—'}</td></tr>`;
+  html += `<tr><td class="label-col">Survivor-diff bonus (Step 2)</td>` +
+          `<td class="num">${pm.survivorBonus.side ? `${pm.survivorBonus.side}: +${pm.survivorBonus.value}` : '—'}</td></tr>`;
+  html += `<tr><td class="label-col"><span class="who A">A · ${aT.name}</span> rating × survivors</td>` +
+          `<td class="num">${pm.a.ratingScore}  &nbsp;<small class="note">(${pm.a.surviving} survivors)</small></td></tr>`;
+  html += `<tr><td class="label-col"><span class="who B">B · ${bT.name}</span> rating × survivors</td>` +
+          `<td class="num">${pm.b.ratingScore}  &nbsp;<small class="note">(${pm.b.surviving} survivors)</small></td></tr>`;
+  html += `<tr class="total"><td class="label-col">Totals  ·  A vs B</td>` +
+          `<td class="num">${pm.a.total}  vs  ${pm.b.total}</td></tr>`;
+  html += `<tr><td class="label-col">Raw diff  ${pm.doubled ? '· doubled (side &lt; 20)' : ''}</td>` +
+          `<td class="num">${pm.rawDiff}${pm.doubled ? ` → <b>${pm.diff}</b>` : ''}</td></tr>`;
+  html += `</table>`;
+  html += `<div class="verdict v-${tag}">` +
+          (pm.loser ? `${pm.loser} → ${pm.reaction.text}` : `tie · ${pm.reaction.text}`) +
+          `</div>`;
+  return html;
+}
+
+/* ---- loss morale handler ---- */
+$('#btn-loss').addEventListener('click', () => {
+  const id = $('#ls-type').value;
+  const start = parseInt($('#ls-start').value, 10);
+  const cas   = parseInt($('#ls-cas').value, 10);
+  const surrounded = $('#ls-surrounded').checked;
+  const rng = mulberry32(parseInt($('#ls-seed').value, 10) || 1);
+  const r = resolveLossMorale({ type:id, startCount:start, casualties:cas, surrounded, rng });
+  appendTurn(`Loss morale · ${typeById(id).name} · seed ${$('#ls-seed').value}`, renderLoss(r, typeById(id)));
+});
+function renderLoss(lr, T) {
+  const pctStr = `${(lr.pct*100).toFixed(1)}%`;
+  const thrStr = `${(lr.threshold.pct*100).toFixed(1)}%`;
+  if (!lr.triggered) {
+    return `<div class="step">casualties ${pctStr} below threshold ${thrStr} — <b>no check needed</b></div>`;
+  }
+  let html = `<div class="step">${T.name} casualties ${pctStr} ≥ threshold ${thrStr} — 2d6 needs ${lr.threshold.score}+</div>`;
+  html += `<div class="step">rolled 2d6 = ${lr.dice.a} + ${lr.dice.b} = <b>${lr.dice.sum}</b></div>`;
+  const tag = lr.passed ? 'pass' : (lr.action === 'surrender' ? 'surrender' : 'fail');
+  const text = lr.passed ? 'unit holds' : (lr.action === 'surrender' ? 'surrounded → surrenders' : 'removed from play');
+  html += `<div class="verdict v-${tag}">${text}</div>`;
+  return html;
+}
+
+$('#btn-clear').addEventListener('click', () => { logEl().innerHTML = ''; });
+
+/* === E. TESTS ========================================================== */
+(function tests() {
+  // Combat lookup
+  console.assert(COMBAT.HH.HF.dice === 3 && COMBAT.HH.HF.perMen === 1, 'HH vs HF = 3 dice/man');
+  console.assert(COMBAT.HF.HH.dice === 1 && COMBAT.HF.HH.perMen === 4, 'HF vs HH = 1 die per 4 men');
+  console.assert(COMBAT.LF.LF.kills.join() === '6', 'LF vs LF kills on 6');
+  console.assert(COMBAT.MH.LF.kills.join() === '4,5,6', 'MH vs LF kills on 4-6');
+
+  // Class bumps
+  console.assert(effectiveAttackerClass('HF', { flank:true }) === 'AF', 'HF flank → AF');
+  console.assert(effectiveAttackerClass('LF', { rear:true })  === 'HF', 'LF rear → HF');
+  console.assert(effectiveAttackerClass('AF', { flank:true }) === 'AF', 'AF flank stays AF (bonus instead)');
+  console.assert(classBumpsToBonus('AF', { flank:true }) === true, 'AF flank → +1/die bonus');
+  console.assert(classBumpsToBonus('HF', { flank:true }) === false, 'HF flank does not get +1/die');
+  console.assert(effectiveDefenderReturnClass('HH', true) === 'MH', 'standing HH returns as MH');
+  console.assert(applyDieBonus([6], 1).join() === '5,6', '[6] + 1 → [5,6]');
+  console.assert(applyDieBonus([5,6], 1).join() === '4,5,6', '[5,6] + 1 → [4,5,6]');
+
+  // Reaction bands
+  console.assert(reactionFor(0).tag === 'continues',  'diff 0 continues');
+  console.assert(reactionFor(19).tag === 'continues', 'diff 19 continues');
+  console.assert(reactionFor(20).tag === 'back2',     'diff 20 → back 2 (table as printed)');
+  console.assert(reactionFor(52).tag === 'back1',     'diff 52 → back 1 (matches book example)');
+  console.assert(reactionFor(100).tag === 'surrender','diff 100 → surrender');
+
+  // ---- GOLDEN: p.15-16 worked example (HH rating = 9 to match the book) ----
+  const ex = resolvePostMelee({
+    a:{ label:'A', startCount:10, casualties:2, morale:9 },
+    b:{ label:'B', startCount:20, casualties:8, morale:5 },
+    rng: stubRng([0.4]), // d6 = 3
+  });
+  console.assert(ex.casualtyBonus.dieRoll === 3,   'example die = 3');
+  console.assert(ex.casualtyBonus.value   === 18,  'example casualty bonus 6×3 = 18');
+  console.assert(ex.a.ratingScore         === 72,  'example HH rating×survivors 9×8 = 72');
+  console.assert(ex.b.ratingScore         === 60,  'example HF rating×survivors 5×12 = 60');
+  console.assert(ex.a.total === 90,                'example HH total 90');
+  console.assert(ex.b.total === 64,                'example HF total 64');
+  console.assert(ex.rawDiff === 26,                'example raw diff 26');
+  console.assert(ex.doubled === true,              'example doubled (A side <20)');
+  console.assert(ex.diff === 52,                   'example diff 52 after doubling');
+  console.assert(ex.loser === 'B',                 'example HF loses');
+  console.assert(ex.reaction.tag === 'back1',      'example HF back 1 move, good order');
+
+  // Variant: same scenario with HH rating = 8 (the table value) — verifies the discrepancy note
+  const exTbl = resolvePostMelee({
+    a:{ label:'A', startCount:10, casualties:2, morale:8 },
+    b:{ label:'B', startCount:20, casualties:8, morale:5 },
+    rng: stubRng([0.4]),
+  });
+  console.assert(exTbl.a.total === 82, 'table-rating HH total 82');
+  console.assert(exTbl.rawDiff === 18, 'table-rating diff 18');
+  console.assert(exTbl.diff === 36,    'table-rating diff after doubling 36');
+  console.assert(exTbl.reaction.tag === 'back2', 'table-rating → back 2 moves, good order');
+
+  // Loss morale: 33⅓% HF triggers a check; threshold 7+. With 2d6 deterministic via stub.
+  const ls = resolveLossMorale({
+    type:'HF', startCount:30, casualties:10, surrounded:false,
+    rng: stubRng([0.0, 0.0]), // both dice → 1+1 = 2, fail
+  });
+  console.assert(ls.triggered === true, 'HF 10/30 = 33.3% triggers loss morale');
+  console.assert(ls.passed === false,   'sum 2 < 7, fails');
+  console.assert(ls.action === 'removed', 'not surrounded → removed');
+
+  const lsOk = resolveLossMorale({
+    type:'HF', startCount:30, casualties:8, surrounded:false, rng: stubRng([0,0]),
+  });
+  console.assert(lsOk.triggered === false, 'HF 8/30 = 26.7% does not trigger');
+
+  console.log(`[chainmail-mass v${SIM_VERSION}] tests OK`);
+})();
+</script>
+</body>
+</html>

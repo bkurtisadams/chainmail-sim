@@ -1,0 +1,445 @@
+<!doctype html>
+<!-- chainmail-mtm.html · v0.1.0 · Slice 1: Man-to-Man Resolver -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chainmail — Man-to-Man Resolver · v0.1.0</title>
+<style>
+  :root {
+    --bg:#ece0c4; --panel:#f5eedb; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
+    --side-a:#3a6e90; --side-b:#9c3b2c;
+    --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a;
+    --serif:"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans:"Avenir Next Condensed", "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
+  .page { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 4px; letter-spacing: 0.2px; }
+  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 22px; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 22px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px; }
+  .panel h2 { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+  .field label { width: 86px; font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .field select { flex: 1; padding: 5px 7px; font-family: var(--serif); font-size: 14px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink); }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
+  .check { display: flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: 12.5px; }
+  .check input { accent-color: var(--ink); }
+  .radios { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .radios .lbl { font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); margin-right: 4px; }
+  .controls { display: flex; align-items: center; gap: 14px; margin: 20px 0;
+    padding: 14px 18px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+    font-family: var(--sans); }
+  .controls .lbl { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); }
+  .controls input { width: 90px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 3px;
+    background: #fff8e7; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+  button { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 10px 16px;
+    border-radius: 3px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button:hover { filter: brightness(1.1); }
+  #state { margin-left: auto; font-family: var(--sans); font-size: 12px; color: var(--ink-soft);
+    letter-spacing: 0.6px; }
+  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px;
+    min-height: 220px; font-size: 14px; line-height: 1.6; }
+  #log:empty::before { content: "—  resolve a round to see blow-by-blow"; color: var(--ink-soft);
+    font-family: var(--sans); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .turn { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--rule); }
+  .turn:last-child { border-bottom: 0; }
+  .turn-head { font-family: var(--sans); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 8px; }
+  .blow { padding: 2px 0 2px 14px; border-left: 2px solid var(--rule); margin-bottom: 4px; }
+  .blow .who { font-weight: 700; }
+  .blow .who.attacker { color: var(--side-a); }
+  .blow .who.defender { color: var(--side-b); }
+  .blow .verdict { font-family: var(--sans); font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 2px; margin-left: 6px; font-weight: 700; }
+  .v-kill   { background: rgba(47,125,79,0.18);  color: var(--front); }
+  .v-miss   { background: rgba(110,96,71,0.14);  color: var(--ink-soft); }
+  .v-parry  { background: rgba(192,137,46,0.18); color: var(--flank); }
+  .v-break  { background: rgba(176,57,44,0.18);  color: var(--rear); }
+  .round-verdict { margin-top: 8px; padding: 5px 10px; border-radius: 3px; display: inline-block;
+    font-family: var(--sans); font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; font-weight: 700; }
+  .rv-attacker { background: rgba(58,110,144,0.20); color: var(--side-a); }
+  .rv-defender { background: rgba(156,59,44,0.20); color: var(--side-b); }
+  .rv-continues { background: rgba(110,96,71,0.18); color: var(--ink-soft); }
+  small { font-family: var(--sans); color: var(--ink-soft); font-size: 11px; }
+  .legend { margin-top: 18px; font-family: var(--sans); font-size: 11px; color: var(--ink-soft);
+    letter-spacing: 0.6px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Man-to-Man Resolver</h1>
+  <div class="sub">Chainmail HTML Sim · Slice 1 · weapon-class blow order &amp; parry</div>
+  <hr>
+
+  <div class="grid">
+    <div class="panel">
+      <h2><span class="swatch" style="background:var(--side-a)"></span> Attacker</h2>
+      <div class="field"><label>Weapon</label><select id="atk-weapon"></select></div>
+      <div class="field"><label>Armor</label><select id="atk-armor"></select></div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="atk-mounted" data-mount="medium"> Mounted</label>
+        <label class="check"><input type="checkbox" id="atk-charging"> Charging</label>
+        <label class="check"><input type="checkbox" id="atk-above"> From above</label>
+        <label class="check"><input type="checkbox" id="atk-prone"> Prone</label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2><span class="swatch" style="background:var(--side-b)"></span> Defender</h2>
+      <div class="field"><label>Weapon</label><select id="def-weapon"></select></div>
+      <div class="field"><label>Armor</label><select id="def-armor"></select></div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="def-mounted" data-mount="medium"> Mounted</label>
+        <label class="check"><input type="checkbox" id="def-above"> From above</label>
+        <label class="check"><input type="checkbox" id="def-prone"> Prone</label>
+        <label class="check"><input type="checkbox" id="def-parry"> Parry (if allowed)</label>
+      </div>
+      <div class="radios">
+        <span class="lbl">Attacked from</span>
+        <label class="check"><input type="radio" name="def-from" value="front" checked> front</label>
+        <label class="check"><input type="radio" name="def-from" value="left"> left flank</label>
+        <label class="check"><input type="radio" name="def-from" value="right"> right flank</label>
+        <label class="check"><input type="radio" name="def-from" value="rear"> rear</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <span class="lbl">Seed</span><input type="number" id="seed" value="12345">
+    <button id="btn-resolve">Resolve next round</button>
+    <button id="btn-reset" class="secondary">Reset</button>
+    <span id="state">Round 1 — clean engagement</span>
+  </div>
+
+  <div id="log"></div>
+
+  <div class="legend">
+    1 ≤ class ≤ 12 · target = 2d6 ≥ printed cell · asterisk cells use 7+ when defender prone ·
+    parry penalty: −2 (cases b/c), −1 (case d) · weapon breaks on parried kill-roll (cases c/d)
+  </div>
+</div>
+
+<script type="module">
+const SIM_VERSION = '0.1.0';
+
+/* === A. RNG ============================================================ */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const d6      = (rng) => 1 + Math.floor(rng() * 6);
+const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+
+/* === B. DATA: armor columns, weapons, melee table (Appendix B) ========= */
+const ARMOR = Object.freeze([
+  { id:'none',         label:'No armor' },
+  { id:'leather',      label:'Leather / padded' },
+  { id:'shield',       label:'Shield only' },
+  { id:'leather_sh',   label:'Leather + shield' },
+  { id:'chain',        label:'Chain / banded / studded / splint' },
+  { id:'chain_sh',     label:'Chain + shield' },
+  { id:'plate',        label:'Plate armor' },
+  { id:'plate_sh',     label:'Plate + shield' },
+  { id:'horse_none',   label:'Horse, no armor' },
+  { id:'horse_barded', label:'Horse, barded' },
+]);
+const armorIndex = (id) => ARMOR.findIndex(a => a.id === id);
+
+// proneCols: armor-column indexes (0-based) whose printed value is asterisked —
+// when defender is prone those cells use the universal 7+ threshold instead.
+const WEAPONS = Object.freeze([
+  { id:'dagger',     name:'Dagger',           cls:1,  row:[6,7,8,8,9,10,12,12,8,10], proneCols:[6,7] },
+  { id:'hand_axe',   name:'Hand Axe',         cls:1,  row:[7,7,8,9,10,10,11,12,9,11] },
+  { id:'mace',       name:'Mace',             cls:3,  row:[8,8,8,9,8,8,7,8,10,12] },
+  { id:'sword',      name:'Sword',            cls:4,  row:[7,8,8,9,8,9,10,11,8,10], proneCols:[6,7] },
+  { id:'battle_axe', name:'Battle Axe',       cls:5,  row:[8,8,8,8,7,7,9,10,7,9] },
+  { id:'morn_star',  name:'Morning Star',     cls:6,  row:[6,6,7,7,6,7,8,8,8,8] },
+  { id:'flail',      name:'Flail',            cls:7,  row:[7,7,7,7,6,7,6,7,6,8] },
+  { id:'spear',      name:'Spear',            cls:8,  row:[8,8,9,9,10,10,11,12,7,9], proneCols:[6,7] },
+  { id:'pole_arms',  name:'Pole arms',        cls:9,  row:[6,6,6,7,7,8,9,10,6,8],    proneCols:[6,7] },
+  { id:'halbard',    name:'Halbard',          cls:9,  row:[8,8,8,7,6,6,7,8,6,9] },
+  { id:'two_hand',   name:'Two-handed sword', cls:10, row:[6,6,6,6,5,5,6,7,6,8] },
+  { id:'lance',      name:'Mounted lance',    cls:11, row:[5,5,5,5,6,7,8,9,5,7] },
+  { id:'pike',       name:'Pike',             cls:12, row:[8,8,8,8,8,8,9,10,5,7] },
+]);
+const weaponById = (id) => WEAPONS.find(w => w.id === id);
+
+const PRONE_KILL_TN = 7;
+const CHARGE_REACH_CLASSES = new Set([8, 11, 12]); // spear, lance, pike (p.26 §4d)
+
+/* === C. ENGINE ========================================================= */
+function targetNumber(weapon, armorId, defenderProne) {
+  const ai = armorIndex(armorId);
+  if (defenderProne && weapon.proneCols && weapon.proneCols.includes(ai)) return PRONE_KILL_TN;
+  return weapon.row[ai];
+}
+
+// Multi-blow count for the holder of `myCls` when opponent holds `oppCls` (p.26).
+function blowCountFor(myCls, oppCls) {
+  const diff = oppCls - myCls;
+  if (diff >= 8) return 3;
+  if (diff >= 4) return 2;
+  return 1;
+}
+
+// Parry case from attacker→defender weapon class differential (p.25-26 §4).
+function parryCase(atkCls, defCls) {
+  const diff = atkCls - defCls;
+  if (diff <= -2) return 'a';        // defender weapon 2+ higher — no parry
+  if (diff <= 3)  return 'b';        // -1 .. +3 — parry, no counter
+  if (diff <= 7)  return 'c';        // +4 .. +7 — parry, one counter, break on kill-roll
+  return 'd';                        // +8+    — defender first, may parry attacker
+}
+
+// Modifiers to a blow's die total (mounted, rear, etc. — p.25)
+function blowModifier({ strikerRole, striker, target, defenderAttackedFrom, round }) {
+  let m = 0;
+  if (striker.mounted && !target.mounted) m += (round === 1 ? 2 : 1);
+  if (!striker.mounted && target.mounted) m -= 1;
+  if (strikerRole === 'attacker' && defenderAttackedFrom === 'rear') m += 1;
+  return m;
+}
+
+function resolveBlow({ strikerRole, striker, target, defenderAttackedFrom, round, rng, parried, parryPenalty }) {
+  const tn = targetNumber(striker.weapon, target.armor, target.prone);
+  const dice = roll2d6(rng);
+  const mods = blowModifier({ strikerRole, striker, target, defenderAttackedFrom, round });
+  const penalty = parried ? parryPenalty : 0;
+  const total = dice.sum + mods - penalty;
+  return {
+    striker: strikerRole,
+    weapon: striker.weapon.name,
+    targetArmor: target.armor,
+    tn, dice:[dice.a, dice.b], mods, penalty, parried,
+    total, kill: total >= tn, breakWeapon: false,
+  };
+}
+
+function firstStriker(state) {
+  const { round, a, d, prevFirstStriker } = state;
+  if (round === 1) {
+    if (a.charging && CHARGE_REACH_CLASSES.has(a.weapon.cls) && a.weapon.cls > d.weapon.cls)
+      return { who:'attacker', defenderReturns:true };
+    if (d.attackedFrom === 'rear')              return { who:'attacker', defenderReturns:false };
+    const diff = a.weapon.cls - d.weapon.cls;
+    if (diff >= 8)                              return { who:'defender', defenderReturns:true };
+    if (d.fromAbove)                            return { who:'defender', defenderReturns:true };
+    if (diff <= -2)                             return { who:'defender', defenderReturns:true };
+    return { who:'attacker', defenderReturns:true };
+  }
+  let first = prevFirstStriker || 'attacker';
+  const opp  = first === 'attacker' ? d : a;
+  const self = first === 'attacker' ? a : d;
+  if (opp.weapon.cls - self.weapon.cls <= -2) first = (first === 'attacker' ? 'defender' : 'attacker');
+  if (opp.fromAbove)                          first = (first === 'attacker' ? 'defender' : 'attacker');
+  return { who:first, defenderReturns:true };
+}
+
+function resolveRound(state) {
+  const { a, d, round, rng } = state;
+  const { who:first, defenderReturns } = firstStriker(state);
+
+  let aBlows = blowCountFor(a.weapon.cls, d.weapon.cls);
+  let dBlows = blowCountFor(d.weapon.cls, a.weapon.cls);
+  if (!defenderReturns) dBlows = 0;
+
+  const pCase = parryCase(a.weapon.cls, d.weapon.cls);
+  const defenderWillParry = !!d.parry && pCase !== 'a' && defenderReturns;
+  const parryPenalty = pCase === 'd' ? 1 : 2;
+  if (defenderWillParry) dBlows = Math.max(0, dBlows - 1);
+
+  // Build blow sequence: first striker's blows, then second's.
+  const seq = [];
+  const second = first === 'attacker' ? 'defender' : 'attacker';
+  const firstBlows  = first === 'attacker' ? aBlows : dBlows;
+  const secondBlows = first === 'attacker' ? dBlows : aBlows;
+  for (let i = 0; i < firstBlows;  i++) seq.push(first);
+  for (let i = 0; i < secondBlows; i++) seq.push(second);
+
+  // Parry intercepts the first attacker blow in the sequence (without taking its own slot).
+  const parryIdx = defenderWillParry ? seq.findIndex(x => x === 'attacker') : -1;
+
+  const blows = [];
+  for (let i = 0; i < seq.length; i++) {
+    const who = seq[i];
+    const isParried = (i === parryIdx);
+    const striker = who === 'attacker' ? a : d;
+    const target  = who === 'attacker' ? d : a;
+    const blow = resolveBlow({
+      strikerRole: who, striker, target,
+      defenderAttackedFrom: d.attackedFrom,
+      round, rng, parried: isParried, parryPenalty
+    });
+
+    if (isParried && !blow.kill && (pCase === 'c' || pCase === 'd')) {
+      const unpenalized = blow.total + parryPenalty;
+      if (unpenalized >= blow.tn) blow.breakWeapon = true;
+    }
+    blows.push(blow);
+
+    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, parryCase: pCase };
+    if (blow.breakWeapon) {
+      // defender disarmed mid-round — cancel any remaining defender blows
+      for (let j = i + 1; j < seq.length; j++) if (seq[j] === 'defender') { seq.splice(j, 1); j--; }
+    }
+  }
+  return { blows, outcome:'continues', nextFirstStriker:first, parryCase:pCase };
+}
+
+/* === D. UI ============================================================= */
+const $ = (sel) => document.querySelector(sel);
+
+function fillSelect(id, items, render) {
+  const sel = $(id);
+  items.forEach(it => {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = render(it);
+    sel.appendChild(o);
+  });
+}
+fillSelect('#atk-weapon', WEAPONS, w => `${w.name}  ·  class ${w.cls}`);
+fillSelect('#def-weapon', WEAPONS, w => `${w.name}  ·  class ${w.cls}`);
+fillSelect('#atk-armor',  ARMOR,   a => a.label);
+fillSelect('#def-armor',  ARMOR,   a => a.label);
+$('#atk-weapon').value = 'sword';   $('#def-weapon').value = 'sword';
+$('#atk-armor').value  = 'leather'; $('#def-armor').value  = 'chain';
+
+let session = null, rng = null;
+
+function readSide(prefix, attackedFrom = 'front') {
+  return {
+    weapon:   weaponById($(`#${prefix}-weapon`).value),
+    armor:    $(`#${prefix}-armor`).value,
+    mounted:  $(`#${prefix}-mounted`)?.checked || false,
+    charging: $(`#${prefix}-charging`)?.checked || false,
+    fromAbove:$(`#${prefix}-above`)?.checked   || false,
+    prone:    $(`#${prefix}-prone`)?.checked   || false,
+    parry:    $(`#${prefix}-parry`)?.checked   || false,
+    attackedFrom,
+  };
+}
+
+function reset() {
+  session = null; rng = null;
+  $('#log').innerHTML = '';
+  $('#state').textContent = 'Round 1 — clean engagement';
+}
+
+function resolveNext() {
+  if (!session) {
+    rng = mulberry32(parseInt($('#seed').value, 10) || 1);
+    const attackedFrom = document.querySelector('input[name=def-from]:checked').value;
+    session = {
+      a: readSide('atk'),
+      d: { ...readSide('def'), attackedFrom },
+      round: 1, prevFirstStriker: null,
+    };
+    $('#log').innerHTML = '';
+  }
+  const result = resolveRound({ ...session, rng });
+  renderRound(session.round, result, session);
+  if (result.outcome === 'attacker' || result.outcome === 'defender') {
+    $('#state').textContent = `Round ${session.round} — ${result.outcome.toUpperCase()} WINS  ·  reset to start over`;
+    session = null;
+    return;
+  }
+  session.prevFirstStriker = result.nextFirstStriker;
+  session.round++;
+  $('#state').textContent = `Round ${session.round} — melee continues`;
+}
+
+function renderRound(num, result, s) {
+  const div = document.createElement('div');
+  div.className = 'turn';
+  const firstWho = result.blows[0]?.striker || '—';
+  let html = `<div class="turn-head">Round ${num} · first striker: <b>${firstWho}</b> · parry case (${result.parryCase})</div>`;
+  for (const b of result.blows) {
+    const verdictClass = b.kill ? 'v-kill' : (b.breakWeapon ? 'v-break' : (b.parried ? 'v-parry' : 'v-miss'));
+    const verdictText  = b.kill ? 'kill'   : (b.breakWeapon ? 'weapon breaks' : (b.parried ? 'parried' : 'miss'));
+    const modBits = [];
+    if (b.mods)    modBits.push(`${b.mods > 0 ? '+' : ''}${b.mods} mod`);
+    if (b.penalty) modBits.push(`−${b.penalty} parry`);
+    const modStr = modBits.length ? `  (${modBits.join(', ')})` : '';
+    html += `<div class="blow"><span class="who ${b.striker}">${b.striker}</span> swings ${b.weapon}: ` +
+            `2d6 = ${b.dice[0]} + ${b.dice[1]} = ${b.dice[0]+b.dice[1]}${modStr} ` +
+            `→ total <b>${b.total}</b> vs tn <b>${b.tn}</b>` +
+            `<span class="verdict ${verdictClass}">${verdictText}</span></div>`;
+  }
+  const rv = result.outcome === 'continues' ? 'rv-continues' :
+             (result.outcome === 'attacker' ? 'rv-attacker' : 'rv-defender');
+  const rvt = result.outcome === 'continues' ? 'melee continues' : `${result.outcome} wins`;
+  html += `<div class="round-verdict ${rv}">${rvt}</div>`;
+  div.innerHTML = html;
+  $('#log').appendChild(div);
+  div.scrollIntoView({ behavior:'smooth', block:'end' });
+}
+
+$('#btn-resolve').addEventListener('click', resolveNext);
+$('#btn-reset').addEventListener('click', reset);
+
+/* === E. TESTS (console asserts) ======================================== */
+(function tests() {
+  const W = (id) => weaponById(id);
+  const dagger = W('dagger'), sword = W('sword'), pike = W('pike'), spear = W('spear'), mace = W('mace');
+
+  // Table lookup
+  console.assert(targetNumber(sword,  'leather', false) === 8,  'sword vs leather = 8');
+  console.assert(targetNumber(sword,  'plate',   false) === 10, 'sword vs plate = 10');
+  console.assert(targetNumber(sword,  'plate',   true)  === 7,  'sword vs plate (prone) = 7');
+  console.assert(targetNumber(dagger, 'plate',   false) === 12, 'dagger vs plate = 12');
+  console.assert(targetNumber(dagger, 'plate',   true)  === 7,  'dagger vs plate (prone) = 7');
+  console.assert(targetNumber(dagger, 'chain',   false) === 9,  'dagger vs chain = 9');
+
+  // Multi-blow
+  console.assert(blowCountFor(dagger.cls, pike.cls) === 3, 'dagger vs pike → 3 blows for dagger');
+  console.assert(blowCountFor(pike.cls,   dagger.cls) === 1, 'pike vs dagger → 1 blow for pike');
+  console.assert(blowCountFor(sword.cls,  pike.cls) === 3, 'sword vs pike → 3 blows for sword (diff 8)');
+  console.assert(blowCountFor(mace.cls,   pike.cls) === 3, 'mace vs pike → 3 blows for mace (diff 9)');
+  console.assert(blowCountFor(spear.cls,  dagger.cls) === 1, 'spear vs dagger → 1 blow for spear');
+
+  // Parry case
+  console.assert(parryCase(sword.cls,  sword.cls)  === 'b', 'sword vs sword → case b');
+  console.assert(parryCase(pike.cls,   dagger.cls) === 'd', 'pike attacker vs dagger → case d');
+  console.assert(parryCase(dagger.cls, pike.cls)   === 'a', 'dagger attacker vs pike → case a');
+  console.assert(parryCase(spear.cls,  dagger.cls) === 'c', 'spear vs dagger → case c (diff 7)');
+
+  // First striker
+  const f1 = firstStriker({ round:1,
+    a:{ weapon:pike,  charging:true,  mounted:false }, d:{ weapon:sword, attackedFrom:'front', fromAbove:false } });
+  console.assert(f1.who === 'attacker', 'pike charge beats sword');
+
+  const f2 = firstStriker({ round:1,
+    a:{ weapon:sword, charging:false, mounted:false }, d:{ weapon:sword, attackedFrom:'rear',  fromAbove:false } });
+  console.assert(f2.defenderReturns === false, 'rear attack → defender no return');
+
+  const f3 = firstStriker({ round:1,
+    a:{ weapon:pike,  charging:false, mounted:false }, d:{ weapon:dagger, attackedFrom:'front', fromAbove:false } });
+  console.assert(f3.who === 'defender', 'case d (no charge) → defender first');
+
+  // Round 2+: lighter weapon takes initiative
+  const f4 = firstStriker({ round:2, prevFirstStriker:'attacker',
+    a:{ weapon:pike,  fromAbove:false }, d:{ weapon:sword, fromAbove:false, attackedFrom:'front' } });
+  console.assert(f4.who === 'defender', 'round 2 — sword recovers faster than pike');
+
+  console.log(`[chainmail-mtm v${SIM_VERSION}] tests OK`);
+})();
+</script>
+</body>
+</html>

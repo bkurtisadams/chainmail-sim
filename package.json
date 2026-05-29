@@ -1,0 +1,9 @@
+{
+  "name": "chainmail-sim",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Chainmail 3rd ed. rules engine (Gygax & Perren, 1975) — pure ESM",
+  "scripts": {
+    "test": "node test/run-all.js"
+  }
+}

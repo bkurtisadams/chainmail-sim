@@ -1,0 +1,475 @@
+<!doctype html>
+<!-- chainmail-fantasy.html · v0.1.0 · Slice 4: Fantasy Combat (Appendix E + D) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chainmail — Fantasy Combat · v0.1.0</title>
+<style>
+  :root {
+    --bg:#ece0c4; --panel:#f5eedb; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
+    --side-a:#3a6e90; --side-b:#9c3b2c;
+    --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a;
+    --magic:#6b3a8c;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:"Avenir Next Condensed","Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
+  .page { max-width: 1100px; margin: 0 auto; padding: 28px 32px 60px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 22px; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 22px; }
+  section { margin-bottom: 22px; }
+  .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; color: var(--ink); margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; }
+  .panel h2 { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
+    font-weight: 700; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .field label { width: 92px; font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .field select, .field input {
+    flex: 1; padding: 5px 7px; font-family: var(--serif); font-size: 14px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink);
+  }
+  .checks { display: grid; grid-template-columns: 1fr; gap: 5px 12px; margin-top: 6px; }
+  .check { display: flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: 12.5px; }
+  .check input { accent-color: var(--ink); }
+  .controls { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+    font-family: var(--sans); margin-top: 14px; flex-wrap: wrap; }
+  .controls .lbl { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); }
+  .controls input { width: 90px; padding: 5px 7px; border: 1px solid var(--rule); border-radius: 3px;
+    background: #fff8e7; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+  button { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 9px 14px;
+    border-radius: 3px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button:hover { filter: brightness(1.1); }
+  details { margin-top: 14px; }
+  details summary { font-family: var(--sans); font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); cursor: pointer; padding: 8px 10px; background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 4px; font-weight: 700; }
+  details[open] summary { margin-bottom: 12px; }
+  table.ref { width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 4px; }
+  table.ref th, table.ref td { padding: 6px 8px; border-bottom: 1px dashed var(--rule); text-align: left; }
+  table.ref thead th { font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink-soft); border-bottom: 2px solid var(--rule); }
+  table.ref tbody tr:last-child td { border-bottom: 0; }
+  table.ref .ab { font-family: var(--sans); font-size: 11px; color: var(--magic); font-weight: 700; letter-spacing: 0.5px; }
+  .abilities { margin-top: 10px; font-family: var(--sans); font-size: 11px; color: var(--ink-soft); line-height: 1.6; }
+  .abilities b { color: var(--magic); }
+  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px;
+    min-height: 220px; font-size: 14px; line-height: 1.55; }
+  #log:empty::before { content: "—  resolve a fantasy combat to see breakdown";
+    color: var(--ink-soft); font-family: var(--sans); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .turn { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px dashed var(--rule); }
+  .turn:last-child { border-bottom: 0; }
+  .turn-head { font-family: var(--sans); font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 8px; }
+  .step { padding: 3px 0 3px 14px; border-left: 2px solid var(--rule); margin-bottom: 4px; }
+  .verdict { font-family: var(--sans); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px; font-weight: 700; display: inline-block; margin-top: 6px; }
+  .v-killed { background: rgba(47,125,79,0.22); color: var(--front); }
+  .v-fallback { background: rgba(192,137,46,0.22); color: var(--flank); }
+  .v-noeffect { background: rgba(110,96,71,0.18); color: var(--ink-soft); }
+  .v-withdraw { background: rgba(58,110,144,0.22); color: var(--side-a); margin-left: 6px; }
+  .v-err { background: rgba(176,57,44,0.22); color: var(--rear); }
+  small.note { font-family: var(--sans); color: var(--ink-soft); font-size: 11px; }
+  .magic-row { display: none; }
+  .magic-row.show { display: flex; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Fantasy Combat</h1>
+  <div class="sub">Chainmail HTML Sim · Slice 4 · Appendix E matrix · 2d6 under / equal / over</div>
+  <hr>
+
+  <!-- ============ RESOLVER ============ -->
+  <section>
+    <div class="sec-head">1 · Fantasy combat (Appendix E)</div>
+    <div class="grid">
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-a)"></span> Attacker</h2>
+        <div class="field"><label>Type</label><select id="a-type"></select></div>
+        <div class="field magic-row" id="a-magic-row">
+          <label>Tier</label><select id="a-tier"></select>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="a-sword"> Magical sword (+1 to roll)</label>
+        </div>
+      </div>
+      <div class="panel">
+        <h2><span class="swatch" style="background:var(--side-b)"></span> Defender</h2>
+        <div class="field"><label>Type</label><select id="d-type"></select></div>
+        <div class="field magic-row" id="d-magic-row">
+          <label>Tier</label><select id="d-tier"></select>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="d-armor"> Magic armor (−1 to attacker roll)</label>
+        </div>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="lbl">Seed</span><input type="number" id="seed" value="42">
+      <button id="btn-resolve">Resolve combat</button>
+      <small class="note" id="hint">2d6 vs table · &lt; target → no effect (Hero/SuperH/Wizard/Wraith may withdraw) · = target → fall back 1 move · &gt; target → killed</small>
+    </div>
+  </section>
+
+  <!-- ============ REFERENCE ============ -->
+  <details>
+    <summary>Fantasy reference table (Appendix D)</summary>
+    <table class="ref" id="ref-table">
+      <thead><tr>
+        <th>Type</th><th>Move</th><th>Abilities</th><th>Charge</th><th>Fly</th><th>Missile</th><th>Attack</th><th>Defend</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="abilities" id="abilities"></div>
+  </details>
+
+  <hr>
+  <div class="sec-head">Log</div>
+  <div id="log"></div>
+  <div style="margin-top:12px"><button id="btn-clear" class="secondary">Clear log</button></div>
+</div>
+
+<script type="module">
+const SIM_VERSION = '0.1.0';
+
+/* === A. RNG ============================================================ */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const d6      = (rng) => 1 + Math.floor(rng() * 6);
+const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+const stubRng = (vals) => { let i = 0; return () => vals[i++]; };
+
+/* === B. DATA =========================================================== */
+// Fantastic types — id, name, morale, point value, withdraw* on attack, magicUser@ in Wizard column.
+const FANTASTIC_TYPES = Object.freeze([
+  { id:'BALROG',     name:'Balrog',         morale:50,  point:75 },
+  { id:'DRAGON',     name:'Dragon',         morale:'—', point:100 },
+  { id:'ELEMENTAL',  name:'Elemental',      morale:'—', point:'—' },
+  { id:'ENT',        name:'Ent (Tree)',     morale:20,  point:15 },
+  { id:'GIANT',      name:'Giant',          morale:'—', point:50 },
+  { id:'HERO',       name:'Hero',           morale:20,  point:20,  withdraw:true },
+  { id:'LYCAN',      name:'Lycanthrope',    morale:20,  point:20 },
+  { id:'ROC',        name:'Roc',            morale:'—', point:20 },
+  { id:'SUPER_HERO', name:'Super Hero',     morale:40,  point:50,  withdraw:true },
+  { id:'TROLL',      name:'Troll / Ogre',   morale:8,   point:15 },
+  { id:'WIGHT',      name:'Wight / Ghoul',  morale:10,  point:10 },
+  { id:'WIZARD',     name:'Wizard',         morale:50,  point:100, withdraw:true, magicUser:true },
+  { id:'WRAITH',     name:'Wraith',         morale:10,  point:10,  withdraw:true },
+]);
+const ELF_MAGIC_ATTACKER = Object.freeze({
+  id:'ELF_MAGIC', name:'Elf w/ magic weapon', withdraw:false, isExtra:true,
+});
+const typeById = (id) => id === 'ELF_MAGIC' ? ELF_MAGIC_ATTACKER : FANTASTIC_TYPES.find(t => t.id === id);
+
+// Appendix E target matrix — 2d6 threshold; book footnotes:
+//   under target = no effect · equal = fall back 1 move · over = killed
+//   * (attackers Hero/Super Hero/Wizard/Wraith) may withdraw on no effect
+//   @ (Wizard column) lesser magic users at reduced values
+// Balrog vs Roc reads "1-" in the source → encoded as 1 (any 2d6 ≥ 2 auto-kills, fire vs flammable beast).
+const FANTASY_TARGETS = Object.freeze({
+  BALROG:     { BALROG:7,  DRAGON:11, ELEMENTAL:11, ENT:8,  GIANT:8,  HERO:4, LYCAN:6, ROC:1,  SUPER_HERO:7,  TROLL:6,  WIGHT:4,  WIZARD:8,  WRAITH:11 },
+  DRAGON:     { BALROG:6,  DRAGON:8,  ELEMENTAL:10, ENT:6,  GIANT:9,  HERO:5, LYCAN:4, ROC:8,  SUPER_HERO:8,  TROLL:5,  WIGHT:2,  WIZARD:10, WRAITH:7  },
+  ELEMENTAL:  { BALROG:10, DRAGON:10, ELEMENTAL:11, ENT:7,  GIANT:9,  HERO:4, LYCAN:7, ROC:7,  SUPER_HERO:7,  TROLL:7,  WIGHT:2,  WIZARD:8,  WRAITH:10 },
+  ENT:        { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:7,  GIANT:8,  HERO:4, LYCAN:4, ROC:11, SUPER_HERO:7,  TROLL:7,  WIGHT:3,  WIZARD:10, WRAITH:10 },
+  GIANT:      { BALROG:9,  DRAGON:9,  ELEMENTAL:10, ENT:7,  GIANT:9,  HERO:6, LYCAN:5, ROC:6,  SUPER_HERO:9,  TROLL:6,  WIGHT:4,  WIZARD:11, WRAITH:12 },
+  HERO:       { BALROG:11, DRAGON:12, ELEMENTAL:12, ENT:12, GIANT:11, HERO:7, LYCAN:8, ROC:10, SUPER_HERO:10, TROLL:9,  WIGHT:6,  WIZARD:11, WRAITH:11 },
+  LYCAN:      { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:7,  GIANT:9,  HERO:7, LYCAN:7, ROC:7,  SUPER_HERO:7,  TROLL:7,  WIGHT:7,  WIZARD:7,  WRAITH:12 },
+  ROC:        { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:8,  GIANT:10, HERO:5, LYCAN:6, ROC:9,  SUPER_HERO:8,  TROLL:6,  WIGHT:5,  WIZARD:10, WRAITH:9  },
+  SUPER_HERO: { BALROG:9,  DRAGON:10, ELEMENTAL:11, ENT:9,  GIANT:7,  HERO:5, LYCAN:6, ROC:8,  SUPER_HERO:8,  TROLL:7,  WIGHT:4,  WIZARD:11, WRAITH:11 },
+  TROLL:      { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:10, GIANT:9,  HERO:8, LYCAN:9, ROC:11, SUPER_HERO:7,  TROLL:10, WIGHT:11, WIZARD:11, WRAITH:12 },
+  WIGHT:      { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:11, GIANT:12, HERO:8, LYCAN:9, ROC:12, SUPER_HERO:12, TROLL:10, WIGHT:8,  WIZARD:10, WRAITH:11 },
+  WIZARD:     { BALROG:7,  DRAGON:9,  ELEMENTAL:6,  ENT:10, GIANT:11, HERO:8, LYCAN:7, ROC:9,  SUPER_HERO:10, TROLL:8,  WIGHT:6,  WIZARD:10, WRAITH:5  },
+  WRAITH:     { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:12, GIANT:8,  HERO:9, LYCAN:10,ROC:10, SUPER_HERO:9,  TROLL:11, WIGHT:7,  WIZARD:5,  WRAITH:7  },
+});
+
+// Elf-with-magic-weapon attack rows (p.30). Only listed targets are valid Fantasy Combat opponents
+// for this attacker; vs other fantastic types the elf reverts to mass combat with +1 die (handled elsewhere).
+const ELF_MAGIC_TARGETS = Object.freeze({
+  HERO:9, SUPER_HERO:11, WIZARD:10, WRAITH:8, WIGHT:6, LYCAN:9, TROLL:7, BALROG:12, GIANT:10,
+});
+
+// Magic-user tiers (p.30 Wizards entry — Sorcerer at -1, Warlock at -2, etc.).
+const MAGIC_TIERS = Object.freeze([
+  { id:'WIZARD',   name:'Wizard',   mod:0  },
+  { id:'SORCERER', name:'Sorcerer', mod:-1 },
+  { id:'WARLOCK',  name:'Warlock',  mod:-2 },
+  { id:'MAGICIAN', name:'Magician', mod:-3 },
+  { id:'SEER',     name:'Seer',     mod:-4 },
+]);
+
+// Appendix D — fantasy reference. Move (charge) · abilities flags · charge · fly · missile · attack/defend.
+const FANTASY_REFERENCE = Object.freeze([
+  { type:'Hobbits',         move:'12″',       ab:'A',         charge:'—',       fly:'—',    missile:'15″', attack:'Lt. Ft.',  defend:'Lt. Ft.' },
+  { type:'Sprites, pixies', move:'9″',        ab:'A',         charge:'—',       fly:'18″',  missile:'—',   attack:'Lt. Ft.',  defend:'Lt. Ft.' },
+  { type:'Dwarves, gnomes', move:'6″',        ab:'B',         charge:'9″',      fly:'—',    missile:'—',   attack:'Hv. Ft.',  defend:'Lt. Ft.' },
+  { type:'Goblins, kobolds',move:'6″',        ab:'B',         charge:'9″',      fly:'—',    missile:'—',   attack:'Hv. Ft.',  defend:'Lt. Ft.' },
+  { type:'Elves, fairies',  move:'12″',       ab:'A, B, C',   charge:'—',       fly:'—',    missile:'18″', attack:'Hv. Ft.',  defend:'Hv. Ft.' },
+  { type:'Orcs',            move:'9″',        ab:'B',         charge:'12″',     fly:'—',    missile:'15″', attack:'Hv. Ft.',  defend:'Hv. Ft.' },
+  { type:'Heroes',          move:'12″(18″)',  ab:'D',         charge:'15″(24″)',fly:'—',    missile:'18″', attack:'4 men*',   defend:'4 men*'  },
+  { type:'Super heroes',    move:'12″(18″)',  ab:'D, E, F',   charge:'15″(24″)',fly:'—',    missile:'21″', attack:'8 men*',   defend:'8 men*'  },
+  { type:'Wizards',         move:'12″(30″)',  ab:'A, B, D, E, X', charge:'—',   fly:'—',    missile:'24″', attack:'Special',  defend:'Special' },
+  { type:'Wraiths (mtd.)',  move:'18″',       ab:'B, E, F, G',charge:'24″',     fly:'36″',  missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Wights, ghouls',  move:'9″',        ab:'B, G',      charge:'9″',      fly:'—',    missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Lycanthropes (Bear/Wolf)', move:'9″/12″', ab:'B, H', charge:'12″/18″', fly:'—',   missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Trolls, ogres',   move:'9″',        ab:'B (I)',     charge:'12″',     fly:'—',    missile:'—',   attack:'6 men**',  defend:'6 men**' },
+  { type:'Balrogs',         move:'6″',        ab:'B, J',      charge:'9″',      fly:'15″',  missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Ents',            move:'6″',        ab:'K',         charge:'6″',      fly:'—',    missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Giants',          move:'12″',       ab:'B, X',      charge:'18″',     fly:'—',    missile:'20″', attack:'12 men**', defend:'12 men**' },
+  { type:'Elementals',      move:'Special',   ab:'Special',   charge:'Special', fly:'Special', missile:'Special', attack:'Special', defend:'Special' },
+  { type:'Dragons',         move:'9″',        ab:'B, E, F, X',charge:'15″',     fly:'24″',  missile:'—',   attack:'Special',  defend:'Special' },
+  { type:'Rocs',            move:'— (if horsed)', ab:'E, F, L', charge:'—',     fly:'48″',  missile:'—',   attack:'Special',  defend:'Special' },
+]);
+const ABILITIES = Object.freeze([
+  ['A', 'become invisible (Hobbits only in brush or woods)'],
+  ['B', 'see in normal darkness as if light'],
+  ['C', 'split-move and fire'],
+  ['D', 'raise morale of friendly troops'],
+  ['E', 'cause the enemy to check morale'],
+  ['F', 'detect hidden / invisible enemies'],
+  ['G', 'paralyze by touch'],
+  ['H', 'assume the shape of and gather like animals'],
+  ['I', 'regenerate the body (trolls only, not required)'],
+  ['J', 'change to flames and immolate by touch'],
+  ['K', 'cause trees to move and fight'],
+  ['L', 'transport figures of man-weight'],
+  ['X', 'cast fire or similar substances or stones'],
+]);
+
+/* === C. ENGINE ========================================================= */
+// Returns { dice, baseTarget, target, rollMod, targetMod, effectiveRoll, outcome, canWithdraw } or { ok:false, reason }.
+function resolveFantasyCombat({ attackerId, defenderId, attackerTierMod = 0, defenderTierMod = 0,
+                                 magicSword = false, magicArmor = false, rng }) {
+  let baseTarget;
+  if (attackerId === 'ELF_MAGIC') {
+    baseTarget = ELF_MAGIC_TARGETS[defenderId];
+    if (baseTarget === undefined) return { ok:false, reason:'no Elf-magic Fantasy Combat entry for this defender — use mass combat +1 die' };
+  } else {
+    baseTarget = FANTASY_TARGETS[attackerId]?.[defenderId];
+    if (baseTarget === undefined) return { ok:false, reason:'no Fantasy Combat entry for this pairing' };
+  }
+  const dice = roll2d6(rng);
+  let rollMod = 0;
+  if (magicSword) rollMod += 1;       // p.38 magical swords +1 on Fantasy Combat
+  if (magicArmor) rollMod -= 1;       // p.38 magic armor subtracts 1 from attacker
+  rollMod += attackerTierMod;         // Sorcerer/Warlock/etc. on offense → reduced
+  const targetMod = defenderTierMod;  // defender magic-user tier → target shifts down (easier)
+  const effectiveRoll = dice.sum + rollMod;
+  const target = baseTarget + targetMod;
+  let outcome;
+  if (effectiveRoll < target)       outcome = 'no_effect';
+  else if (effectiveRoll === target) outcome = 'fall_back';
+  else                              outcome = 'killed';
+  const attacker = typeById(attackerId);
+  const canWithdraw = outcome === 'no_effect' && !!attacker.withdraw;
+  return { ok:true, dice, baseTarget, target, rollMod, targetMod, effectiveRoll, outcome, canWithdraw };
+}
+
+/* === D. UI ============================================================= */
+const $ = (sel) => document.querySelector(sel);
+function fillSelect(id, items, render) {
+  const sel = $(id);
+  items.forEach(it => {
+    const o = document.createElement('option');
+    o.value = it.id; o.textContent = render(it);
+    sel.appendChild(o);
+  });
+}
+fillSelect('#a-type', [ELF_MAGIC_ATTACKER, ...FANTASTIC_TYPES], t => t.isExtra ? `★ ${t.name}` : t.name + (t.withdraw ? ' *' : ''));
+fillSelect('#d-type', FANTASTIC_TYPES, t => t.name + (t.magicUser ? ' @' : ''));
+fillSelect('#a-tier', MAGIC_TIERS, m => `${m.name} (${m.mod === 0 ? '0' : m.mod})`);
+fillSelect('#d-tier', MAGIC_TIERS, m => `${m.name} (${m.mod === 0 ? '0' : m.mod})`);
+$('#a-type').value = 'HERO'; $('#d-type').value = 'DRAGON';
+
+function refreshTierRows() {
+  const atk = $('#a-type').value;
+  const def = $('#d-type').value;
+  $('#a-magic-row').classList.toggle('show', atk === 'WIZARD');
+  $('#d-magic-row').classList.toggle('show', def === 'WIZARD');
+  // If Elf magic is the attacker, filter defenders to those Elf magic can engage
+  const elfDefs = new Set(Object.keys(ELF_MAGIC_TARGETS));
+  const defSel = $('#d-type');
+  for (const opt of defSel.options) {
+    opt.disabled = (atk === 'ELF_MAGIC') && !elfDefs.has(opt.value);
+  }
+  if (atk === 'ELF_MAGIC' && !elfDefs.has(defSel.value)) {
+    defSel.value = 'HERO';
+    refreshTierRows();
+  }
+}
+$('#a-type').addEventListener('change', refreshTierRows);
+$('#d-type').addEventListener('change', refreshTierRows);
+refreshTierRows();
+
+function appendTurn(headline, bodyHtml) {
+  const d = document.createElement('div');
+  d.className = 'turn';
+  d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
+  $('#log').appendChild(d);
+  d.scrollIntoView({ behavior:'smooth', block:'end' });
+}
+
+$('#btn-resolve').addEventListener('click', () => {
+  const attackerId = $('#a-type').value;
+  const defenderId = $('#d-type').value;
+  const aTier = attackerId === 'WIZARD' ? MAGIC_TIERS.find(m => m.id === $('#a-tier').value) : { mod:0, name:'—' };
+  const dTier = defenderId === 'WIZARD' ? MAGIC_TIERS.find(m => m.id === $('#d-tier').value) : { mod:0, name:'—' };
+  const magicSword = $('#a-sword').checked;
+  const magicArmor = $('#d-armor').checked;
+  const rng = mulberry32(parseInt($('#seed').value, 10) || 1);
+
+  const r = resolveFantasyCombat({
+    attackerId, defenderId,
+    attackerTierMod: aTier.mod, defenderTierMod: dTier.mod,
+    magicSword, magicArmor, rng,
+  });
+  const aName = typeById(attackerId).name + (attackerId === 'WIZARD' ? ` (${aTier.name})` : '');
+  const dName = typeById(defenderId).name + (defenderId === 'WIZARD' ? ` (${dTier.name})` : '');
+
+  if (!r.ok) {
+    appendTurn(`${aName} attacks ${dName}`, `<div class="verdict v-err">${r.reason}</div>`);
+    return;
+  }
+  const mods = [];
+  if (magicSword) mods.push('magic sword +1');
+  if (magicArmor) mods.push('magic armor −1');
+  if (r.rollMod !== (magicSword?1:0) + (magicArmor?-1:0)) {
+    // attacker tier was applied
+    const tm = r.rollMod - ((magicSword?1:0) + (magicArmor?-1:0));
+    mods.push(`attacker tier ${tm}`);
+  }
+  if (r.targetMod !== 0) mods.push(`defender tier on target ${r.targetMod}`);
+  const modStr = mods.length ? ` <small class="note">· ${mods.join(' · ')}</small>` : '';
+  const targetStr = r.targetMod ? `${r.baseTarget}${r.targetMod >= 0 ? '+' : ''}${r.targetMod} = ${r.target}` : `${r.target}`;
+  const rollStr = r.rollMod ? `${r.dice.a} + ${r.dice.b} = ${r.dice.sum} ${r.rollMod >= 0 ? '+' : ''}${r.rollMod} = <b>${r.effectiveRoll}</b>` : `${r.dice.a} + ${r.dice.b} = <b>${r.effectiveRoll}</b>`;
+  let html = `<div class="step">${aName} vs ${dName}: 2d6 = ${rollStr} vs target <b>${targetStr}</b>${modStr}</div>`;
+  const vc = r.outcome === 'killed' ? 'v-killed' : r.outcome === 'fall_back' ? 'v-fallback' : 'v-noeffect';
+  const vt = r.outcome === 'killed' ? `${dName} killed` : r.outcome === 'fall_back' ? `${dName} falls back 1 move` : 'no effect';
+  html += `<div class="verdict ${vc}">${vt}</div>`;
+  if (r.canWithdraw) html += `<div class="verdict v-withdraw">${aName} may withdraw</div>`;
+  appendTurn(`Fantasy combat · seed ${$('#seed').value}`, html);
+});
+
+$('#btn-clear').addEventListener('click', () => { $('#log').innerHTML = ''; });
+
+/* Reference table rendering */
+(function buildReference() {
+  const tbody = $('#ref-table tbody');
+  FANTASY_REFERENCE.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.type}</td><td>${r.move}</td><td class="ab">${r.ab}</td>` +
+                   `<td>${r.charge}</td><td>${r.fly}</td><td>${r.missile}</td>` +
+                   `<td>${r.attack}</td><td>${r.defend}</td>`;
+    tbody.appendChild(tr);
+  });
+  const ab = $('#abilities');
+  ab.innerHTML = ABILITIES.map(([k, v]) => `<b>${k}</b> — ${v}`).join('  ·  ') +
+                 `<br><small>* = Heavy / Armored Foot or Light Horse depending on arms; can fire missiles equal to same number of men vs regular opponents (once vs fantastic). ** = Heavy Foot.</small>`;
+})();
+
+/* === E. TESTS ========================================================== */
+(function tests() {
+  // Matrix spot-checks
+  console.assert(FANTASY_TARGETS.HERO.DRAGON === 12,    'Hero vs Dragon = 12');
+  console.assert(FANTASY_TARGETS.DRAGON.HERO === 5,     'Dragon vs Hero = 5');
+  console.assert(FANTASY_TARGETS.BALROG.ROC === 1,      'Balrog vs Roc = 1 (auto-kill)');
+  console.assert(FANTASY_TARGETS.WIZARD.WRAITH === 5,   'Wizard vs Wraith = 5');
+  console.assert(FANTASY_TARGETS.WRAITH.WIZARD === 5,   'Wraith vs Wizard = 5 (symmetric here)');
+  console.assert(FANTASY_TARGETS.SUPER_HERO.GIANT === 7,'Super Hero vs Giant = 7');
+
+  // Outcome logic — Dragon attacks Hero, target 5. Forced 2d6 = 4 (no effect), 5 (fall back), 6 (killed).
+  // Stub: each d6 needs a value v with floor(v*6)+1 = desired. For d6=2 use v=0.2; d6=3 use 0.4; d6=4 use 0.6.
+  const r_ne = resolveFantasyCombat({
+    attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.2, 0.2]) // d6=2 + d6=2 = 4 → < 5
+  });
+  console.assert(r_ne.outcome === 'no_effect',     'Dragon→Hero roll 4 = no effect');
+
+  const r_fb = resolveFantasyCombat({
+    attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.2, 0.4]) // 2 + 3 = 5
+  });
+  console.assert(r_fb.outcome === 'fall_back',     'Dragon→Hero roll 5 = fall back');
+
+  const r_k = resolveFantasyCombat({
+    attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.4, 0.4]) // 3 + 3 = 6
+  });
+  console.assert(r_k.outcome === 'killed',         'Dragon→Hero roll 6 = killed');
+
+  // Withdraw: Hero on no-effect can withdraw, Dragon cannot
+  const r_w = resolveFantasyCombat({
+    attackerId:'HERO', defenderId:'DRAGON', rng: stubRng([0.2, 0.4]) // 2+3=5 vs target 12 → no effect
+  });
+  console.assert(r_w.outcome === 'no_effect' && r_w.canWithdraw === true, 'Hero may withdraw on no effect');
+  const r_nw = resolveFantasyCombat({
+    attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.2, 0.2])
+  });
+  console.assert(r_nw.canWithdraw === false, 'Dragon cannot withdraw');
+
+  // Magic sword +1: Hero vs Dragon, target 12, 2d6=11 normally no effect, +1 = 12 fall back
+  const r_ms = resolveFantasyCombat({
+    attackerId:'HERO', defenderId:'DRAGON', magicSword:true,
+    rng: stubRng([0.9, 0.9]) // 6 + 6 = 12 +1 = 13 → killed
+  });
+  console.assert(r_ms.outcome === 'killed' && r_ms.rollMod === 1, 'magic sword pushes 12 → 13 = killed');
+
+  // Magic armor -1: Dragon vs Hero target 5, dice = 5, -1 = 4 → no effect
+  const r_ma = resolveFantasyCombat({
+    attackerId:'DRAGON', defenderId:'HERO', magicArmor:true,
+    rng: stubRng([0.2, 0.4]) // 2 + 3 = 5, -1 = 4
+  });
+  console.assert(r_ma.outcome === 'no_effect' && r_ma.rollMod === -1, 'magic armor demotes fall_back → no effect');
+
+  // Attacker tier (Sorcerer attacks Hero, Wizard→Hero target 8, dice 8, -1 = 7 → no effect instead of fall back)
+  const r_at = resolveFantasyCombat({
+    attackerId:'WIZARD', defenderId:'HERO', attackerTierMod:-1,
+    rng: stubRng([0.5, 0.6]) // 4 + 4 = 8 → -1 = 7 → no effect (target 8)
+  });
+  console.assert(r_at.outcome === 'no_effect' && r_at.rollMod === -1, 'Sorcerer attacker -1 demotes hit');
+
+  // Defender tier on target: Hero attacks Sorcerer (Wizard col tier -1) — target 11 - 1 = 10
+  const r_dt = resolveFantasyCombat({
+    attackerId:'HERO', defenderId:'WIZARD', defenderTierMod:-1,
+    rng: stubRng([0.6, 0.6]) // 4 + 4 = 8 vs target 10 → no effect
+  });
+  console.assert(r_dt.target === 10 && r_dt.outcome === 'no_effect', 'Sorcerer defender lowers target by 1');
+
+  // Elf magic vs valid target: Elf magic vs Wraith = 8, roll 8 → fall back
+  const r_e = resolveFantasyCombat({
+    attackerId:'ELF_MAGIC', defenderId:'WRAITH', rng: stubRng([0.6, 0.6])
+  });
+  console.assert(r_e.ok && r_e.baseTarget === 8 && r_e.outcome === 'fall_back', 'Elf magic vs Wraith target 8 (roll 8 = fall back)');
+
+  // Elf magic vs invalid target: Dragon (no entry)
+  const r_ei = resolveFantasyCombat({
+    attackerId:'ELF_MAGIC', defenderId:'DRAGON', rng: stubRng([0, 0])
+  });
+  console.assert(!r_ei.ok && r_ei.reason.includes('Elf-magic'), 'Elf magic vs Dragon → no entry');
+
+  // Balrog vs Roc — any 2d6 kills (target = 1, min roll = 2)
+  const r_br = resolveFantasyCombat({
+    attackerId:'BALROG', defenderId:'ROC', rng: stubRng([0, 0]) // 1 + 1 = 2 (lowest possible)
+  });
+  console.assert(r_br.outcome === 'killed', 'Balrog auto-kills Roc on any 2d6');
+
+  console.log(`[chainmail-fantasy v${SIM_VERSION}] tests OK`);
+})();
+</script>
+</body>
+</html>
