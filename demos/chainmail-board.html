@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.3.1 · Slice 5: Battlefield  ·  + missile rank limit, label cleanup -->
+<!-- chainmail-board.html · v0.3.2 · Slice 5: Battlefield  ·  + per-unit context menu, arc-of-fire visibility -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.3.1</title>
+<title>Chainmail — Battlefield · v0.3.2</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -82,6 +82,19 @@
   .v-retreat, .v-rout { background: rgba(176,57,44,0.20); color: var(--rear); }
   .v-surrender, .v-removed { background: rgba(176,57,44,0.32); color: var(--rear); }
   .v-stable, .v-killed { background: rgba(47,125,79,0.22); color: var(--front); }
+
+  .ctx-menu { position: fixed; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.22); padding: 4px 0;
+    z-index: 100; font-family: var(--sans); min-width: 180px; }
+  .ctx-menu .ctx-head { font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: var(--ink-soft); padding: 4px 14px 6px; border-bottom: 1px solid var(--rule);
+    margin-bottom: 4px; font-weight: 700; }
+  .ctx-menu button { display: block; width: 100%; background: transparent; color: var(--ink);
+    border: 0; padding: 6px 14px; text-align: left; text-transform: none; letter-spacing: 0.4px;
+    font-weight: 500; font-size: 12px; cursor: pointer; border-radius: 0; }
+  .ctx-menu button:hover { background: rgba(0,0,0,0.06); }
+  .ctx-menu button.danger { color: var(--rear); }
+  .ctx-menu[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -152,8 +165,15 @@
   <div id="log"></div>
 </div>
 
+<div id="ctx-menu" class="ctx-menu" hidden>
+  <div class="ctx-head" id="ctx-head">Unit</div>
+  <button data-act="restore">Restore to full strength</button>
+  <button data-act="rotate-90">Rotate 90°</button>
+  <button data-act="delete" class="danger">Remove unit</button>
+</div>
+
 <script type="module">
-const SIM_VERSION = '0.3.1';
+const SIM_VERSION = '0.3.2';
 const PX_PER_INCH = 24;
 const BOARD_W = 960;
 const BOARD_H = 540;
@@ -434,6 +454,7 @@ const state = {
   panning: null,      // { clientX0, clientY0, vb0 }
   viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
   showGrid: false,
+  ctxUnitId: null,
   rng: mulberry32(Date.now() & 0xffff),
 };
 
@@ -518,7 +539,10 @@ function renderBoard() {
     `<g id="overlay">${renderOverlay()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
-    if (node) node.addEventListener('mousedown', e => onUnitMouseDown(e, u.id));
+    if (node) {
+      node.addEventListener('mousedown', e => onUnitMouseDown(e, u.id));
+      node.addEventListener('contextmenu', e => onUnitContextMenu(e, u.id));
+    }
   }
   updateSidebar();
   updateButtons();
@@ -595,15 +619,17 @@ function renderUnit(u) {
     edges += `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
   }
 
-  // Arc of fire (missile-armed)
+  // Arc of fire (missile-armed) — only render for the currently selected unit
   let arc = '';
-  if (u.weapon && !u.hedgehog) {
+  if (u.weapon && !u.hedgehog && sel) {
     const radius = inchesToPx(WEAPON_RANGES[u.weapon]) || inchesToPx(18);
     const half = Math.PI / 4; // 45° foot
     const lx = -radius * Math.sin(half), ly = yT - radius * Math.cos(half);
     const rx =  radius * Math.sin(half), ry = yT - radius * Math.cos(half);
+    const arcStroke = u.side === 'A' ? 'rgba(58,110,144,0.65)' : 'rgba(156,59,44,0.65)';
+    const arcFill   = u.side === 'A' ? 'rgba(58,110,144,0.12)' : 'rgba(156,59,44,0.12)';
     arc = `<path d="M 0 ${yT} L ${lx} ${ly} A ${radius} ${radius} 0 0 1 ${rx} ${ry} Z"
-      fill="rgba(216,178,90,0.06)" stroke="rgba(216,178,90,0.32)" stroke-width="0.6" stroke-dasharray="2 4" pointer-events="none"/>`;
+      fill="${arcFill}" stroke="${arcStroke}" stroke-width="0.8" stroke-dasharray="3 4" pointer-events="none"/>`;
   }
 
   // Selection / target outline (inside the rotated group so it tracks facing)
@@ -814,6 +840,7 @@ function onKeyDown(evt) {
   }
   if (evt.key === '0') { resetView(); evt.preventDefault(); return; }
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
+  if (evt.key === 'Escape' && !$('#ctx-menu').hidden) { closeContextMenu(); evt.preventDefault(); return; }
 
   const u = state.units.find(u => u.id === state.selectedId);
   if (!u || u.destroyed) return;
@@ -1006,6 +1033,46 @@ function spawnUnit() {
   renderBoard();
 }
 
+function onUnitContextMenu(evt, unitId) {
+  evt.preventDefault();
+  evt.stopPropagation();
+  const u = state.units.find(x => x.id === unitId);
+  if (!u || u.destroyed) return;
+  state.ctxUnitId = unitId;
+  const T = typeById(u.type);
+  $('#ctx-head').textContent = `${u.side} · ${T.name} × ${u.count}`;
+  const m = $('#ctx-menu');
+  m.style.left = evt.clientX + 'px';
+  m.style.top  = evt.clientY + 'px';
+  m.hidden = false;
+}
+
+function closeContextMenu() {
+  $('#ctx-menu').hidden = true;
+  state.ctxUnitId = null;
+}
+
+function onContextMenuAction(evt) {
+  const act = evt.target.dataset.act;
+  if (!act) return;
+  const u = state.units.find(x => x.id === state.ctxUnitId);
+  if (!u) { closeContextMenu(); return; }
+  if (act === 'restore') {
+    u.count = u.startCount;
+    u.destroyed = false;
+    const dims = formationDims(u.hedgehog ? 'hedgehog' : (u.cols >= u.rows ? 'line' : 'column'), u.count);
+    u.cols = dims.cols; u.rows = dims.rows;
+  } else if (act === 'rotate-90') {
+    u.facing = (u.facing + 90) % 360;
+  } else if (act === 'delete') {
+    state.units = state.units.filter(x => x.id !== u.id);
+    if (state.selectedId === u.id) state.selectedId = null;
+    if (state.targetId === u.id) state.targetId = null;
+  }
+  closeContextMenu();
+  renderBoard();
+}
+
 function resetBoard() {
   state.units = [];
   state.selectedId = null;
@@ -1030,6 +1097,10 @@ $('#board').addEventListener('mouseleave', onBoardMouseUp);
 $('#board').addEventListener('click', onBoardClick);
 $('#board').addEventListener('wheel', onWheel, { passive: false });
 $('#board').addEventListener('contextmenu', e => e.preventDefault());
+$('#ctx-menu').addEventListener('click', onContextMenuAction);
+document.addEventListener('mousedown', e => {
+  if (!$('#ctx-menu').hidden && !$('#ctx-menu').contains(e.target)) closeContextMenu();
+});
 document.addEventListener('keydown', onKeyDown);
 
 renderBoard();
