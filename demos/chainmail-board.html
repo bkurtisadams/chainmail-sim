@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.3.0 · Slice 5: Battlefield  ·  + grid toggle, pike toggle, wider board -->
+<!-- chainmail-board.html · v0.3.1 · Slice 5: Battlefield  ·  + missile rank limit, label cleanup -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.3.0</title>
+<title>Chainmail — Battlefield · v0.3.1</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -153,7 +153,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.3.0';
+const SIM_VERSION = '0.3.1';
 const PX_PER_INCH = 24;
 const BOARD_W = 960;
 const BOARD_H = 540;
@@ -943,15 +943,19 @@ function onResolveMissile() {
   const armorGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
   const reach = inMissileRange(a, d);
   if (!reach.ok) return;
-  const res = resolveMassMissile({ firingCount:a.count, armorGroup, cover:false, indirect:false, rng });
+  // Chainmail p.11: only the first two ranks of missile troops may fire.
+  const firingCount = Math.min(a.count, a.cols * 2);
+  const rankCapped = firingCount < a.count;
+  const res = resolveMassMissile({ firingCount, armorGroup, cover:false, indirect:false, rng });
 
+  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
   let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} (${dT.cls}) · ` +
-             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}</div>`;
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}${rankNote}</div>`;
   res.groups.forEach((g, i) => {
     if (g.reason) {
       html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
     } else {
-      html += `<div class="step">group ${i+1} · ${g.count} firing (band ${g.band.range[0]}-${g.band.range[1]}) · ` +
+      html += `<div class="step">group ${i+1} · ${g.count} firing · ` +
               `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
     }
   });
