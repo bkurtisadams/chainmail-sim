@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.4.0 · Slice 6a: Turn flow + action tracking -->
+<!-- chainmail-board.html · v0.4.1 · Slice 6a + correct figure frontage + 6x4 ft table -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.4.0</title>
+<title>Chainmail — Battlefield · v0.4.1</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -42,7 +42,7 @@
   .field input[type=checkbox] { flex: 0 0 auto; width: auto; margin-right: 4px; }
   .field .field-note { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px;
     color: var(--ink-soft); }
-  #board { width: 100%; height: auto; aspect-ratio: 960 / 540;
+  #board { width: 100%; height: auto; aspect-ratio: 3 / 2;
     background: var(--field); border: 2px solid var(--field-edge); border-radius: 6px;
     cursor: default; user-select: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18); }
   #board.spawning { cursor: crosshair; }
@@ -176,10 +176,10 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.4.0';
+const SIM_VERSION = '0.4.1';
 const PX_PER_INCH = 24;
-const BOARD_W = 960;
-const BOARD_H = 540;
+const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
+const BOARD_H = 1152; // 48" deep  (4 ft)
 const MELEE_RANGE_IN = 3; // inches of contact, per rules
 
 /* === A. RNG ============================================================ */
@@ -469,8 +469,10 @@ const pxToInches = (p) => p / PX_PER_INCH;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
-  const pip = 6;
-  const gap = u.spacing === 'close' ? 2 : 5;
+  // Chainmail scale: 1" = 10 yards; 1 figure = 1" frontage in close order, 2" in open.
+  // PX_PER_INCH = 24, so close-order step = 24, open-order step = 48.
+  const pip = 12;
+  const gap = u.spacing === 'close' ? 12 : 36;
   const pad = 4;
   const w = u.cols * pip + (u.cols - 1) * gap + 2 * pad;
   const h = u.rows * pip + (u.rows - 1) * gap + 2 * pad;
