@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.6 · Slice 6h: charge declaration with impetus +1/die -->
+<!-- chainmail-board.html · v0.9.7 · Slice 6i: annihilation log fix + fatigue die -1 + custom cols -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.6</title>
+<title>Chainmail — Battlefield · v0.9.7</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6h · charge declaration · impetus +1/die</div>
-    <span class="version-tag">v0.9.6</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6i · annihilation log · fatigue die -1 · custom cols</div>
+    <span class="version-tag">v0.9.7</span>
   </div>
 
   <div class="toolbar">
@@ -186,6 +186,7 @@
           <option value="square">Square</option>
           <option value="hedgehog">Hedgehog</option>
         </select></div>
+        <div class="field"><label>Cols (optional)</label><input type="number" id="f-cols" min="1" max="50" placeholder="auto"></div>
         <div class="field"><label>Spacing</label><select id="f-spacing">
           <option value="close">Close (≤ 1″)</option><option value="open">Open (&gt; 1″)</option>
         </select></div>
@@ -285,7 +286,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.6';
+const SIM_VERSION = '0.9.7';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -391,7 +392,11 @@ const WEAPON_RANGES = {
 };
 
 // Initial formation → cols/rows from count
-function formationDims(formation, count) {
+function formationDims(formation, count, customCols) {
+  if (customCols && customCols > 0) {
+    const c = Math.min(customCols, count);
+    return { cols: c, rows: Math.ceil(count / c), hedgehog: formation === 'hedgehog' };
+  }
   if (formation === 'column') {
     const c = Math.min(2, count);
     return { cols: c, rows: Math.ceil(count / c), hedgehog: false };
@@ -494,11 +499,14 @@ function reactionFor(diff) { return REACTION_BANDS.find(b => diff <= b.max); }
 function resolvePostMelee({ a, b, rng }) {
   const aSurv = a.startCount - a.casualties;
   const bSurv = b.startCount - b.casualties;
-  let fewerSide=null, casDiff=0, casDie=0, casBonus=0;
+  let fewerSide=null, casDiff=0, casDie=0, casBonus=0, casFatPenalty=0;
   if (a.casualties !== b.casualties) {
     fewerSide = a.casualties < b.casualties ? 'A' : 'B';
     casDiff = Math.abs(a.casualties - b.casualties);
     casDie = d6(rng);
+    // Fatigue rule C (p.10): -1 to dice rolls when the rolling unit is fatigued.
+    const rollingFatigued = (fewerSide === 'A' && a.fatigued) || (fewerSide === 'B' && b.fatigued);
+    if (rollingFatigued) { casFatPenalty = 1; casDie = Math.max(1, casDie - 1); }
     casBonus = casDiff * casDie;
   }
   let moreSide=null, survDiff=0;
@@ -517,19 +525,21 @@ function resolvePostMelee({ a, b, rng }) {
   return {
     a:{ surviving:aSurv, ratingScore:aRating, total:aTotal },
     b:{ surviving:bSurv, ratingScore:bRating, total:bTotal },
-    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus },
+    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus, fatiguePenalty:casFatPenalty },
     survivorBonus:{ side:moreSide, diff:survDiff, value:survDiff },
     rawDiff: Math.abs(aTotal - bTotal), diff, doubled, loser, reaction: reactionFor(diff),
   };
 }
 
-function resolveLossMorale({ type, startCount, casualties, surrounded, rng }) {
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued }) {
   const t = typeById(type);
   const pct = casualties / startCount;
   if (pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
   const dice = roll2d6(rng);
-  const passed = dice.sum >= t.loss.score;
-  return { triggered:true, pct, threshold:t.loss, dice, passed,
+  const fatiguePenalty = fatigued ? 1 : 0;
+  const effectiveSum = Math.max(2, dice.sum - fatiguePenalty);
+  const passed = effectiveSum >= t.loss.score;
+  return { triggered:true, pct, threshold:t.loss, dice, fatiguePenalty, effectiveSum, passed,
     action: passed ? 'stable' : (surrounded ? 'surrender' : 'removed') };
 }
 
@@ -1326,19 +1336,34 @@ function onResolveMelee() {
 
   html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
 
-  // Post-melee morale (fatigued unit drops -1 morale rating, p.10)
-  const aMorale = (a.fatigued && state.settings.applyFatigue) ? Math.max(1, aT.morale - 1) : aT.morale;
-  const dMorale = (d.fatigued && state.settings.applyFatigue) ? Math.max(1, dT.morale - 1) : dT.morale;
+  // Post-melee morale (fatigued unit drops -1 morale rating and -1 on its d6, p.10)
+  const aFatigued = !!a.fatigued && state.settings.applyFatigue;
+  const dFatigued = !!d.fatigued && state.settings.applyFatigue;
+  const aMorale = aFatigued ? Math.max(1, aT.morale - 1) : aT.morale;
+  const dMorale = dFatigued ? Math.max(1, dT.morale - 1) : dT.morale;
   const pm = resolvePostMelee({
-    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale },
-    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale },
+    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale, fatigued: aFatigued },
+    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale, fatigued: dFatigued },
     rng: state.rng,
   });
+  const fatNote = pm.casualtyBonus.fatiguePenalty
+    ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${pm.casualtyBonus.side} d6 -1 fatigue</small>`
+    : '';
   html += `<div class="step">post-melee — A total ${pm.a.total} vs B total ${pm.b.total} · ` +
-          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}</div>`;
+          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}${fatNote}</div>`;
   const tag = pm.reaction.tag;
   const loserName = pm.loser ? (pm.loser === 'A' ? aT.name : dT.name) : null;
-  html += `<div class="verdict v-${tag}">${loserName ? `${pm.loser} · ${loserName} → ${pm.reaction.text}` : pm.reaction.text}</div>`;
+  // Annihilation override: if the loser hits 0 figures from this melee's casualties,
+  // the unit is gone regardless of the morale-band verdict. Surface that in the log
+  // so the verdict doesn't read "surrender" / "back 1" on a unit that just got wiped.
+  const loserStart = pm.loser === 'A' ? a.count : (pm.loser === 'B' ? d.count : 0);
+  const loserCas = pm.loser === 'A' ? melee.attacker.casualties : (pm.loser === 'B' ? melee.defender.casualties : 0);
+  const annihilated = !!pm.loser && (loserStart - loserCas <= 0);
+  const verdictText = annihilated
+    ? `annihilated · 0 figures left <small style="color:var(--ink-soft); font-family:var(--sans)">(morale band: ${pm.reaction.text})</small>`
+    : pm.reaction.text;
+  const verdictTag = annihilated ? 'surrender' : tag;
+  html += `<div class="verdict v-${verdictTag}">${loserName ? `${pm.loser} · ${loserName} → ${verdictText}` : verdictText}</div>`;
 
   // Apply casualties
   applyCasualties(a, melee.attacker.casualties);
@@ -1371,12 +1396,16 @@ function onResolveMelee() {
   for (const [label, unit, T] of [['A', a, aT], ['B', d, dT]]) {
     if (unit.destroyed || unit.status === 'surrendered') continue;
     const cas = unit.startCount - unit.count;
-    const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng });
+    const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng,
+      fatigued: !!unit.fatigued && state.settings.applyFatigue });
     if (!lr.triggered) continue;
     const pct = (lr.pct*100).toFixed(1);
     const thr = (lr.threshold.pct*100).toFixed(1);
+    const fatTail = lr.fatiguePenalty
+      ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>`
+      : '';
     html += `<div class="step">${label} · ${T.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
-            `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b></div>`;
+            `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
     html += `<div class="verdict v-${lr.passed ? 'stable' : lr.action}">${label} ${lr.passed ? 'holds' : lr.action}</div>`;
     if (!lr.passed) { unit.destroyed = true; }
   }
@@ -1435,11 +1464,15 @@ function onResolveMissile() {
   // Loss-morale on defender if threshold crossed
   if (!d.destroyed) {
     const cas = d.startCount - d.count;
-    const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng });
+    const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng,
+      fatigued: !!d.fatigued && state.settings.applyFatigue });
     if (lr.triggered) {
       const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+      const fatTail = lr.fatiguePenalty
+        ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>`
+        : '';
       html += `<div class="step">B · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
-              `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b></div>`;
+              `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
       html += `<div class="verdict v-${lr.passed?'stable':lr.action}">B ${lr.passed?'holds':lr.action}</div>`;
       if (!lr.passed) d.destroyed = true;
     }
@@ -1461,12 +1494,14 @@ function spawnUnit() {
   const weapon = $('#f-weapon').value || null;
   const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
   const polearm = pikeable ? $('#f-pike').checked : false;
-  const dims = formationDims(formation, count);
+  const customColsRaw = parseInt($('#f-cols').value, 10);
+  const customCols = (Number.isFinite(customColsRaw) && customColsRaw > 0) ? customColsRaw : null;
+  const dims = formationDims(formation, count, customCols);
   const u = {
     id: state.nextId++,
     side, type, count, startCount: count,
     cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
-    formation,
+    formation, customCols,
     spacing, weapon, polearm,
     acted: { moved: false, fired: false, fought: false },
     status: 'ready',
@@ -1529,7 +1564,7 @@ function onContextMenuAction(evt) {
     u.moveStreak = 0;
     u.charged = false;
     clearActed(u);
-    const dims = formationDims(u.formation || 'line', u.count);
+    const dims = formationDims(u.formation || 'line', u.count, u.customCols);
     u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
   } else if (act === 'reset-actions') {
     clearActed(u);
