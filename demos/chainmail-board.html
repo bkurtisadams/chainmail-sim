@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.12 · Slice 6L.1: shrink individual pip to one grid cell; short kind labels -->
+<!-- chainmail-board.html · v0.9.13 · Slice 6M: man-to-man resolver hookup (individual vs individual) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.12</title>
+<title>Chainmail — Battlefield · v0.9.13</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6L.1 · individual pip sized to one grid cell</div>
-    <span class="version-tag">v0.9.12</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6M · man-to-man resolver (individual vs individual)</div>
+    <span class="version-tag">v0.9.13</span>
   </div>
 
   <div class="toolbar">
@@ -198,6 +198,12 @@
           <label>Pikes</label>
           <input type="checkbox" id="f-pike">
           <span class="field-note">+1 die/man</span>
+        </div>
+        <div class="field f-indiv-only"><label>Melee wpn</label><select id="f-mtm-weapon"></select></div>
+        <div class="field f-indiv-only"><label>Armor</label><select id="f-armor"></select></div>
+        <div class="field f-indiv-only">
+          <label>Mounted</label>
+          <input type="checkbox" id="f-mounted">
         </div>
         <div class="field"><label>Missile</label><select id="f-weapon">
           <option value="">none</option>
@@ -292,7 +298,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.12';
+const SIM_VERSION = '0.9.13';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -643,6 +649,142 @@ function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, r
     chargerType: charger.type, defenderType: defender.type, chargerClass: cls, edge };
 }
 
+/* === D. MAN-TO-MAN ENGINE (Appendix B + p.25-26) ======================= */
+// Melee weapons table. row[i] = 2d6 threshold vs armor index i (0..9).
+const WEAPONS_MTM = Object.freeze([
+  { id:'dagger',     name:'Dagger',           cls:1,  row:[6,7,8,8,9,10,12,12,8,10], proneCols:[6,7] },
+  { id:'hand_axe',   name:'Hand Axe',         cls:1,  row:[7,7,8,9,10,10,11,12,9,11] },
+  { id:'mace',       name:'Mace',             cls:3,  row:[8,8,8,9,8,8,7,8,10,12] },
+  { id:'sword',      name:'Sword',            cls:4,  row:[7,8,8,9,8,9,10,11,8,10], proneCols:[6,7] },
+  { id:'battle_axe', name:'Battle Axe',       cls:5,  row:[8,8,8,8,7,7,9,10,7,9] },
+  { id:'morn_star',  name:'Morning Star',     cls:6,  row:[6,6,7,7,6,7,8,8,8,8] },
+  { id:'flail',      name:'Flail',            cls:7,  row:[7,7,7,7,6,7,6,7,6,8] },
+  { id:'spear',      name:'Spear',            cls:8,  row:[8,8,9,9,10,10,11,12,7,9], proneCols:[6,7] },
+  { id:'pole_arms',  name:'Pole arms',        cls:9,  row:[6,6,6,7,7,8,9,10,6,8],    proneCols:[6,7] },
+  { id:'halbard',    name:'Halbard',          cls:9,  row:[8,8,8,7,6,6,7,8,6,9] },
+  { id:'two_hand',   name:'Two-handed sword', cls:10, row:[6,6,6,6,5,5,6,7,6,8] },
+  { id:'lance',      name:'Mounted lance',    cls:11, row:[5,5,5,5,6,7,8,9,5,7] },
+  { id:'pike',       name:'Pike',             cls:12, row:[8,8,8,8,8,8,9,10,5,7] },
+]);
+const mtmWeaponById = (id) => WEAPONS_MTM.find(w => w.id === id);
+const ARMOR_MTM = Object.freeze([
+  { id:'none',         label:'No armor' },
+  { id:'leather',      label:'Leather / padded' },
+  { id:'shield',       label:'Shield only' },
+  { id:'leather_sh',   label:'Leather + shield' },
+  { id:'chain',        label:'Chain / banded / studded / splint' },
+  { id:'chain_sh',     label:'Chain + shield' },
+  { id:'plate',        label:'Plate armor' },
+  { id:'plate_sh',     label:'Plate + shield' },
+  { id:'horse_none',   label:'Horse, no armor' },
+  { id:'horse_barded', label:'Horse, barded' },
+]);
+const PRONE_KILL_TN = 7;
+const CHARGE_REACH_CLASSES = new Set([8, 11, 12]);  // spear, lance, pike
+const armorIndexMtm = (id) => ARMOR_MTM.findIndex(a => a.id === id);
+
+function mtmTargetNumber(weapon, armorId, defenderProne) {
+  const ai = armorIndexMtm(armorId);
+  if (defenderProne && weapon.proneCols && weapon.proneCols.includes(ai)) return PRONE_KILL_TN;
+  return weapon.row[ai];
+}
+function mtmBlowCountFor(myCls, oppCls) {
+  const diff = oppCls - myCls;
+  if (diff >= 8) return 3;
+  if (diff >= 4) return 2;
+  return 1;
+}
+function mtmParryCase(atkCls, defCls) {
+  const diff = atkCls - defCls;
+  if (diff <= -2) return 'a';  // defender 2+ higher — no parry
+  if (diff <= 3)  return 'b';  // -1..+3 — parry, no counter
+  if (diff <= 7)  return 'c';  // +4..+7 — parry, one counter, break on kill-roll
+  return 'd';                  // +8+   — defender first, may parry attacker
+}
+function mtmBlowModifier({ strikerRole, striker, target, defenderAttackedFrom, round }) {
+  let m = 0;
+  if (striker.mounted && !target.mounted) m += (round === 1 ? 2 : 1);
+  if (!striker.mounted && target.mounted) m -= 1;
+  if (strikerRole === 'attacker' && defenderAttackedFrom === 'rear') m += 1;
+  return m;
+}
+function mtmResolveBlow({ strikerRole, striker, target, defenderAttackedFrom, round, rng, parried, parryPenalty }) {
+  const tn = mtmTargetNumber(striker.weapon, target.armor, target.prone);
+  const dice = roll2d6(rng);
+  const mods = mtmBlowModifier({ strikerRole, striker, target, defenderAttackedFrom, round });
+  const penalty = parried ? parryPenalty : 0;
+  const total = dice.sum + mods - penalty;
+  return {
+    striker: strikerRole, weapon: striker.weapon.name, targetArmor: target.armor,
+    tn, dice:[dice.a, dice.b], mods, penalty, parried,
+    total, kill: total >= tn, breakWeapon: false,
+  };
+}
+function mtmFirstStriker(state) {
+  const { round, a, d, prevFirstStriker } = state;
+  if (round === 1) {
+    if (a.charging && CHARGE_REACH_CLASSES.has(a.weapon.cls) && a.weapon.cls > d.weapon.cls)
+      return { who:'attacker', defenderReturns:true };
+    if (d.attackedFrom === 'rear')              return { who:'attacker', defenderReturns:false };
+    const diff = a.weapon.cls - d.weapon.cls;
+    if (diff >= 8)                              return { who:'defender', defenderReturns:true };
+    if (d.fromAbove)                            return { who:'defender', defenderReturns:true };
+    if (diff <= -2)                             return { who:'defender', defenderReturns:true };
+    return { who:'attacker', defenderReturns:true };
+  }
+  let first = prevFirstStriker || 'attacker';
+  const opp  = first === 'attacker' ? d : a;
+  const self = first === 'attacker' ? a : d;
+  if (opp.weapon.cls - self.weapon.cls <= -2) first = (first === 'attacker' ? 'defender' : 'attacker');
+  if (opp.fromAbove)                          first = (first === 'attacker' ? 'defender' : 'attacker');
+  return { who:first, defenderReturns:true };
+}
+function mtmResolveRound(state) {
+  const { a, d, round, rng } = state;
+  const { who:first, defenderReturns } = mtmFirstStriker(state);
+
+  let aBlows = mtmBlowCountFor(a.weapon.cls, d.weapon.cls);
+  let dBlows = mtmBlowCountFor(d.weapon.cls, a.weapon.cls);
+  if (!defenderReturns) dBlows = 0;
+
+  const pCase = mtmParryCase(a.weapon.cls, d.weapon.cls);
+  const defenderWillParry = !!d.parry && pCase !== 'a' && defenderReturns;
+  const parryPenalty = pCase === 'd' ? 1 : 2;
+  if (defenderWillParry) dBlows = Math.max(0, dBlows - 1);
+
+  const seq = [];
+  const second = first === 'attacker' ? 'defender' : 'attacker';
+  const firstBlows  = first === 'attacker' ? aBlows : dBlows;
+  const secondBlows = first === 'attacker' ? dBlows : aBlows;
+  for (let i = 0; i < firstBlows;  i++) seq.push(first);
+  for (let i = 0; i < secondBlows; i++) seq.push(second);
+
+  const parryIdx = defenderWillParry ? seq.findIndex(x => x === 'attacker') : -1;
+
+  const blows = [];
+  for (let i = 0; i < seq.length; i++) {
+    const who = seq[i];
+    const isParried = (i === parryIdx);
+    const striker = who === 'attacker' ? a : d;
+    const target  = who === 'attacker' ? d : a;
+    const blow = mtmResolveBlow({
+      strikerRole: who, striker, target,
+      defenderAttackedFrom: d.attackedFrom,
+      round, rng, parried: isParried, parryPenalty
+    });
+    if (isParried && !blow.kill && (pCase === 'c' || pCase === 'd')) {
+      const unpenalized = blow.total + parryPenalty;
+      if (unpenalized >= blow.tn) blow.breakWeapon = true;
+    }
+    blows.push(blow);
+    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, parryCase: pCase, defenderReturns };
+    if (blow.breakWeapon) {
+      for (let j = i + 1; j < seq.length; j++) if (seq[j] === 'defender') { seq.splice(j, 1); j--; }
+    }
+  }
+  return { blows, outcome:'continues', nextFirstStriker:first, parryCase:pCase, defenderReturns };
+}
+
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
   const n = Math.ceil(count / maxGroup);
@@ -772,12 +914,17 @@ function fillSelect(id, items, render, value) {
   if (value) sel.value = value;
 }
 fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
+fillSelect('#f-mtm-weapon', WEAPONS_MTM, w => `${w.name} (cls ${w.cls})`, 'sword');
+fillSelect('#f-armor', ARMOR_MTM, a => a.label, 'chain_sh');
 
 function syncKindFields() {
   const kind = $('#f-kind').value;
   const isIndividual = kind === 'individual';
   document.querySelectorAll('.f-mass-only').forEach(el => {
     el.style.display = isIndividual ? 'none' : '';
+  });
+  document.querySelectorAll('.f-indiv-only').forEach(el => {
+    el.style.display = isIndividual ? '' : 'none';
   });
   // Repopulate type dropdown for the chosen kind
   if (isIndividual) {
@@ -788,6 +935,7 @@ function syncKindFields() {
   syncPikeRow();
 }
 $('#f-kind').addEventListener('change', syncKindFields);
+syncKindFields();
 
 function syncPikeRow() {
   const kind = $('#f-kind').value;
@@ -1105,7 +1253,10 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       (isIndiv
-        ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>`
+        ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
+          (u.meleeWeapon ? `<div class="stat"><span class="k">Melee wpn</span><span class="v">${(mtmWeaponById(u.meleeWeapon)||{name:u.meleeWeapon}).name} · cls ${(mtmWeaponById(u.meleeWeapon)||{cls:'?'}).cls}</span></div>` : '') +
+          (u.armor ? `<div class="stat"><span class="k">Armor</span><span class="v">${(ARMOR_MTM.find(a=>a.id===u.armor)||{label:u.armor}).label}</span></div>` : '') +
+          (u.mounted ? `<div class="stat"><span class="k">Mounted</span><span class="v">yes</span></div>` : '')
         : `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
           `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
           (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '')) +
@@ -1393,10 +1544,13 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  // Dispatch by kind. Both mass → mass-melee. Both individual → man-to-man.
+  // Mixed (individual + mass) → defer to fantasy resolver slice.
+  if (a.kind === 'individual' && d.kind === 'individual') return onResolveMtm(a, d);
   if (a.kind === 'individual' || d.kind === 'individual') {
     appendTurn(
-      `Mass-melee resolver — skipped`,
-      `<div class="step">One or both combatants is an individual unit. Man-to-man / fantasy resolution lands in a later slice; mass-vs-mass only for now.</div>`
+      `Melee resolver — skipped`,
+      `<div class="step">Individual vs mass not yet wired. Hero-vs-mass (with the 4-figure "fighting strength" rule) lands in the fantasy resolver slice.</div>`
     );
     return;
   }
@@ -1656,6 +1810,72 @@ function onResolveMelee() {
   renderBoard();
 }
 
+// Man-to-man resolver dispatch. Both combatants are individuals.
+function onResolveMtm(a, d) {
+  const edge = engagementEdge(a, d);
+  const attackedFrom = (edge === 'rear') ? 'rear' : 'front';
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const aw = mtmWeaponById(a.meleeWeapon || 'sword');
+  const dw = mtmWeaponById(d.meleeWeapon || 'sword');
+  if (!aw || !dw) {
+    appendTurn(`Mtm · invalid weapon`, `<div class="step">One or both individuals has no melee weapon set.</div>`);
+    return;
+  }
+  // Engagement round: continues if a prior mtm engagement exists
+  const existing = findEngagement(a.id, d.id);
+  const round = existing ? existing.round + 1 : 1;
+  const state_in = {
+    round,
+    rng: state.rng,
+    prevFirstStriker: existing ? existing.prevFirstStriker : null,
+    a: { weapon: aw, armor: a.armor || 'none', mounted: !!a.mounted, charging: !!a.charged,
+         prone: !!a.prone, attackedFrom: 'front', fromAbove: false, parry: a.parry !== false },
+    d: { weapon: dw, armor: d.armor || 'none', mounted: !!d.mounted, charging: !!d.charged,
+         prone: !!d.prone, attackedFrom, fromAbove: false, parry: d.parry !== false },
+  };
+  const r = mtmResolveRound(state_in);
+
+  // Build log
+  let html = '';
+  html += `<div class="step">Round ${round} · ${edge.toUpperCase()} · ` +
+          `<b style="color:var(--side-a-d)">A</b> ${aT.name} w/ ${aw.name} (cls ${aw.cls}) vs ` +
+          `<b style="color:var(--side-b-d)">B</b> ${dT.name} w/ ${dw.name} (cls ${dw.cls}) · ` +
+          `parry case ${r.parryCase}${r.defenderReturns ? '' : ' · rear → no return'}</div>`;
+  for (let i = 0; i < r.blows.length; i++) {
+    const b = r.blows[i];
+    const side = b.striker === 'attacker' ? 'A' : 'B';
+    const sideC = b.striker === 'attacker' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+    const modStr = b.mods ? ` ${b.mods > 0 ? '+' : ''}${b.mods}` : '';
+    const penStr = b.parried ? ` − ${b.penalty} parry` : '';
+    const result = b.kill ? `<b style="color:#a3322a">KILL</b>` : (b.breakWeapon ? `miss · <b>weapon breaks</b>` : 'miss');
+    html += `<div class="step"><b style="color:${sideC}">${side}</b> blow ${i+1}` +
+            `${b.parried ? ' (parried)' : ''} · ${b.weapon} vs ${b.targetArmor} (TN ${b.tn}+) · ` +
+            `2d6 = ${b.dice[0]}+${b.dice[1]}${modStr}${penStr} = <b>${b.total}</b> → ${result}</div>`;
+  }
+  // Verdict + state changes
+  if (r.outcome === 'continues') {
+    html += `<div class="verdict v-stable">melee continues — engaged for round ${round}</div>`;
+    if (existing) { existing.round = round; existing.prevFirstStriker = r.nextFirstStriker; }
+    else state.engagements.push({ aId: a.id, dId: d.id, round, startTurn: state.turn, prevFirstStriker: r.nextFirstStriker });
+  } else {
+    const loser = r.outcome === 'attacker' ? d : a;
+    const winner = r.outcome === 'attacker' ? a : d;
+    const loserName = r.outcome === 'attacker' ? `B · ${dT.name}` : `A · ${aT.name}`;
+    html += `<div class="verdict v-rout">${loserName} → killed</div>`;
+    loser.count = 0;
+    loser.destroyed = true;
+    cleanupEngagementsForUnit(loser.id);
+    if (loser.id === state.targetId) state.targetId = null;
+    if (loser.id === state.selectedId) state.selectedId = null;
+    // Winner still standing
+    void winner;
+  }
+  appendTurn(`Mtm · ${aT.name} (A) vs ${dT.name} (B) · round ${round}`, html);
+  a.acted.fought = true;
+  d.acted.fought = true;
+  renderBoard();
+}
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -1738,8 +1958,12 @@ function spawnUnit() {
   let u;
   if (kind === 'individual') {
     // Single-figure unit; no formation, count is always 1, no polearm/pike.
+    const meleeWeapon = $('#f-mtm-weapon').value || 'sword';
+    const armor = $('#f-armor').value || 'chain_sh';
+    const mounted = $('#f-mounted').checked;
     u = { ...common, count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false,
-      formation: null, customCols: null, spacing: 'close', polearm: false };
+      formation: null, customCols: null, spacing: 'close', polearm: false,
+      meleeWeapon, armor, mounted, prone: false, parry: true };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
