@@ -1,13 +1,13 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.20 · Slice 6R: scrollable/compacted side panel + grid opacity setting (non-scaling stroke) -->
+<!-- chainmail-board.html · v0.9.21 · Slice 6S: rear-rank pips lightened for front/back legibility -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.20</title>
+<title>Chainmail — Battlefield · v0.9.21</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
-    --side-a:#3a6e90; --side-a-d:#27516c; --side-b:#9c3b2c; --side-b-d:#73291d;
+    --side-a:#3a6e90; --side-a-d:#27516c; --side-a-l:#9cbed4; --side-b:#9c3b2c; --side-b-d:#73291d; --side-b-l:#d7a89c;
     --front:#2f7d4f; --flank:#c0892e; --rear:#b0392c; --gold:#d8b25a; --rank-hi:#ecd08a;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
     --sans:"Avenir Next Condensed","Avenir Next","Helvetica Neue",Helvetica,sans-serif;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6R · panel scroll + grid opacity</div>
-    <span class="version-tag">v0.9.20</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6S · rear-rank pip contrast</div>
+    <span class="version-tag">v0.9.21</span>
   </div>
 
   <div class="toolbar">
@@ -305,7 +305,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.20';
+const SIM_VERSION = '0.9.21';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1187,6 +1187,7 @@ function renderUnit(u) {
   const { w, h, pip, gap, pad } = b;
   const sideC  = u.side === 'A' ? 'var(--side-a)'   : 'var(--side-b)';
   const sideD  = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+  const sideL  = u.side === 'A' ? 'var(--side-a-l)' : 'var(--side-b-l)';
   const sel = state.selectedId === u.id;
   const tgt = state.targetId   === u.id;
 
@@ -1204,9 +1205,12 @@ function renderUnit(u) {
         if (placed >= u.count) break;
         const px = c * (pip + gap) + pad - w/2;
         const py = r * (pip + gap) + pad - h/2;
-        const isFront = (r === 0 && !u.hedgehog);
-        const fill = isFront ? sideD : sideC;
-        pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.6"/>`;
+        // Front rank is the dark anchor (it fires and leads); rear ranks use a
+        // light tint so depth reads at a glance. Hedgehog has no single front —
+        // every face defends, so all pips stay dark. The dark stroke keeps the
+        // side identity legible even on the light rear pips.
+        const fill = u.hedgehog ? sideD : (r === 0 ? sideD : sideL);
+        pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.7"/>`;
         placed++;
       }
     }
