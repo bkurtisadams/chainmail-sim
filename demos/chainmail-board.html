@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.29 · fix: missile range measured edge-to-edge (was center-to-center) so the Fire-missiles button enables when units are visually in range; matches melee + RAW (range from firing rank, p.11) -->
+<!-- chainmail-board.html · v0.9.30 · fix: missile distance display is center-to-center (matches drag ruler); in-range test stays edge-to-edge per firing-rank rule (p.11) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.29</title>
+<title>Chainmail — Battlefield · v0.9.30</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · v0.9.29 · missile range fix</div>
-    <span class="version-tag">v0.9.29</span>
+    <div class="sub">Chainmail HTML Sim · v0.9.30 · missile distance fix</div>
+    <span class="version-tag">v0.9.30</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.29';
+const SIM_VERSION = '0.9.30';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1076,21 +1076,24 @@ function inMissileRange(firer, target) {
   let maxIn = WEAPON_RANGES[firer.weapon];
   if (indirect) maxIn = Math.floor(maxIn * 2 / 3);
   const maxRangePx = inchesToPx(maxIn);
-  // Range is measured from the firing rank (p.11), so use edge-to-edge distance
-  // — subtract each unit's half-extent — matching how melee contact is judged.
-  // Center-to-center under-counts reach badly for big units / short throws.
+  // "Distance to target" shown to the player is center-to-center, matching the
+  // drag ruler. The in-range test measures from the firing rank (p.11) —
+  // edge-to-edge — so big units / short throws read correctly without the
+  // displayed distance collapsing to 0.
+  const centerPx = dist(firer, target);
+  const distIn = pxToInches(centerPx);
   const aMax = Math.max(unitBounds(firer).w, unitBounds(firer).h) / 2;
   const bMax = Math.max(unitBounds(target).w, unitBounds(target).h) / 2;
-  const edgeDistPx = Math.max(0, dist(firer, target) - aMax - bMax);
-  const distIn = pxToInches(edgeDistPx);
+  const edgePx = Math.max(0, centerPx - aMax - bMax);
+  const edgeIn = pxToInches(edgePx);
   // Indirect fire must clear intervening troops — only possible past 3″ (p.12).
-  if (indirect && distIn <= 3) {
-    return { ok:false, reason:'indirect fire requires more than 3″ to clear intervening troops' };
+  if (indirect && edgeIn <= 3) {
+    return { ok:false, distanceIn: distIn, reason:'indirect fire requires more than 3″ to clear intervening troops' };
   }
-  if (edgeDistPx > maxRangePx) {
-    return { ok:false, reason:`out of range (${distIn.toFixed(1)}″ > ${maxIn}″${indirect?' indirect':''})` };
+  if (edgePx > maxRangePx) {
+    return { ok:false, distanceIn: distIn, reason:`out of range (nearest edge ${edgeIn.toFixed(1)}″ > ${maxIn}″${indirect?' indirect':''})` };
   }
-  return { ok:true, distanceIn: distIn, indirect };
+  return { ok:true, distanceIn: distIn, edgeIn, indirect };
 }
 
 /* --- Dragon breath cone (p.34) --- truncated cone, ½″ dia at the mouth,
@@ -3059,6 +3062,7 @@ renderBoard();
   // and not a 25″ one; a 6″ javelin reaches 5″ but not 9″.
   const shooter = { kind:'individual', x:0, y:0, weapon:'longbow', indirect:false };
   console.assert(inMissileRange(shooter, { kind:'individual', x:inchesToPx(5), y:0 }).ok === true,  'longbow reaches a 5″ target');
+  console.assert(Math.abs(inMissileRange(shooter, { kind:'individual', x:inchesToPx(5), y:0 }).distanceIn - 5) < 0.01, 'displayed distance is center-to-center (5″)');
   console.assert(inMissileRange(shooter, { kind:'individual', x:inchesToPx(25), y:0 }).ok === false, 'longbow cannot reach 25″');
   const thrower = { kind:'individual', x:0, y:0, weapon:'javelin', indirect:false };
   console.assert(inMissileRange(thrower, { kind:'individual', x:inchesToPx(5), y:0 }).ok === true,  'javelin reaches a 5″ target');
