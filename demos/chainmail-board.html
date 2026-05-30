@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.8.0 · Slice 6e: engagement round tracking + overhang display -->
+<!-- chainmail-board.html · v0.9.0 · Slice 6f: wrap-around bonus dice in round 2+ -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.8.0</title>
+<title>Chainmail — Battlefield · v0.9.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -121,7 +121,7 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6e · engagement tracking · round counter · overhang</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6f · wrap-around bonus in round 2+</div>
   <hr>
 
   <div class="toolbar">
@@ -216,6 +216,7 @@
 
     <section>
       <h3>Optional Rules</h3>
+      <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <p>Charge impetus bonus, prisoners step, and cavalry-charge morale check
          will appear here as their slices land. Chainmail p.16–18.</p>
     </section>
@@ -227,7 +228,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.8.0';
+const SIM_VERSION = '0.9.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -515,6 +516,7 @@ const state = {
     gridOnByDefault: true,
     keepCapturedVisible: true,
     arcForAllMissile: false,
+    applyWrapAroundBonus: true,
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -1062,6 +1064,27 @@ function frontageOverhang(a, d) {
   return { a: Math.max(0, a.cols - d.cols), d: Math.max(0, d.cols - a.cols) };
 }
 
+// Wrap-around bonus (p.16 §4): overhang figures attack the enemy flank in round 2+.
+// They use flank class-up (or +1/die when no class-up exists, per AF/HH).
+function computeWrapAround({ overhang, aT, dT, rng }) {
+  if (overhang <= 0) return null;
+  const flankCls = effectiveAttackerClass(aT.cls, { flank: true });
+  const bumpToBonus = classBumpsToBonus(aT.cls, { flank: true });
+  const tab = COMBAT[flankCls] && COMBAT[flankCls][dT.cls];
+  if (!tab) return null;
+  const totalDice = Math.max(0, Math.round(overhang * tab.dice / tab.perMen));
+  let killScores = tab.kills.slice();
+  if (bumpToBonus) killScores = applyDieBonus(killScores, 1);
+  const dice = [];
+  let killCount = 0;
+  for (let i = 0; i < totalDice; i++) {
+    const r = d6(rng);
+    dice.push(r);
+    if (killScores.includes(r)) killCount++;
+  }
+  return { overhang, totalDice, dice, killScores, killCount, flankCls, bumpToBonus };
+}
+
 function performAutoMove(loser, against, status) {
   const moves = STATUS_MOVES[status];
   if (!moves) return null;
@@ -1143,6 +1166,35 @@ function onResolveMelee() {
           `${melee.defender.totalDice} dice (${melee.defender.dicePerMan.toFixed(2)}/man), kills on ${(melee.defender.killScores||[]).join(',') || '—'} → ` +
           `<b>${melee.defender.killsDealt}</b> kills ${diceTrace(melee.defender.dice, melee.defender.killScores||[])}` +
           (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
+
+  // Wrap-around bonus (slice 6f) — overhang figures attack enemy flank in round 2+.
+  if (round >= 2 && state.settings.applyWrapAroundBonus) {
+    if (oh.a > 0) {
+      const w = computeWrapAround({ overhang: oh.a, aT, dT, rng: state.rng });
+      if (w) {
+        melee.defender.casualties += w.killCount;
+        const mods = [`vs flank as ${w.flankCls}`];
+        if (w.bumpToBonus) mods.push('+1/die');
+        html += `<div class="step"><b style="color:var(--side-a-d)">A wrap-around</b> · ` +
+                `${w.overhang} excess fig → ${w.totalDice} dice, kills on ${w.killScores.join(',')} → ` +
+                `<b>${w.killCount}</b> kills ${diceTrace(w.dice, w.killScores)} ` +
+                `<small style="color:var(--ink-soft); font-family:var(--sans)">· ${mods.join(' · ')}</small></div>`;
+      }
+    }
+    if (oh.d > 0 && !melee.defender.noReturn) {
+      const w = computeWrapAround({ overhang: oh.d, aT: dT, dT: aT, rng: state.rng });
+      if (w) {
+        melee.attacker.casualties += w.killCount;
+        const mods = [`vs flank as ${w.flankCls}`];
+        if (w.bumpToBonus) mods.push('+1/die');
+        html += `<div class="step"><b style="color:var(--side-b-d)">B wrap-around</b> · ` +
+                `${w.overhang} excess fig → ${w.totalDice} dice, kills on ${w.killScores.join(',')} → ` +
+                `<b>${w.killCount}</b> kills ${diceTrace(w.dice, w.killScores)} ` +
+                `<small style="color:var(--ink-soft); font-family:var(--sans)">· ${mods.join(' · ')}</small></div>`;
+      }
+    }
+  }
+
   html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
 
   // Post-melee morale
