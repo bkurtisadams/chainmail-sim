@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.22 · Slice 6U: dragon breath weapon (truncated-cone AOE, p.34) -->
+<!-- chainmail-board.html · v0.9.23 · Slice 6V: inline self-test coverage for resolvers (forced-dice); modular tree demoted to frozen reference -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.22</title>
+<title>Chainmail — Battlefield · v0.9.23</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6U · dragon breath weapon</div>
-    <span class="version-tag">v0.9.22</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6V · inline self-test coverage</div>
+    <span class="version-tag">v0.9.23</span>
   </div>
 
   <div class="toolbar">
@@ -306,7 +306,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.22';
+const SIM_VERSION = '0.9.23';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2931,6 +2931,57 @@ renderBoard();
   console.assert(pointInBreathCone(0,0,1,0, -inchesToPx(2), 0).hit === false, 'behind the mouth is a miss');
   console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.4)).hit === true, 'within far half-width is hit');
   console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.6)).hit === false, 'outside far half-width is a miss');
+  console.assert(DRAGON_FIRE_SAVE_TYPES.has('WIZARD') && !DRAGON_FIRE_SAVE_TYPES.has('HERO'), 'breath save: wizard yes, hero no');
+
+  // --- Resolver coverage with forced dice. forDie(n) makes d6 → n, so we can
+  // assert exact outcomes. These are the canonical tests now that the modular
+  // engine is a frozen reference rather than a must-sync source.
+  const forDie = (n) => (n - 1) / 6 + 1e-6;
+  const always = (n) => () => forDie(n);
+  const seq = (vals) => { let i = 0; return () => vals[i++ % vals.length]; };
+
+  // Mass melee — HF×10 vs HF×10 (1 die/man, kills on 6); all-6 kills every die.
+  const mm = resolveMassMelee({ attacker:{ type:'HF', count:10 }, defender:{ type:'HF', count:10 }, rng: always(6) });
+  console.assert(mm.attacker.totalDice === 10 && mm.attacker.killsDealt === 10, 'melee all-6 → 10 dice, 10 kills');
+  console.assert(mm.attacker.casualties === mm.defender.killsDealt, 'melee: A casualties = B kills dealt');
+  const mmRear = resolveMassMelee({ attacker:{ type:'HF', count:10, rear:true }, defender:{ type:'HF', count:10 }, rng: always(1) });
+  console.assert(mmRear.defender.noReturn === true && mmRear.defender.killsDealt === 0, 'rear attack → no return fire');
+
+  // Mass missile — unarmored, 10 firing, die 6 = high band = 5 kills; cover halves to 2.
+  const mzNoCover = resolveMassMissile({ firingCount:10, armorGroup:'unarmored', cover:false, indirect:false, rng: always(6) });
+  const mzCover   = resolveMassMissile({ firingCount:10, armorGroup:'unarmored', cover:true,  indirect:false, rng: always(6) });
+  console.assert(mzNoCover.totalKills === 5, 'unarmored 10 firing high → 5 kills');
+  console.assert(mzCover.totalKills === 2, 'soft cover halves 5 → 2');
+  const mzAP = resolveMassMissile({ firingCount:10, armorGroup:'fully', cover:false, indirect:true, rng: always(6) });
+  console.assert(mzAP.arrowProof === true && mzAP.totalKills === 0, 'indirect vs fully-armored → arrow-proof');
+
+  // Individual missile — longbow (range 21). Forced 12 hits unarmored (TN5);
+  // forced 2 misses plate+shield (TN11); indirect cuts range to 14, armor +1.
+  const lb = rangedWeaponById('longbow');
+  const imHit  = resolveIndividualMissile({ weapon:lb, distance:5, armorIdx:0, cover:0, indirect:false, rng: always(6) });
+  console.assert(imHit.kill === true && imHit.target === 5, 'longbow 12 vs unarmored → hit (TN5)');
+  const imMiss = resolveIndividualMissile({ weapon:lb, distance:5, armorIdx:7, cover:0, indirect:false, rng: always(1) });
+  console.assert(imMiss.kill === false && imMiss.target === 11, 'longbow 2 vs plate+shield → miss (TN11)');
+  const imInd  = resolveIndividualMissile({ weapon:lb, distance:5, armorIdx:2, cover:0, indirect:true, rng: always(6) });
+  console.assert(imInd.effRange === 14 && imInd.effArmor === 3, 'indirect: range 21→14, armor 2→3');
+
+  // Loss morale — HF threshold ⅓ @ 7. 36.7% rolling 12 holds; fatigue −1 turns
+  // a 7 into a failing 6; below threshold never triggers.
+  const lmHold = resolveLossMorale({ type:'HF', startCount:30, casualties:11, surrounded:false, rng: always(6), fatigued:false });
+  console.assert(lmHold.triggered === true && lmHold.passed === true, 'HF 36.7% rolling 12 → holds');
+  const lmFat = resolveLossMorale({ type:'HF', startCount:30, casualties:11, surrounded:false, rng: seq([forDie(4), forDie(3)]), fatigued:true });
+  console.assert(lmFat.fatiguePenalty === 1 && lmFat.effectiveSum === 6 && lmFat.passed === false, 'fatigue −1: 7 → 6 fails HF 7+');
+  const lmNone = resolveLossMorale({ type:'HF', startCount:30, casualties:5, surrounded:false, rng: always(6), fatigued:false });
+  console.assert(lmNone.triggered === false, 'HF 16.7% below threshold → no check');
+
+  // Fantasy combat — HERO vs TROLL base target 9. 12 kills, 9 falls back, 2 no effect.
+  const fcKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(6) });
+  console.assert(fcKill.target === 9 && fcKill.outcome === 'killed', 'Hero vs Troll rolling 12 → killed');
+  const fcFall = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(5)]) });
+  console.assert(fcFall.outcome === 'fallback', 'Hero vs Troll rolling exactly 9 → fall back');
+  const fcNone = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(1) });
+  console.assert(fcNone.outcome === 'no_effect', 'Hero vs Troll rolling 2 → no effect');
+
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
