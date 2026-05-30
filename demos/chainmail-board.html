@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.4.3 · Slice 6b: post-melee status pipeline -->
+<!-- chainmail-board.html · v0.4.4 · Surrendered units removed from play -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.4.3</title>
+<title>Chainmail — Battlefield · v0.4.4</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -177,7 +177,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.4.3';
+const SIM_VERSION = '0.4.4';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1011,12 +1011,14 @@ function onResolveMelee() {
   applyCasualties(a, melee.attacker.casualties);
   applyCasualties(d, melee.defender.casualties);
 
-  // Post-melee verdict → loser unit status
+  // Post-melee verdict → loser unit status. Surrender additionally removes
+  // the unit from play (captured, per rules p.16).
   const tagToStatus = { back1:'back1', back2:'back2', retreat:'retreat', rout:'routing', surrender:'surrendered' };
   const newStatus = tagToStatus[tag];
   if (pm.loser && newStatus) {
     const loserUnit = pm.loser === 'A' ? a : d;
     if (!loserUnit.destroyed) loserUnit.status = newStatus;
+    if (newStatus === 'surrendered') loserUnit.destroyed = true;
   }
 
   // Loss-morale check on whichever side(s) crossed threshold
