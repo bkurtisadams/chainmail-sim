@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.11 · Slice 6L: individual unit kind foundation (hero/wizard/dragon/etc.) -->
+<!-- chainmail-board.html · v0.9.12 · Slice 6L.1: shrink individual pip to one grid cell; short kind labels -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.11</title>
+<title>Chainmail — Battlefield · v0.9.12</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6L · individual unit foundation (hero / wizard / dragon)</div>
-    <span class="version-tag">v0.9.11</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6L.1 · individual pip sized to one grid cell</div>
+    <span class="version-tag">v0.9.12</span>
   </div>
 
   <div class="toolbar">
@@ -179,8 +179,8 @@
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
         <div class="field"><label>Kind</label><select id="f-kind">
-          <option value="mass">Mass unit</option>
-          <option value="individual">Individual (hero / monster)</option>
+          <option value="mass">Mass</option>
+          <option value="individual">Individual</option>
         </select></div>
         <div class="field"><label>Type</label><select id="f-type"></select></div>
         <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
@@ -292,7 +292,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.11';
+const SIM_VERSION = '0.9.12';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -709,9 +709,9 @@ const pxToInches = (p) => p / PX_PER_INCH;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
-  // Individual unit: single bigger pip (hero / monster), fixed size.
+  // Individual unit: single pip sized to fit one grid cell (24×24 = 1″).
   if (u.kind === 'individual') {
-    const pip = 26, gap = 0, pad = 3;
+    const pip = 20, gap = 0, pad = 2;
     const w = pip + 2 * pad, h = pip + 2 * pad;
     return { w, h, pip, gap, pad };
   }
@@ -879,8 +879,8 @@ function renderUnit(u) {
   if (u.kind === 'individual') {
     // Single, larger pip with a gold ring to mark "special" status.
     const r = pip / 2;
-    pips += `<circle cx="0" cy="0" r="${r}" fill="${sideD}" stroke="#d8b25a" stroke-width="2.4"/>`;
-    pips += `<circle cx="0" cy="0" r="${r - 4}" fill="none" stroke="${sideC}" stroke-width="1"/>`;
+    pips += `<circle cx="0" cy="0" r="${r}" fill="${sideD}" stroke="#d8b25a" stroke-width="1.8"/>`;
+    pips += `<circle cx="0" cy="0" r="${r - 3}" fill="none" stroke="${sideC}" stroke-width="0.8"/>`;
   } else {
     let placed = 0;
     for (let r = 0; r < u.rows; r++) {
@@ -900,9 +900,9 @@ function renderUnit(u) {
   const xL = -w/2, xR = w/2, yT = -h/2, yB = h/2;
   let edges = '';
   if (u.kind === 'individual') {
-    // Single facing marker — a small triangle pointing forward (up in local frame)
-    const ms = 5;
-    edges += `<polygon points="0,${yT - 4} ${-ms},${yT + 2} ${ms},${yT + 2}" fill="var(--front)" stroke="${sideD}" stroke-width="0.5"/>`;
+    // Single facing marker — a small triangle pointing forward, contained inside the cell
+    const ms = 4;
+    edges += `<polygon points="0,${yT + 1} ${-ms},${yT + 7} ${ms},${yT + 7}" fill="var(--front)" stroke="${sideD}" stroke-width="0.5"/>`;
   } else if (u.hedgehog) {
     // All four edges drawn in front-color (defends all around)
     edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="1.5" stroke-dasharray="3 3"/>`;
