@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.4.2 · front-rank tint matches side; drag ruler pill -->
+<!-- chainmail-board.html · v0.4.3 · Slice 6b: post-melee status pipeline -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.4.2</title>
+<title>Chainmail — Battlefield · v0.4.3</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -100,7 +100,7 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6a · turn flow · action tracking · per-side phases</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6b · post-melee status pipeline · routing · retreat · surrender</div>
   <hr>
 
   <div class="toolbar">
@@ -169,14 +169,15 @@
 
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
-  <button data-act="restore">Restore to full strength</button>
+  <button data-act="restore">Restore unit (count + status + actions)</button>
   <button data-act="reset-actions">Reset actions (this round)</button>
+  <button data-act="reset-status">Reset status (set to ready)</button>
   <button data-act="rotate-90">Rotate 90°</button>
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.4.2';
+const SIM_VERSION = '0.4.3';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -589,6 +590,17 @@ function renderGrid() {
   return `<g id="grid" pointer-events="none">${lines.join('')}</g>`;
 }
 
+function statusVisual(status) {
+  switch (status) {
+    case 'back1':       return { text: 'BACK 1',      color: 'var(--flank)', opacity: 1.00 };
+    case 'back2':       return { text: 'BACK 2',      color: 'var(--flank)', opacity: 1.00 };
+    case 'retreat':     return { text: 'RETREATING',  color: '#a87635',      opacity: 0.85 };
+    case 'routing':     return { text: 'ROUTING',     color: 'var(--rear)',  opacity: 0.65 };
+    case 'surrendered': return { text: 'SURRENDERED', color: 'var(--ink)',   opacity: 0.38 };
+    default:            return { text: '',            color: '',             opacity: 1.00 };
+  }
+}
+
 function renderUnit(u) {
   if (u.destroyed) return '';
   const b = unitBounds(u);
@@ -663,8 +675,23 @@ function renderUnit(u) {
   else if (tgt) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
 
   const T = typeById(u.type);
+  const sv = statusVisual(u.status || 'ready');
+  const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity;
+  const labelY = u.y + Math.max(b.w, b.h)/2 + 14;
+  const statusBadgeStr = sv.text
+    ? (() => {
+        const tw = sv.text.length * 6.5 + 14;
+        return `
+          <g transform="translate(${u.x} ${labelY + 14})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="${sv.color}" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${sv.text}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
-    <g class="unit-group" data-id="${u.id}" style="cursor:grab" opacity="${allSpent ? 0.6 : 1}">
+    <g class="unit-group" data-id="${u.id}" style="cursor:grab" opacity="${groupOpacity}">
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
@@ -673,10 +700,11 @@ function renderUnit(u) {
         ${outline}
       </g>
       ${badges}
-      <text x="${u.x}" y="${u.y + Math.max(b.w, b.h)/2 + 14}" font-family="sans-serif" font-size="10.5" font-weight="700"
+      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="10.5" font-weight="700"
             fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
         ${u.side} · ${T.name} · ${u.count}/${u.startCount}
       </text>
+      ${statusBadgeStr}
     </g>
   `;
 }
@@ -741,6 +769,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
       `<div class="stat"><span class="k">Type</span><span class="v">${T.name}</span></div>` +
       `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
+      (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
@@ -982,9 +1011,17 @@ function onResolveMelee() {
   applyCasualties(a, melee.attacker.casualties);
   applyCasualties(d, melee.defender.casualties);
 
+  // Post-melee verdict → loser unit status
+  const tagToStatus = { back1:'back1', back2:'back2', retreat:'retreat', rout:'routing', surrender:'surrendered' };
+  const newStatus = tagToStatus[tag];
+  if (pm.loser && newStatus) {
+    const loserUnit = pm.loser === 'A' ? a : d;
+    if (!loserUnit.destroyed) loserUnit.status = newStatus;
+  }
+
   // Loss-morale check on whichever side(s) crossed threshold
   for (const [label, unit, T] of [['A', a, aT], ['B', d, dT]]) {
-    if (unit.destroyed) continue;
+    if (unit.destroyed || unit.status === 'surrendered') continue;
     const cas = unit.startCount - unit.count;
     const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng });
     if (!lr.triggered) continue;
@@ -1069,6 +1106,7 @@ function spawnUnit() {
     cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
     spacing, weapon, polearm,
     acted: { moved: false, fired: false, fought: false },
+    status: 'ready',
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1105,11 +1143,14 @@ function onContextMenuAction(evt) {
   if (act === 'restore') {
     u.count = u.startCount;
     u.destroyed = false;
+    u.status = 'ready';
     clearActed(u);
     const dims = formationDims(u.hedgehog ? 'hedgehog' : (u.cols >= u.rows ? 'line' : 'column'), u.count);
     u.cols = dims.cols; u.rows = dims.rows;
   } else if (act === 'reset-actions') {
     clearActed(u);
+  } else if (act === 'reset-status') {
+    u.status = 'ready';
   } else if (act === 'rotate-90') {
     u.facing = (u.facing + 90) % 360;
   } else if (act === 'delete') {
