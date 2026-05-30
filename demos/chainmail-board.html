@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.7.1 · Fix: hidden ctx-menu buttons were ignored by display:block -->
+<!-- chainmail-board.html · v0.8.0 · Slice 6e: engagement round tracking + overhang display -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.7.1</title>
+<title>Chainmail — Battlefield · v0.8.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -121,7 +121,7 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6d · formation reshape · line · column · square · hedgehog</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6e · engagement tracking · round counter · overhang</div>
   <hr>
 
   <div class="toolbar">
@@ -227,7 +227,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.7.1';
+const SIM_VERSION = '0.8.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -516,6 +516,7 @@ const state = {
     keepCapturedVisible: true,
     arcForAllMissile: false,
   },
+  engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
 };
 
@@ -777,10 +778,25 @@ function renderOverlay() {
       const labels = { front:'frontal', left:'left flank', right:'right flank', rear:'rear' };
       const c = colors[edge];
       const mx = (a.x + d.x)/2, my = (a.y + d.y)/2;
+      const engagement = findEngagement(a.id, d.id);
+      const round = engagement ? engagement.round : 0;
+      const oh = frontageOverhang(a, d);
+      const subBits = [];
+      if (round > 0) subBits.push(`Round ${round}`);
+      if (oh.a) subBits.push(`A +${oh.a}`);
+      if (oh.d) subBits.push(`B +${oh.d}`);
+      const sub = subBits.join(' · ');
+      const haveSub = sub.length > 0;
+      const bigW = 120, bigH = 22;
+      const subW = Math.max(96, sub.length * 7.2 + 14), subH = 16;
       return `
         <line x1="${a.x}" y1="${a.y}" x2="${d.x}" y2="${d.y}" stroke="${c}" stroke-width="2" stroke-dasharray="3 3" pointer-events="none"/>
-        <rect x="${mx-50}" y="${my-22}" width="100" height="20" rx="3" fill="${c}" opacity="0.85" pointer-events="none"/>
-        <text x="${mx}" y="${my-8}" font-family="sans-serif" font-size="10.5" font-weight="700" fill="white" text-anchor="middle" pointer-events="none" letter-spacing="1.2">${labels[edge].toUpperCase()}</text>
+        <rect x="${mx-bigW/2}" y="${my-22}" width="${bigW}" height="${bigH}" rx="3" fill="${c}" opacity="0.88" pointer-events="none"/>
+        <text x="${mx}" y="${my-7}" font-family="sans-serif" font-size="11" font-weight="700" fill="white" text-anchor="middle" pointer-events="none" letter-spacing="1.3">${labels[edge].toUpperCase()}</text>
+        ${haveSub ? `
+          <rect x="${mx-subW/2}" y="${my+4}" width="${subW}" height="${subH}" rx="3" fill="var(--ink)" opacity="0.85" pointer-events="none"/>
+          <text x="${mx}" y="${my+16}" font-family="sans-serif" font-size="9.5" font-weight="700" fill="#f3ead4" text-anchor="middle" pointer-events="none" letter-spacing="1.2">${sub.toUpperCase()}</text>
+        ` : ''}
       `;
     }
   }
@@ -1028,6 +1044,24 @@ function reshapeUnit(u, target) {
   return true;
 }
 
+/* Engagement state (slice 6e) ---------------------------------------- */
+function findEngagement(id1, id2) {
+  return state.engagements.find(e =>
+    (e.aId === id1 && e.dId === id2) || (e.aId === id2 && e.dId === id1));
+}
+function endEngagement(id1, id2) {
+  const i = state.engagements.findIndex(e =>
+    (e.aId === id1 && e.dId === id2) || (e.aId === id2 && e.dId === id1));
+  if (i >= 0) state.engagements.splice(i, 1);
+}
+function cleanupEngagementsForUnit(id) {
+  state.engagements = state.engagements.filter(e => e.aId !== id && e.dId !== id);
+}
+// Frontage overhang: how many figures wider attacker is than defender in cols.
+function frontageOverhang(a, d) {
+  return { a: Math.max(0, a.cols - d.cols), d: Math.max(0, d.cols - a.cols) };
+}
+
 function performAutoMove(loser, against, status) {
   const moves = STATUS_MOVES[status];
   if (!moves) return null;
@@ -1068,6 +1102,11 @@ function onResolveMelee() {
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
   const edge = engagementEdge(a, d);
+
+  // Engagement round: continued melee from prior turn means round = prev + 1
+  const existing = findEngagement(a.id, d.id);
+  const round = existing ? existing.round + 1 : 1;
+  const oh = frontageOverhang(a, d);
 
   // Build attacker/defender param objects for the engine
   const attackerParams = {
@@ -1159,7 +1198,21 @@ function onResolveMelee() {
     if (!lr.passed) { unit.destroyed = true; }
   }
 
-  appendTurn(`Melee · ${aT.name} (A) → ${dT.name} (B) · ${edge}`, html);
+  // Engagement: continues -> persist & set round; anything else -> end engagement
+  if (tag === 'continues' && !a.destroyed && !d.destroyed) {
+    const e = existing || { aId: a.id, dId: d.id, round: 0, startTurn: state.turn };
+    e.round = round;
+    if (!existing) state.engagements.push(e);
+  } else {
+    endEngagement(a.id, d.id);
+  }
+  if (a.destroyed) cleanupEngagementsForUnit(a.id);
+  if (d.destroyed) cleanupEngagementsForUnit(d.id);
+
+  const headerExtras = [`round ${round}`];
+  if (oh.a) headerExtras.push(`A overhang ${oh.a} fig`);
+  if (oh.d) headerExtras.push(`B overhang ${oh.d} fig`);
+  appendTurn(`Melee · ${aT.name} (A) → ${dT.name} (B) · ${edge} · ${headerExtras.join(' · ')}`, html);
   a.acted.fought = true;
   d.acted.fought = true;
   if (a.destroyed && state.selectedId === a.id) state.selectedId = null;
@@ -1290,6 +1343,7 @@ function onContextMenuAction(evt) {
     u.facing = (u.facing + 90) % 360;
   } else if (act === 'delete') {
     state.units = state.units.filter(x => x.id !== u.id);
+    cleanupEngagementsForUnit(u.id);
     if (state.selectedId === u.id) state.selectedId = null;
     if (state.targetId === u.id) state.targetId = null;
   }
@@ -1305,6 +1359,7 @@ function resetBoard() {
   state.nextId = 1;
   state.turn = 1;
   state.activeSide = 'A';
+  state.engagements = [];
   $('#log').innerHTML = '';
   renderTurnUI();
   renderBoard();
