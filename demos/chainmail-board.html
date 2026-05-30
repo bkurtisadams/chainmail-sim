@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.16 · Slice 6O: fantasy resolver (FANTASY_TARGETS matrix + mixed melee + hp) -->
+<!-- chainmail-board.html · v0.9.17 · Slice 6O.1: mixed melee log shows full dice trace -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.16</title>
+<title>Chainmail — Battlefield · v0.9.17</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -145,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6O · fantasy resolver (FANTASY_TARGETS · mixed melee · hp)</div>
-    <span class="version-tag">v0.9.16</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6O.1 · mixed-melee log shows full dice trace</div>
+    <span class="version-tag">v0.9.17</span>
   </div>
 
   <div class="toolbar">
@@ -300,7 +300,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.16';
+const SIM_VERSION = '0.9.17';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2113,10 +2113,33 @@ function onResolveMixed(a, d) {
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
-  let html = `<div class="step">${aIsIndiv?'A · '+indT.name:'A · '+massT.name+' × '+mass.count} → ` +
-             `${aIsIndiv?'B · '+massT.name+' × '+mass.count:'B · '+indT.name} · ` +
-             `${edge.toUpperCase()} · round ${round} · ${indT.name} as ${effFigures}×${FIGHTING_CLASS} (hp ${ind.hp}/${ind.maxHp})</div>`;
-  html += `<div class="step">A casualties: ${melee.attacker.casualties} · B casualties: ${melee.defender.casualties}</div>`;
+  // Labels: each side gets a "name × count" or "name (as Nx{class}, hp X/Y)" prefix
+  const attLabel = aIsIndiv
+    ? `<b style="color:var(--side-a-d)">A · ${indT.name}</b> (as ${effFigures}×${FIGHTING_CLASS}, hp ${ind.hp}/${ind.maxHp})`
+    : `<b style="color:var(--side-a-d)">A · ${massT.name} × ${mass.count}</b>`;
+  const defLabel = aIsIndiv
+    ? `<b style="color:var(--side-b-d)">B · ${massT.name} × ${mass.count}</b>`
+    : `<b style="color:var(--side-b-d)">B · ${indT.name}</b> (as ${effFigures}×${FIGHTING_CLASS}, hp ${ind.hp}/${ind.maxHp})`;
+  const aMods = [];
+  if (melee.attacker.fatigueApplied)   aMods.push('fatigued (one class down)');
+  if (melee.attacker.polearmApplied)   aMods.push('pike/halberd +1/man');
+  if (melee.attacker.impetusApplied)   aMods.push('impetus +1/man');
+  if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
+  if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
+  const dMods = [];
+  if (melee.defender.noReturn) dMods.push('rear attack → no return');
+  if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
+  if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
+
+  let html = `<div class="step">${attLabel} attacks ${edge.toUpperCase()} → ` +
+             `${melee.attacker.totalDice} dice (${melee.attacker.dicePerMan.toFixed(2)}/man), kills on ${melee.attacker.killScores.join(',')} → ` +
+             `<b>${melee.attacker.killsDealt}</b> kills ${diceTrace(melee.attacker.dice, melee.attacker.killScores)}` +
+             (aMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${aMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step">${defLabel} returns → ` +
+          `${melee.defender.totalDice} dice (${melee.defender.dicePerMan.toFixed(2)}/man), kills on ${(melee.defender.killScores||[]).join(',') || '—'} → ` +
+          `<b>${melee.defender.killsDealt}</b> kills ${diceTrace(melee.defender.dice, melee.defender.killScores||[])}` +
+          (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
+  html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
 
   // Route casualties: attacker casualties go to a; defender casualties go to d.
   // The individual side uses hp; the mass side uses count (applyCasualties).
