@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.26 · Slice 6W: ctrl+wheel rotates selected unit (±15°) -->
+<!-- chainmail-board.html · v0.9.27 · Slice 6X: fantasy creatures vs mass melee (melee-as-N profiles, per-type class, normal-attack immunity) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.26</title>
+<title>Chainmail — Battlefield · v0.9.27</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6W · ctrl+wheel rotate</div>
-    <span class="version-tag">v0.9.26</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6X · fantasy vs mass melee</div>
+    <span class="version-tag">v0.9.27</span>
   </div>
 
   <div class="toolbar">
@@ -307,7 +307,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.26';
+const SIM_VERSION = '0.9.27';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -883,12 +883,20 @@ function targetArmorIdx(target) {
 // mass casualties bleed into. Types not listed default to 1 — they can't
 // fight a mass unit through this path, only through fantasy combat.
 const FIGHTING_STRENGTH = {
-  HERO: 4, SUPER_HERO: 8, TROLL: 6, GIANT: 12,
+  HERO: 4, SUPER_HERO: 8, WIZARD: 2, WRAITH: 2, LYCAN: 4, TROLL: 6,
+  BALROG: 2, GIANT: 12, ENT: 6, DRAGON: 4, ROC: 4, ELEMENTAL: 4, WIGHT: 1,
 };
-// Class used for synthetic mass figures when an individual fights mass. AF
-// (armored foot) is the closest single-hex equivalent for heroes / trolls
-// / giants in melee. Used for the mass-melee engine state.
-const FIGHTING_CLASS = 'AF';
+// Class used for the synthetic mass figures when an individual fights a mass
+// unit — each creature's "melee as N of class X" profile (fantasy supp. pp.30-37).
+// Defaults to AF (heroes, super-heroes, wizards, wraiths, lycanthropes).
+// Deferred approximations folded in here: Lycanthrope defends as HF; Giant
+// defends as AF with an extra die; Roc/Wight attack-vs-defend class split;
+// Elemental subtype (Air/Water = LH, Earth = HH, Fire = MH) collapsed to HH.
+const FANTASY_FIGHTING_CLASS = {
+  DRAGON: 'HH', BALROG: 'HH', ELEMENTAL: 'HH', ROC: 'LH', WIGHT: 'LH',
+  TROLL: 'HF', GIANT: 'HF',
+};
+const fightingClassFor = (type) => FANTASY_FIGHTING_CLASS[type] || 'AF';
 
 // Appendix E — 2d6 target threshold for fantasy combat. Roll < target =
 // no effect; roll == target = defender falls back one full move; roll >
@@ -1793,8 +1801,8 @@ function onResolveMelee() {
   // Dispatch by kind:
   //  · both mass → mass melee
   //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
-  //  · individual+mass: hero-class (has FIGHTING_STRENGTH) → mixed mass melee
-  //                     · other individual vs mass → deferred
+  //  · individual+mass: any type with a FIGHTING_STRENGTH profile → mixed mass melee
+  //                     · types with no melee profile → skipped
   if (a.kind === 'individual' && d.kind === 'individual') {
     if (MORTAL_TYPES.has(a.type) && MORTAL_TYPES.has(d.type)) return onResolveMtm(a, d);
     return onResolveFantasy(a, d);
@@ -1804,7 +1812,7 @@ function onResolveMelee() {
     if (FIGHTING_STRENGTH[ind.type]) return onResolveMixed(a, d);
     appendTurn(
       `Melee resolver — skipped`,
-      `<div class="step">${typeById(ind.type).name} (Special attack/defense per Appendix D) vs mass isn't wired yet. The "Special" types need bespoke rules per the fantasy supplement; a follow-up slice covers wizards, dragons, wights, etc. versus mass.</div>`
+      `<div class="step">${typeById(ind.type).name} has no mass-melee profile, so it can't engage a mass unit this way. Only types with a fighting-strength entry (heroes, wizards, dragons, wights, etc.) can.</div>`
     );
     return;
   }
@@ -2174,10 +2182,11 @@ function onResolveFantasy(a, d) {
   renderBoard();
 }
 
-// Mixed melee — one side is a hero-class individual (has FIGHTING_STRENGTH),
-// the other is a mass unit. The individual fights as N synthetic AF figures
-// through the mass-melee engine; casualties on the individual side bleed
-// into hp and may kill the individual when hp hits 0.
+// Mixed melee — one side is an individual with a FIGHTING_STRENGTH profile,
+// the other is a mass unit. The individual fights as N synthetic figures of
+// its profile class (fightingClassFor) through the mass-melee engine;
+// casualties on the individual side bleed into hp and may kill it at 0 hp.
+// Creatures in MELEE_IMMUNE_INDIV take no casualties back from normal troops.
 function onResolveMixed(a, d) {
   const aIsIndiv = a.kind === 'individual';
   const ind = aIsIndiv ? a : d;
@@ -2185,6 +2194,8 @@ function onResolveMixed(a, d) {
   const indT = typeById(ind.type), massT = typeById(mass.type);
   const edge = engagementEdge(a, d);
   const fs = FIGHTING_STRENGTH[ind.type] || 1;
+  const cls = fightingClassFor(ind.type);
+  const indImmune = MELEE_IMMUNE_INDIV.has(ind.type);
   const effFigures = Math.min(ind.hp, fs);  // synthetic count for the engine
   if (effFigures < 1) {
     appendTurn(`Mixed melee — skipped`,
@@ -2195,7 +2206,7 @@ function onResolveMixed(a, d) {
   // unit-level state (charged, fatigued, polearm) is honored.
   const proxy = {
     ...ind,
-    type: FIGHTING_CLASS, count: effFigures, startCount: effFigures,
+    type: cls, count: effFigures, startCount: effFigures,
     polearm: false, hedgehog: false, kind: 'mass',
   };
   // Run the mass melee with proxy in the same slot as the individual.
@@ -2209,13 +2220,19 @@ function onResolveMixed(a, d) {
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
+  // Casualties, with imperviousness applied: a creature immune to normal melee
+  // takes none back from the mass (it still deals its own).
+  let aCas = melee.attacker.casualties;
+  let dCas = melee.defender.casualties;
+  if (indImmune) { if (aIsIndiv) aCas = 0; else dCas = 0; }
+
   // Labels: each side gets a "name × count" or "name (as Nx{class}, hp X/Y)" prefix
   const attLabel = aIsIndiv
-    ? `<b style="color:var(--side-a-d)">A · ${indT.name}</b> (as ${effFigures}×${FIGHTING_CLASS}, hp ${ind.hp}/${ind.maxHp})`
+    ? `<b style="color:var(--side-a-d)">A · ${indT.name}</b> (as ${effFigures}×${cls}, hp ${ind.hp}/${ind.maxHp})`
     : `<b style="color:var(--side-a-d)">A · ${massT.name} × ${mass.count}</b>`;
   const defLabel = aIsIndiv
     ? `<b style="color:var(--side-b-d)">B · ${massT.name} × ${mass.count}</b>`
-    : `<b style="color:var(--side-b-d)">B · ${indT.name}</b> (as ${effFigures}×${FIGHTING_CLASS}, hp ${ind.hp}/${ind.maxHp})`;
+    : `<b style="color:var(--side-b-d)">B · ${indT.name}</b> (as ${effFigures}×${cls}, hp ${ind.hp}/${ind.maxHp})`;
   const aMods = [];
   if (melee.attacker.fatigueApplied)   aMods.push('fatigued (one class down)');
   if (melee.attacker.polearmApplied)   aMods.push('pike/halberd +1/man');
@@ -2235,12 +2252,11 @@ function onResolveMixed(a, d) {
           `${melee.defender.totalDice} dice (${melee.defender.dicePerMan.toFixed(2)}/man), kills on ${(melee.defender.killScores||[]).join(',') || '—'} → ` +
           `<b>${melee.defender.killsDealt}</b> kills ${diceTrace(melee.defender.dice, melee.defender.killScores||[])}` +
           (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
-  html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
+  html += `<div class="step">casualties — A: <b>${aCas}</b> · B: <b>${dCas}</b></div>`;
+  if (indImmune) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name} is impervious to normal weapons — the mass inflicts no casualties on it.</small></div>`;
 
   // Route casualties: attacker casualties go to a; defender casualties go to d.
   // The individual side uses hp; the mass side uses count (applyCasualties).
-  const aCas = melee.attacker.casualties;
-  const dCas = melee.defender.casualties;
   if (aIsIndiv) {
     // a = ind, d = mass
     ind.hp = Math.max(0, ind.hp - aCas);
@@ -2468,6 +2484,11 @@ function onIndivMissile(a, d) {
 // p.30). Types explicitly impervious to normal missile fire (Wraith, Balrog,
 // Ent, Dragon, Wight/Ghoul, Wizard, Elemental) are unharmed.
 const MISSILE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'WIGHT', 'WIZARD', 'ELEMENTAL']);
+// Impervious to *normal melee* too — mass troops inflict no casualties on them
+// (they still deal their own kills). Wizard and Wight are missile-immune only,
+// so they can be meleed normally. Magical weapons / fantastic combat (Appendix
+// E) and the Hero/Super-Hero dragon exception are deferred to later slices.
+const MELEE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'ELEMENTAL']);
 function indivArmorIdxToMassGroup(idx) {
   if (idx <= 1) return 'unarmored';     // none / leather
   if (idx <= 5) return 'half';          // shield, leather+sh, chain, chain+sh
@@ -2992,6 +3013,14 @@ renderBoard();
   console.assert(fcFall.outcome === 'fallback', 'Hero vs Troll rolling exactly 9 → fall back');
   const fcNone = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(1) });
   console.assert(fcNone.outcome === 'no_effect', 'Hero vs Troll rolling 2 → no effect');
+
+  // Fantasy-vs-mass melee profiles (Slice 6X).
+  console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('TROLL') === 'HF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, TROLL HF, HERO default AF');
+  console.assert(FIGHTING_STRENGTH.DRAGON === 4 && FIGHTING_STRENGTH.ENT === 6 && FIGHTING_STRENGTH.WIGHT === 1, 'fantasy fighting strengths wired');
+  console.assert(MELEE_IMMUNE_INDIV.has('DRAGON') && !MELEE_IMMUNE_INDIV.has('WIZARD') && !MELEE_IMMUNE_INDIV.has('TROLL'), 'melee immunity: dragon yes, wizard/troll no');
+  // Dragon fights as 4 Heavy Horse: HH vs HF = 3 dice/man, kills 5-6 → 4×3 = 12 dice; all-6 → 12 kills.
+  const dragVsMass = resolveMassMelee({ attacker:{ type:'HH', count:4 }, defender:{ type:'HF', count:20 }, rng: always(6) });
+  console.assert(dragVsMass.attacker.totalDice === 12 && dragVsMass.attacker.killsDealt === 12, 'dragon (4×HH) all-6 → 12 kills vs HF mass');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
