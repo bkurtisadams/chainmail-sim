@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.6.0 · Slice 6c: auto-move on rout / retreat / back N -->
+<!-- chainmail-board.html · v0.7.0 · Slice 6d: formation reshape via context menu -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.6.0</title>
+<title>Chainmail — Battlefield · v0.7.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -120,7 +120,7 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6c · auto-move on rout · retreat · back N</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6d · formation reshape · line · column · square · hedgehog</div>
   <hr>
 
   <div class="toolbar">
@@ -193,6 +193,10 @@
   <button data-act="restore">Restore unit (count + status + actions)</button>
   <button data-act="reset-actions">Reset actions (this round)</button>
   <button data-act="reset-status">Reset status (set to ready)</button>
+  <button data-act="reshape-line">Form line</button>
+  <button data-act="reshape-column">Form column</button>
+  <button data-act="reshape-square">Form square</button>
+  <button data-act="reshape-hedgehog">Form hedgehog</button>
   <button data-act="rotate-90">Rotate 90°</button>
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
@@ -222,7 +226,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.6.0';
+const SIM_VERSION = '0.7.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -823,6 +827,7 @@ function updateSidebar() {
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
+      `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
       `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
       (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '') +
       (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` : '');
@@ -1004,6 +1009,24 @@ function applyCasualties(unit, n) {
 // Routing also rotates facing so the unit's back is to the enemy (p.16).
 // Returns { distanceIn, faced } or null if no move applies.
 const STATUS_MOVES = { back1:1, back2:2, retreat:1, routing:1.5 };
+
+// Horse types — square is foot only; hedgehog is Swiss Pikemen with 10+ figs.
+const HORSE_TYPES = new Set(['LH', 'MH', 'HH', 'MK']);
+function canReshape(u, target) {
+  if (u.formation === target) return false;
+  if (target === 'square'   && HORSE_TYPES.has(u.type)) return false;
+  if (target === 'hedgehog' && (u.type !== 'SP' || u.count < 10)) return false;
+  return true;
+}
+function reshapeUnit(u, target) {
+  if (!canReshape(u, target)) return false;
+  const dims = formationDims(target, u.count);
+  u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
+  u.formation = target;
+  u.acted.moved = true; // formation change costs 1 move per p.10
+  return true;
+}
+
 function performAutoMove(loser, against, status) {
   const moves = STATUS_MOVES[status];
   if (!moves) return null;
@@ -1206,6 +1229,7 @@ function spawnUnit() {
     id: state.nextId++,
     side, type, count, startCount: count,
     cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
+    formation,
     spacing, weapon, polearm,
     acted: { moved: false, fired: false, fought: false },
     status: 'ready',
@@ -1225,7 +1249,12 @@ function onUnitContextMenu(evt, unitId) {
   if (!u || u.destroyed) return;
   state.ctxUnitId = unitId;
   const T = typeById(u.type);
-  $('#ctx-head').textContent = `${u.side} · ${T.name} × ${u.count}`;
+  $('#ctx-head').textContent = `${u.side} · ${T.name} × ${u.count} · ${u.formation || 'line'}`;
+  // Show only the reshape options that apply to this unit
+  document.querySelectorAll('#ctx-menu [data-act^="reshape-"]').forEach(b => {
+    const target = b.dataset.act.replace('reshape-', '');
+    b.hidden = !canReshape(u, target);
+  });
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -1247,12 +1276,15 @@ function onContextMenuAction(evt) {
     u.destroyed = false;
     u.status = 'ready';
     clearActed(u);
-    const dims = formationDims(u.hedgehog ? 'hedgehog' : (u.cols >= u.rows ? 'line' : 'column'), u.count);
-    u.cols = dims.cols; u.rows = dims.rows;
+    const dims = formationDims(u.formation || 'line', u.count);
+    u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
   } else if (act === 'reset-actions') {
     clearActed(u);
   } else if (act === 'reset-status') {
     u.status = 'ready';
+  } else if (act && act.startsWith('reshape-')) {
+    const target = act.replace('reshape-', '');
+    reshapeUnit(u, target);
   } else if (act === 'rotate-90') {
     u.facing = (u.facing + 90) % 360;
   } else if (act === 'delete') {
