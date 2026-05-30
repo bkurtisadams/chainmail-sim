@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.5 · Slice 6g.2: movement fatigue trigger (5 consecutive moves) -->
+<!-- chainmail-board.html · v0.9.6 · Slice 6h: charge declaration with impetus +1/die -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.5</title>
+<title>Chainmail — Battlefield · v0.9.6</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6g.2 · move-streak fatigue (5 consecutive turns)</div>
-    <span class="version-tag">v0.9.5</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6h · charge declaration · impetus +1/die</div>
+    <span class="version-tag">v0.9.6</span>
   </div>
 
   <div class="toolbar">
@@ -220,6 +220,8 @@
   <button data-act="restore">Restore unit (count + status + fatigue + actions)</button>
   <button data-act="reset-actions">Reset actions (this round)</button>
   <button data-act="reset-status">Reset status (set to ready)</button>
+  <button data-act="declare-charge">Declare charge (+1 die/man in melee)</button>
+  <button data-act="cancel-charge">Cancel charge</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -283,7 +285,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.5';
+const SIM_VERSION = '0.9.6';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -805,24 +807,39 @@ function renderUnit(u) {
   const fatigueOpacity = u.fatigued ? 0.85 : 1;
   const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity;
   const labelY = u.y + Math.max(b.w, b.h)/2 + 14;
+  let badgeRow = 0;
+  const chargeBadgeStr = u.charged
+    ? (() => {
+        const txt = 'CHARGE';
+        const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="var(--gold)" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#2c2316" text-anchor="middle" letter-spacing="1.4">${txt}</text>
+          </g>`;
+      })()
+    : '';
   const fatigueBadgeStr = u.fatigued
     ? (() => {
         const txt = 'FATIGUED';
         const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
         return `
-          <g transform="translate(${u.x} ${labelY + 14})" pointer-events="none">
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#8a6d3b" opacity="0.95"/>
             <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
                   fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${txt}</text>
           </g>`;
       })()
     : '';
-  const statusBadgeY = labelY + (u.fatigued ? 30 : 14);
   const statusBadgeStr = sv.text
     ? (() => {
         const tw = sv.text.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
         return `
-          <g transform="translate(${u.x} ${statusBadgeY})" pointer-events="none">
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="${sv.color}" opacity="0.95"/>
             <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
                   fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${sv.text}</text>
@@ -844,8 +861,9 @@ function renderUnit(u) {
             fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
         ${u.side} · ${T.name} · ${u.count}/${u.startCount}
       </text>
-      ${statusBadgeStr}
+      ${chargeBadgeStr}
       ${fatigueBadgeStr}
+      ${statusBadgeStr}
     </g>
   `;
 }
@@ -926,6 +944,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Type</span><span class="v">${T.name}</span></div>` +
       `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
+      (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
@@ -1222,17 +1241,26 @@ function onResolveMelee() {
 
   // Fatigue trigger (slice 6g, p.10-11): once a unit has been meleeing past
   // its threshold (3 rounds default, 6 for SP/Landsknechte), it becomes
-  // fatigued for this round and onward until rested.
+  // fatigued for this round and onward until rested. Triggers #2/#3 also
+  // fire here when charge + movement preconditions are met (slice 6h).
   if (state.settings.applyFatigue) {
+    const mult = (t) => (t === 'SP' ? 2 : 1);
+    // Rule #4: meleeing N rounds
     if (round > FATIGUE_THRESHOLD(a.type)) a.fatigued = true;
     if (round > FATIGUE_THRESHOLD(d.type)) d.fatigued = true;
+    // Rule #2: moving N consecutive turns, charging, then meleeing
+    if (a.charged && a.moveStreak >= 2 * mult(a.type)) a.fatigued = true;
+    if (d.charged && d.moveStreak >= 2 * mult(d.type)) d.fatigued = true;
+    // Rule #3: moving N turn(s), charging, then meleeing 2 rounds
+    if (a.charged && a.moveStreak >= 1 * mult(a.type) && round >= 2 * mult(a.type)) a.fatigued = true;
+    if (d.charged && d.moveStreak >= 1 * mult(d.type) && round >= 2 * mult(d.type)) d.fatigued = true;
   }
 
   // Build attacker/defender param objects for the engine
   const attackerParams = {
     type: a.type, count: a.count,
     polearm: !!a.polearm,
-    impetus: false,
+    impetus: !!a.charged,
     flank: edge === 'left' || edge === 'right',
     rear: edge === 'rear',
     fatigued: !!a.fatigued && state.settings.applyFatigue,
@@ -1240,7 +1268,7 @@ function onResolveMelee() {
   const defenderParams = {
     type: d.type, count: d.count,
     polearm: !!d.polearm,
-    impetus: false,
+    impetus: !!d.charged,
     standingHorseFirstRound: false,
     fatigued: !!d.fatigued && state.settings.applyFatigue,
   };
@@ -1444,6 +1472,7 @@ function spawnUnit() {
     status: 'ready',
     fatigued: false,
     moveStreak: 0,
+    charged: false,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1471,6 +1500,11 @@ function onUnitContextMenu(evt, unitId) {
   const fatigueOn = !!state.settings.applyFatigue;
   document.querySelector('#ctx-menu [data-act="mark-fatigued"]').hidden = !fatigueOn || !!u.fatigued;
   document.querySelector('#ctx-menu [data-act="clear-fatigue"]').hidden = !fatigueOn || !u.fatigued;
+  // Charge entries — only for impetus-capable classes (p.16); only the direction
+  // that makes sense given the current charged state.
+  const canCharge = IMPETUS_CLASSES.has(u.type);
+  document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged;
+  document.querySelector('#ctx-menu [data-act="cancel-charge"]').hidden = !canCharge || !u.charged;
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -1493,6 +1527,7 @@ function onContextMenuAction(evt) {
     u.status = 'ready';
     u.fatigued = false;
     u.moveStreak = 0;
+    u.charged = false;
     clearActed(u);
     const dims = formationDims(u.formation || 'line', u.count);
     u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
@@ -1504,6 +1539,10 @@ function onContextMenuAction(evt) {
     u.fatigued = true;
   } else if (act === 'clear-fatigue') {
     u.fatigued = false;
+  } else if (act === 'declare-charge') {
+    u.charged = true;
+  } else if (act === 'cancel-charge') {
+    u.charged = false;
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
     reshapeUnit(u, target);
@@ -1586,6 +1625,7 @@ function endRound() {
         if (u.fatigued) u.fatigued = false;
       }
     }
+    u.charged = false;
     clearActed(u);
   }
   renderTurnUI();
