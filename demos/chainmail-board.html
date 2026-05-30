@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.30 · fix: missile distance display is center-to-center (matches drag ruler); in-range test stays edge-to-edge per firing-rank rule (p.11) -->
+<!-- chainmail-board.html · v0.9.31 · Slice 6Z: rate-of-fire enforcement — once per turn baseline, held archers/longbows loose twice, heavy crossbow and arquebus every other turn (p.11) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.30</title>
+<title>Chainmail — Battlefield · v0.9.31</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · v0.9.30 · missile distance fix</div>
-    <span class="version-tag">v0.9.30</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6Z · rate of fire</div>
+    <span class="version-tag">v0.9.31</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.30';
+const SIM_VERSION = '0.9.31';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1525,7 +1525,8 @@ function updateSidebar() {
         : `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
           `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
           (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '')) +
-      (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` : '');
+      (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` +
+                  `<div class="stat"><span class="k">Shots</span><span class="v">${Math.max(0, missileShotsRemaining(u))} / ${missileShotsAllowed(u)}${(rangedWeaponById(u.weapon)?.halfRoF && missileShotsRemaining(u) <= 0) ? ' · reloading' : ''}</span></div>` : '');
   }
 }
 
@@ -1534,7 +1535,7 @@ function updateButtons() {
   const d = state.units.find(u => u.id === state.targetId);
   const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
   $('#btn-melee').disabled   = !(valid && inMeleeContact(a, d));
-  $('#btn-missile').disabled = !(valid && a.weapon && inMissileRange(a, d).ok);
+  $('#btn-missile').disabled = !(valid && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok);
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -2343,10 +2344,40 @@ const coverHalves = (lvl) => lvl === 'soft' || lvl === 'hard';      // mass: hal
 const coverDiceMinus = (lvl) => lvl === 'hard' ? 2 : lvl === 'soft' ? 1 : 0;  // individual: −dice
 const weaponIndirectAllowed = (id) => !!rangedWeaponById(id)?.indirectAllowed;
 
+// Rate of fire (p.11). Most weapons fire once per turn. Archers and longbows
+// that hold — neither moving nor meleed — may loose twice. Heavy crossbows and
+// arquebuses fire every other turn (one turn to reload), tracked via the turn
+// they last fired. The "moved over ½ → must beat the foe's die" nuance is
+// deferred (needs per-turn movement distance + an opposed roll).
+const TWICE_IF_HELD = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
+function missileShotsAllowed(u) {
+  if (!u.weapon) return 0;
+  const w = rangedWeaponById(u.weapon);
+  if (w && w.halfRoF) {
+    return (u.lastFiredTurn != null && (state.turn - u.lastFiredTurn) < 2) ? 0 : 1;
+  }
+  if (TWICE_IF_HELD.has(u.weapon) && !(u.acted?.moved) && !(u.acted?.fought)) return 2;
+  return 1;
+}
+const missileShotsRemaining = (u) => missileShotsAllowed(u) - (u.shotsThisTurn || 0);
+function markFired(u) {
+  u.acted.fired = true;
+  u.shotsThisTurn = (u.shotsThisTurn || 0) + 1;
+  u.lastFiredTurn = state.turn;
+}
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
+  if (missileShotsRemaining(a) <= 0) {
+    const aT = typeById(a.type), dT = typeById(d.type);
+    const w = rangedWeaponById(a.weapon);
+    const why = (w && w.halfRoF) ? 'reloading — fires every other turn' : 'already fired this turn';
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
+      `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${why}</div>`);
+    return;
+  }
   // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
   // mass shooters use the mass missile table (existing path).
   if (a.kind === 'individual') return onIndivMissile(a, d);
@@ -2377,7 +2408,7 @@ function onResolveMissile() {
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
-    a.acted.fired = true;
+    markFired(a);
     return;
   }
   res.groups.forEach((g, i) => {
@@ -2413,7 +2444,7 @@ function onResolveMissile() {
   }
 
   appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
-  a.acted.fired = true;
+  markFired(a);
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
 }
@@ -2501,7 +2532,7 @@ function onIndivMissile(a, d) {
     }
   }
   appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
-  a.acted.fired = true;
+  markFired(a);
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
 }
@@ -2532,7 +2563,7 @@ function onMassMissileAtIndiv(a, d) {
       `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
       `distance ${reach.distanceIn.toFixed(1)}″</div>` +
       `<div class="verdict v-noeffect">${dT.name} is impervious to normal missile fire</div>`);
-    a.acted.fired = true;
+    markFired(a);
     return;
   }
 
@@ -2559,7 +2590,7 @@ function onMassMissileAtIndiv(a, d) {
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
-    a.acted.fired = true;
+    markFired(a);
     return;
   }
   res.groups.forEach((g, i) => {
@@ -2587,7 +2618,7 @@ function onMassMissileAtIndiv(a, d) {
   }
 
   appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
-  a.acted.fired = true;
+  markFired(a);
   renderBoard();
 }
 
@@ -2689,6 +2720,7 @@ function spawnUnit() {
     side, kind, type,
     weapon,
     acted: { moved: false, fired: false, fought: false },
+    shotsThisTurn: 0, lastFiredTurn: null,
     status: 'ready',
     fatigued: false,
     moveStreak: 0,
@@ -2794,6 +2826,7 @@ function onContextMenuAction(evt) {
     u.indirect = false;
     u.cover = 'none';
     u.breathsUsed = 0;
+    u.lastFiredTurn = null;
     if (u.maxHp) u.hp = u.maxHp;
     clearActed(u);
     if (u.kind !== 'individual') {
@@ -2850,7 +2883,7 @@ function resetBoard() {
   renderBoard();
 }
 
-function clearActed(u) { u.acted = { moved: false, fired: false, fought: false }; }
+function clearActed(u) { u.acted = { moved: false, fired: false, fought: false }; u.shotsThisTurn = 0; }
 
 function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting]').forEach(el => {
@@ -3067,6 +3100,15 @@ renderBoard();
   const thrower = { kind:'individual', x:0, y:0, weapon:'javelin', indirect:false };
   console.assert(inMissileRange(thrower, { kind:'individual', x:inchesToPx(5), y:0 }).ok === true,  'javelin reaches a 5″ target');
   console.assert(inMissileRange(thrower, { kind:'individual', x:inchesToPx(9), y:0 }).ok === false, 'javelin cannot reach 9″');
+
+  // Rate of fire (Slice 6Z): held archers loose twice; moved → once;
+  // crossbows never double; heavy crossbow fires every other turn.
+  console.assert(missileShotsAllowed({ weapon:'longbow', acted:{ moved:false, fought:false }, shotsThisTurn:0 }) === 2, 'held longbow → 2 shots');
+  console.assert(missileShotsAllowed({ weapon:'longbow', acted:{ moved:true,  fought:false }, shotsThisTurn:0 }) === 1, 'moved longbow → 1 shot');
+  console.assert(missileShotsAllowed({ weapon:'longbow', acted:{ moved:false, fought:true  }, shotsThisTurn:0 }) === 1, 'meleed longbow → 1 shot');
+  console.assert(missileShotsAllowed({ weapon:'light_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0 }) === 1, 'crossbow never doubles');
+  console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn:null }) === 1, 'heavy crossbow fires when reloaded');
+  console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn: state.turn }) === 0, 'heavy crossbow reloading → 0 shots');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
