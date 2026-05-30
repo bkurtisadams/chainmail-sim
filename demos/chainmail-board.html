@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.9 · Slice 6k: prisoners step on surrender (p.17) -->
+<!-- chainmail-board.html · v0.9.10 · Slice 6k.1: clamp displacement to unit visual extent -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.9</title>
+<title>Chainmail — Battlefield · v0.9.10</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6k · prisoners step on surrender (p.17)</div>
-    <span class="version-tag">v0.9.9</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6k.1 · displacement clamp respects unit visual extent</div>
+    <span class="version-tag">v0.9.10</span>
   </div>
 
   <div class="toolbar">
@@ -288,7 +288,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.9';
+const SIM_VERSION = '0.9.10';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1297,8 +1297,13 @@ function performAutoMove(loser, against, status) {
     dx /= mag; dy /= mag;
   }
   const totalPx = inches * PX_PER_INCH;
-  loser.x = Math.max(20, Math.min(BOARD_W - 20, loser.x + dx * totalPx));
-  loser.y = Math.max(20, Math.min(BOARD_H - 20, loser.y + dy * totalPx));
+  // Clamp using the unit's actual visual extent, not just the anchor point.
+  // Worst case: unit rotated so its long axis aligns with the wall — use
+  // max(w,h)/2 as the safe half-extent. Adds a 6px breathing margin.
+  const ub = unitBounds(loser);
+  const margin = Math.max(ub.w, ub.h) / 2 + 6;
+  loser.x = Math.max(margin, Math.min(BOARD_W - margin, loser.x + dx * totalPx));
+  loser.y = Math.max(margin, Math.min(BOARD_H - margin, loser.y + dy * totalPx));
   let faced = null;
   if (status === 'routing' || status === 'rallying') {
     // Rotate so loser faces in the direction of motion (away from enemy)
