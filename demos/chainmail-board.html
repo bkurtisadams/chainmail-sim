@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.21 · Slice 6S: rear-rank pips lightened for front/back legibility -->
+<!-- chainmail-board.html · v0.9.22 · Slice 6U: dragon breath weapon (truncated-cone AOE, p.34) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.21</title>
+<title>Chainmail — Battlefield · v0.9.22</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6S · rear-rank pip contrast</div>
-    <span class="version-tag">v0.9.21</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6U · dragon breath weapon</div>
+    <span class="version-tag">v0.9.22</span>
   </div>
 
   <div class="toolbar">
@@ -238,6 +238,7 @@
   <button data-act="cancel-charge">Cancel charge</button>
   <button data-act="toggle-indirect">Indirect fire</button>
   <button data-act="cycle-cover">Cover</button>
+  <button data-act="breathe">Breathe fire (9″ cone)</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -305,7 +306,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.21';
+const SIM_VERSION = '0.9.22';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1065,6 +1066,44 @@ function inMissileRange(firer, target) {
   return { ok:true, distanceIn: distIn, indirect };
 }
 
+/* --- Dragon breath cone (p.34) --- truncated cone, ½″ dia at the mouth,
+   3″ dia at the far end, 9″ overall. Half-width grows linearly along the axis.
+   Geometry is pure/testable; the breath projects along the dragon→aim vector. */
+const DRAGON_BREATH_LEN_IN = 9;
+function dragonBreathHalfWidthIn(rIn) {
+  const t = Math.max(0, Math.min(1, rIn / DRAGON_BREATH_LEN_IN));
+  return 0.25 + t * (1.5 - 0.25); // mouth radius ¼″ → far radius 1½″
+}
+// Is world point (ptX,ptY) inside the cone fired from (ox,oy) along unit dir (dx,dy)?
+function pointInBreathCone(ox, oy, dx, dy, ptX, ptY) {
+  const alongPx = (ptX - ox) * dx + (ptY - oy) * dy;       // projection onto axis
+  if (alongPx < 0) return { hit: false };
+  const rIn = pxToInches(alongPx);
+  if (rIn > DRAGON_BREATH_LEN_IN) return { hit: false };
+  const perpPx = Math.abs((ptX - ox) * (-dy) + (ptY - oy) * dx);
+  return { hit: perpPx <= inchesToPx(dragonBreathHalfWidthIn(rIn)), rIn };
+}
+// World-space centers of every placed figure in a mass unit (honors facing).
+function massFigureCenters(u) {
+  const { w, h, pip, gap, pad } = unitBounds(u);
+  const f = u.facing * Math.PI / 180, cos = Math.cos(f), sin = Math.sin(f);
+  const out = []; let placed = 0;
+  for (let r = 0; r < u.rows; r++) {
+    for (let c = 0; c < u.cols; c++) {
+      if (placed >= u.count) break;
+      const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+      const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+      out.push({ x: u.x + lx * cos - ly * sin, y: u.y + lx * sin + ly * cos });
+      placed++;
+    }
+  }
+  return out;
+}
+// Dragon fire kills anything it touches except another Dragon, Super Hero, or
+// Wizard, who save on 2d6 ≥ 7. (Earth/Fire elementals are also immune, but the
+// sim's ELEMENTAL type carries no subtype, so it's given the same 7+ save.)
+const DRAGON_FIRE_SAVE_TYPES = new Set(['DRAGON', 'SUPER_HERO', 'WIZARD', 'ELEMENTAL']);
+
 /* === F. RENDER ========================================================= */
 const $ = (sel) => document.querySelector(sel);
 function fillSelect(id, items, render, value) {
@@ -1119,7 +1158,7 @@ function renderBoard() {
     renderBg() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -1373,6 +1412,26 @@ function renderOverlay() {
   return '';
 }
 
+// Breath cone aiming preview — shown when the selected unit is a Dragon and an
+// enemy target is set; draws the ½″→3″ × 9″ cone along the dragon→target line.
+function renderBreathPreview() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  if (!a || !d || a.destroyed || d.destroyed) return '';
+  if (a.type !== 'DRAGON' || a.side === d.side) return '';
+  const vx = d.x - a.x, vy = d.y - a.y, len = Math.hypot(vx, vy) || 1;
+  const ux = vx / len, uy = vy / len;
+  const P = (rIn, side) => {
+    const rPx = inchesToPx(rIn), hw = inchesToPx(dragonBreathHalfWidthIn(rIn)) * side;
+    return `${a.x + ux * rPx - uy * hw},${a.y + uy * rPx + ux * hw}`;
+  };
+  const pts = [P(0, 1), P(DRAGON_BREATH_LEN_IN, 1), P(DRAGON_BREATH_LEN_IN, -1), P(0, -1)].join(' ');
+  const depleted = (a.breathsUsed || 0) >= 3;
+  const fill = depleted ? 'rgba(110,96,71,0.10)' : 'rgba(176,57,44,0.18)';
+  const stroke = depleted ? 'rgba(110,96,71,0.5)' : 'rgba(176,57,44,0.75)';
+  return `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1" stroke-dasharray="4 3" pointer-events="none"/>`;
+}
+
 function renderDragRuler() {
   if (!state.dragging) return '';
   const u = state.units.find(u => u.id === state.dragging.unitId);
@@ -1421,6 +1480,7 @@ function updateSidebar() {
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
       (u.indirect ? `<div class="stat"><span class="k">Indirect fire</span><span class="v" style="color:#8a6d3b">ON · range −⅓, +1 armor cat</span></div>` : '') +
       (u.cover && u.cover !== 'none' ? `<div class="stat"><span class="k">Cover</span><span class="v" style="color:#8a6d3b">${u.cover.toUpperCase()}</span></div>` : '') +
+      (u.type === 'DRAGON' ? `<div class="stat"><span class="k">Breath</span><span class="v" style="color:#8a6d3b">${3-(u.breathsUsed||0)}/3 left${(u.breathsUsed||0)>=3?' · must rekindle':''}</span></div>` : '') +
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
@@ -2469,6 +2529,95 @@ function onMassMissileAtIndiv(a, d) {
   a.acted.fired = true;
   renderBoard();
 }
+
+// Dragon breath (p.34). Source must be a DRAGON; the cone projects along the
+// dragon→target vector. Every figure of the target unit under the cone dies,
+// except Dragon/Super Hero/Wizard/Elemental, who save on 2d6 ≥ 7. Three breaths
+// then the dragon must spend a stationary turn to rekindle (handled in endRound).
+function onResolveDragonBreath(dragon) {
+  if (!dragon || dragon.type !== 'DRAGON' || dragon.destroyed) return;
+  const used = dragon.breathsUsed || 0;
+  if (used >= 3) {
+    appendTurn(`Dragon breath — depleted`,
+      `<div class="step">${typeById(dragon.type).name} has breathed 3× — it must land and remain stationary for one turn to rekindle (end a round without moving it).</div>`);
+    return;
+  }
+  const d = state.units.find(u => u.id === state.targetId);
+  if (!d || d.destroyed || d.id === dragon.id) {
+    appendTurn(`Dragon breath — no target`,
+      `<div class="step">Set an enemy target first (shift-click), then breathe.</div>`);
+    return;
+  }
+  if (d.side === dragon.side) {
+    appendTurn(`Dragon breath — friendly target`,
+      `<div class="step">Target is on the same side.</div>`);
+    return;
+  }
+  const dragT = typeById(dragon.type), dT = typeById(d.type);
+  const vx = d.x - dragon.x, vy = d.y - dragon.y;
+  const len = Math.hypot(vx, vy) || 1;
+  const ux = vx / len, uy = vy / len;
+
+  let html = `<div class="step">${dragT.name} (${dragon.side}) breathes fire — ½″→3″ cone, ${DRAGON_BREATH_LEN_IN}″ long, aimed at ${d.side} · ${dT.name} (${(len/PX_PER_INCH).toFixed(1)}″ away)</div>`;
+
+  if (d.kind === 'individual') {
+    const r = pointInBreathCone(dragon.x, dragon.y, ux, uy, d.x, d.y);
+    if (!r.hit) {
+      html += `<div class="verdict v-noeffect">target not under the cone</div>`;
+    } else if (DRAGON_FIRE_SAVE_TYPES.has(d.type)) {
+      const dice = roll2d6(state.rng);
+      const saved = dice.sum >= 7;
+      html += `<div class="step">${dT.name} is touched — save 2d6 = ${dice.a}+${dice.b} = <b>${dice.sum}</b> (needs 7+)</div>`;
+      if (saved) {
+        html += `<div class="verdict v-stable">${dT.name} saves — no effect</div>`;
+      } else {
+        html += `<div class="verdict v-rout">${dT.name} → incinerated</div>`;
+        d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
+        cleanupEngagementsForUnit(d.id);
+        if (d.id === state.targetId) state.targetId = null;
+      }
+    } else {
+      html += `<div class="verdict v-rout">${dT.name} → incinerated (dragon fire kills any opponent it touches)</div>`;
+      d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    }
+  } else {
+    const centers = massFigureCenters(d);
+    let hits = 0;
+    for (const c of centers) if (pointInBreathCone(dragon.x, dragon.y, ux, uy, c.x, c.y).hit) hits++;
+    html += `<div class="step">${hits} of ${d.count} figure${hits === 1 ? '' : 's'} under the cone → <b>${hits}</b> killed</div>`;
+    applyCasualties(d, hits);
+    if (hits > 0 && !d.destroyed) {
+      const cas = d.startCount - d.count;
+      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
+        fatigued: !!d.fatigued && state.settings.applyFatigue });
+      if (lr.triggered) {
+        const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+                `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+        html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
+        if (!lr.passed) d.destroyed = true;
+      } else {
+        html += `<div class="verdict v-killed">${hits} killed</div>`;
+      }
+    } else if (hits === 0) {
+      html += `<div class="verdict v-noeffect">no figures under the cone</div>`;
+    } else {
+      html += `<div class="verdict v-rout">${dT.name} wiped out</div>`;
+    }
+    if (d.destroyed && d.id === state.targetId) state.targetId = null;
+  }
+
+  dragon.breathsUsed = used + 1;
+  dragon.acted.fired = true;
+  const remaining = 3 - dragon.breathsUsed;
+  html += `<div class="step" style="color:var(--ink-soft)">breath ${dragon.breathsUsed}/3${remaining <= 0 ? ' — must rekindle (stationary turn)' : ` · ${remaining} left`}</div>`;
+  appendTurn(`Dragon breath · ${dragT.name} (${dragon.side}) → ${dT.name}`, html);
+  renderBoard();
+}
+
 function spawnUnit() {
   const side = $('#f-side').value;
   const kind = $('#f-kind').value;
@@ -2486,6 +2635,7 @@ function spawnUnit() {
     prisoners: 0,
     indirect: false,
     cover: 'none',
+    breathsUsed: 0,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,
@@ -2549,6 +2699,13 @@ function onUnitContextMenu(evt, unitId) {
   // Cover — any unit can be a target behind cover. Label cycles none→soft→hard.
   const coverBtn = document.querySelector('#ctx-menu [data-act="cycle-cover"]');
   coverBtn.textContent = `Cover: ${u.cover || 'none'} (tap to cycle)`;
+  // Breathe fire — dragons only; label shows remaining breaths.
+  const breatheBtn = document.querySelector('#ctx-menu [data-act="breathe"]');
+  breatheBtn.hidden = u.type !== 'DRAGON';
+  if (u.type === 'DRAGON') {
+    const left = 3 - (u.breathsUsed || 0);
+    breatheBtn.textContent = left > 0 ? `Breathe fire (9″ cone · ${left} left)` : `Breathe fire — must rekindle`;
+  }
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -2575,6 +2732,7 @@ function onContextMenuAction(evt) {
     u.prisoners = 0;
     u.indirect = false;
     u.cover = 'none';
+    u.breathsUsed = 0;
     if (u.maxHp) u.hp = u.maxHp;
     clearActed(u);
     if (u.kind !== 'individual') {
@@ -2598,6 +2756,10 @@ function onContextMenuAction(evt) {
   } else if (act === 'cycle-cover') {
     const i = COVER_ORDER.indexOf(u.cover || 'none');
     u.cover = COVER_ORDER[(i + 1) % COVER_ORDER.length];
+  } else if (act === 'breathe') {
+    closeContextMenu();
+    onResolveDragonBreath(u);
+    return;
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
     reshapeUnit(u, target);
@@ -2697,6 +2859,8 @@ function endRound() {
       }
     }
     u.charged = false;
+    // Dragon rekindles its fire after a stationary turn (p.34).
+    if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
     clearActed(u);
   }
   renderTurnUI();
@@ -2759,6 +2923,14 @@ renderBoard();
   // Class bump
   console.assert(effectiveAttackerClass('HF', { flank:true }) === 'AF', 'HF flank → AF');
   console.assert(classBumpsToBonus('HH', { rear:true }) === true, 'HH rear → +1/die bonus');
+  // Dragon breath cone geometry (origin 0,0 firing +x)
+  console.assert(dragonBreathHalfWidthIn(0) === 0.25, 'breath mouth half-width ¼″');
+  console.assert(dragonBreathHalfWidthIn(9) === 1.5, 'breath far half-width 1½″');
+  console.assert(pointInBreathCone(0,0,1,0, inchesToPx(5), 0).hit === true, 'on-axis at 5″ is hit');
+  console.assert(pointInBreathCone(0,0,1,0, inchesToPx(12), 0).hit === false, 'beyond 9″ is a miss');
+  console.assert(pointInBreathCone(0,0,1,0, -inchesToPx(2), 0).hit === false, 'behind the mouth is a miss');
+  console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.4)).hit === true, 'within far half-width is hit');
+  console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.6)).hit === false, 'outside far half-width is a miss');
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
