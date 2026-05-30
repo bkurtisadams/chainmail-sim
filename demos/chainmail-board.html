@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.34 · Slice 7B: asymmetric attack/defend classes + Giant bonus die — Giant HF/AF+die, Lycan AF/HF, Roc & Wight LH/HH (fantasy supp.); resolveMassMelee gains optional defendType + bonusDice -->
+<!-- chainmail-board.html · v0.9.35 · Slice 7C: figure size tiers (tiny/small/man/large/huge per fantasy supp. scale table); individual footprint scales with size, man unchanged -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.34</title>
+<title>Chainmail — Battlefield · v0.9.35</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7B · asymmetric classes</div>
-    <span class="version-tag">v0.9.34</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7C · figure size tiers</div>
+    <span class="version-tag">v0.9.35</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.34';
+const SIM_VERSION = '0.9.35';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -431,6 +431,27 @@ const FANTASTIC_TYPES = Object.freeze([
   { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
 ]);
 const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
+
+// Figure size tiers (fantasy supp. scale table). Drives an individual's
+// footprint. tiny = hobbits/sprites; small = dwarves/gnomes/goblins/kobolds;
+// man = men/elves/orcs and the "man-sized" creatures (heroes, super-heroes,
+// wizards, wraiths, wights/ghouls, lycanthropes); large = balrogs/ogres/trolls;
+// huge = djinn/dragons/efreet/elementals/ents/giants/rocs. Scale is relative to
+// a man, so a man-sized type renders exactly as before (footprint unchanged).
+const SIZES = {
+  tiny:  { label: 'tiny',  scale: 0.45 },
+  small: { label: 'small', scale: 0.70 },
+  man:   { label: 'man',   scale: 1.00 },
+  large: { label: 'large', scale: 1.45 },
+  huge:  { label: 'huge',  scale: 1.90 },
+};
+const SIZE_BY_TYPE = {
+  HERO: 'man', SUPER_HERO: 'man', WIZARD: 'man', WRAITH: 'man', WIGHT: 'man', LYCAN: 'man',
+  TROLL: 'large', BALROG: 'large',
+  GIANT: 'huge', DRAGON: 'huge', ELEMENTAL: 'huge', ENT: 'huge', ROC: 'huge',
+};
+const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
+const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
 
 // Missile weapon ranges (p.11)
 const WEAPON_RANGES = {
@@ -1040,7 +1061,7 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function unitBounds(u) {
   // Individual unit: single pip sized to fit one grid cell (24×24 = 1″).
   if (u.kind === 'individual') {
-    const pip = 20, gap = 0, pad = 2;
+    const pip = Math.round(20 * sizeScale(u.type)), gap = 0, pad = 2;
     const w = pip + 2 * pad, h = pip + 2 * pad;
     return { w, h, pip, gap, pad };
   }
@@ -1555,6 +1576,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       (isIndiv
         ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
+          `<div class="stat"><span class="k">Size</span><span class="v">${sizeOf(u.type)}</span></div>` +
           (u.maxHp > 1 ? `<div class="stat"><span class="k">HP / strength</span><span class="v">${u.hp} / ${u.maxHp}</span></div>` : '') +
           (u.meleeWeapon ? `<div class="stat"><span class="k">Melee wpn</span><span class="v">${(mtmWeaponById(u.meleeWeapon)||{name:u.meleeWeapon}).name} · cls ${(mtmWeaponById(u.meleeWeapon)||{cls:'?'}).cls}</span></div>` : '') +
           (u.armor ? `<div class="stat"><span class="k">Armor</span><span class="v">${(ARMOR_MTM.find(a=>a.id===u.armor)||{label:u.armor}).label}</span></div>` : '') +
@@ -3191,6 +3213,14 @@ renderBoard();
   // Bonus die adds to the attacker's total roll.
   const withBonus = resolveMassMelee({ attacker:{ type:'HF', count:10, bonusDice:1 }, defender:{ type:'HF', count:20 }, rng: always(6) });
   console.assert(withBonus.attacker.totalDice === 11 && withBonus.attacker.killsDealt === 11, 'bonus die: HF×10 +1 → 11 dice/kills');
+
+  // Figure size tiers (Slice 7C): footprint scales with size; man unchanged.
+  console.assert(sizeOf('DRAGON') === 'huge' && sizeOf('GIANT') === 'huge' && sizeOf('ROC') === 'huge', 'dragons/giants/rocs huge');
+  console.assert(sizeOf('TROLL') === 'large' && sizeOf('BALROG') === 'large', 'trolls/balrogs large');
+  console.assert(sizeOf('HERO') === 'man' && sizeOf('WIGHT') === 'man' && sizeOf('LYCAN') === 'man', 'heroes/wights/lycanthropes man-sized');
+  console.assert(unitBounds({ kind:'individual', type:'HERO' }).pip === 20, 'man footprint unchanged (pip 20)');
+  console.assert(unitBounds({ kind:'individual', type:'DRAGON' }).pip > unitBounds({ kind:'individual', type:'HERO' }).pip, 'huge footprint larger than man');
+  console.assert(unitBounds({ kind:'individual', type:'GOBLIN' }).pip === 20, 'unknown type defaults to man-size');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
