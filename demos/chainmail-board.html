@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.4 · Slice 6g.1: manual fatigue toggle on context menu -->
+<!-- chainmail-board.html · v0.9.5 · Slice 6g.2: movement fatigue trigger (5 consecutive moves) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.4</title>
+<title>Chainmail — Battlefield · v0.9.5</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6g.1 · manual fatigue toggle</div>
-    <span class="version-tag">v0.9.4</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6g.2 · move-streak fatigue (5 consecutive turns)</div>
+    <span class="version-tag">v0.9.5</span>
   </div>
 
   <div class="toolbar">
@@ -283,7 +283,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.4';
+const SIM_VERSION = '0.9.5';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -339,6 +339,7 @@ const CLASS_UP   = { LF:'HF', HF:'AF', LH:'MH', MH:'HH' };
 const CLASS_DOWN = { HH:'MH', MH:'LH', LH:'AF' };
 const FATIGUE_DOWN = { AF:'HF', HF:'LF', MH:'LH', HH:'MH' };
 const FATIGUE_THRESHOLD = (type) => (type === 'SP' ? 6 : 3);
+const MOVE_FATIGUE_THRESHOLD = (type) => (type === 'SP' ? 10 : 5);
 
 const REACTION_BANDS = Object.freeze([
   { max:19,       tag:'continues', text:'melee continues' },
@@ -926,6 +927,9 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
+      (state.settings.applyFatigue && (u.moveStreak || 0) > 0
+        ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
+        : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
@@ -1439,6 +1443,7 @@ function spawnUnit() {
     acted: { moved: false, fired: false, fought: false },
     status: 'ready',
     fatigued: false,
+    moveStreak: 0,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1487,6 +1492,7 @@ function onContextMenuAction(evt) {
     u.destroyed = false;
     u.status = 'ready';
     u.fatigued = false;
+    u.moveStreak = 0;
     clearActed(u);
     const dims = formationDims(u.formation || 'line', u.count);
     u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
@@ -1570,8 +1576,15 @@ function endRound() {
   state.turn += 1;
   state.activeSide = 'A';
   for (const u of state.units) {
-    if (u.fatigued && !u.acted.moved && state.settings.applyFatigue) {
-      u.fatigued = false;
+    if (state.settings.applyFatigue) {
+      if (u.acted.moved) {
+        u.moveStreak = (u.moveStreak || 0) + 1;
+        if (u.moveStreak >= MOVE_FATIGUE_THRESHOLD(u.type)) u.fatigued = true;
+      } else {
+        // Non-movement turn: streak resets AND fatigue clears (p.10 recovery)
+        u.moveStreak = 0;
+        if (u.fatigued) u.fatigued = false;
+      }
     }
     clearActed(u);
   }
