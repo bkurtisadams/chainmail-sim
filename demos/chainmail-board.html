@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.15 · Slice 6N: individual missile fire (Appendix B bottom) -->
+<!-- chainmail-board.html · v0.9.16 · Slice 6O: fantasy resolver (FANTASY_TARGETS matrix + mixed melee + hp) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.15</title>
+<title>Chainmail — Battlefield · v0.9.16</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -145,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6N · individual missile fire (hero w/ bow, etc.)</div>
-    <span class="version-tag">v0.9.15</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6O · fantasy resolver (FANTASY_TARGETS · mixed melee · hp)</div>
+    <span class="version-tag">v0.9.16</span>
   </div>
 
   <div class="toolbar">
@@ -300,7 +300,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.15';
+const SIM_VERSION = '0.9.16';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -870,6 +870,70 @@ function targetArmorIdx(target) {
   return MASS_TO_INDIV_ARMOR_IDX[target.type] ?? 4;
 }
 
+/* === F. FANTASY COMBAT (Appendix E matrix + Appendix D fighting strength) === */
+// Per-type "fighting strength" in mass combat. These are the N figures the
+// individual fights as when engaging a mass unit, and also the hp pool that
+// mass casualties bleed into. Types not listed default to 1 — they can't
+// fight a mass unit through this path, only through fantasy combat.
+const FIGHTING_STRENGTH = {
+  HERO: 4, SUPER_HERO: 8, TROLL: 6, GIANT: 12,
+};
+// Class used for synthetic mass figures when an individual fights mass. AF
+// (armored foot) is the closest single-hex equivalent for heroes / trolls
+// / giants in melee. Used for the mass-melee engine state.
+const FIGHTING_CLASS = 'AF';
+
+// Appendix E — 2d6 target threshold for fantasy combat. Roll < target =
+// no effect; roll == target = defender falls back one full move; roll >
+// target = defender killed. Rows are attackers, columns are defenders.
+const FANTASY_TARGETS = Object.freeze({
+  BALROG:     { BALROG:7,  DRAGON:11, ELEMENTAL:11, ENT:8,  GIANT:8,  HERO:4, LYCAN:6, ROC:1,  SUPER_HERO:7,  TROLL:6,  WIGHT:4,  WIZARD:8,  WRAITH:11 },
+  DRAGON:     { BALROG:6,  DRAGON:8,  ELEMENTAL:10, ENT:6,  GIANT:9,  HERO:5, LYCAN:4, ROC:8,  SUPER_HERO:8,  TROLL:5,  WIGHT:2,  WIZARD:10, WRAITH:7  },
+  ELEMENTAL:  { BALROG:10, DRAGON:10, ELEMENTAL:11, ENT:7,  GIANT:9,  HERO:4, LYCAN:7, ROC:7,  SUPER_HERO:7,  TROLL:7,  WIGHT:2,  WIZARD:8,  WRAITH:10 },
+  ENT:        { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:7,  GIANT:8,  HERO:4, LYCAN:4, ROC:11, SUPER_HERO:7,  TROLL:7,  WIGHT:3,  WIZARD:10, WRAITH:10 },
+  GIANT:      { BALROG:9,  DRAGON:9,  ELEMENTAL:10, ENT:7,  GIANT:9,  HERO:6, LYCAN:5, ROC:6,  SUPER_HERO:9,  TROLL:6,  WIGHT:4,  WIZARD:11, WRAITH:12 },
+  HERO:       { BALROG:11, DRAGON:12, ELEMENTAL:12, ENT:12, GIANT:11, HERO:7, LYCAN:8, ROC:10, SUPER_HERO:10, TROLL:9,  WIGHT:6,  WIZARD:11, WRAITH:11 },
+  LYCAN:      { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:7,  GIANT:9,  HERO:7, LYCAN:7, ROC:7,  SUPER_HERO:7,  TROLL:7,  WIGHT:7,  WIZARD:7,  WRAITH:12 },
+  ROC:        { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:8,  GIANT:10, HERO:5, LYCAN:6, ROC:9,  SUPER_HERO:8,  TROLL:6,  WIGHT:5,  WIZARD:10, WRAITH:9  },
+  SUPER_HERO: { BALROG:9,  DRAGON:10, ELEMENTAL:11, ENT:9,  GIANT:7,  HERO:5, LYCAN:6, ROC:8,  SUPER_HERO:8,  TROLL:7,  WIGHT:4,  WIZARD:11, WRAITH:11 },
+  TROLL:      { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:10, GIANT:9,  HERO:8, LYCAN:9, ROC:11, SUPER_HERO:7,  TROLL:10, WIGHT:11, WIZARD:11, WRAITH:12 },
+  WIGHT:      { BALROG:12, DRAGON:12, ELEMENTAL:12, ENT:11, GIANT:12, HERO:8, LYCAN:9, ROC:12, SUPER_HERO:12, TROLL:10, WIGHT:8,  WIZARD:10, WRAITH:11 },
+  WIZARD:     { BALROG:7,  DRAGON:9,  ELEMENTAL:6,  ENT:10, GIANT:11, HERO:8, LYCAN:7, ROC:9,  SUPER_HERO:10, TROLL:8,  WIGHT:6,  WIZARD:10, WRAITH:5  },
+  WRAITH:     { BALROG:10, DRAGON:12, ELEMENTAL:12, ENT:12, GIANT:8,  HERO:9, LYCAN:10,ROC:10, SUPER_HERO:9,  TROLL:11, WIGHT:7,  WIZARD:5,  WRAITH:7  },
+});
+// Magic-user tiers (p.30) — Wizard attacker dice get mod; Wizard defender
+// threshold gets mod. Default tier is 'WIZARD' (mod 0). Magic-tier selector
+// is queued as polish.
+const MAGIC_TIERS = Object.freeze({
+  WIZARD: 0, SORCERER: -1, WARLOCK: -2, MAGICIAN: -3, SEER: -4,
+});
+
+// Mortals — both sides being one of these routes through the mtm resolver
+// instead of fantasy combat. Anything outside this set forces fantasy combat.
+const MORTAL_TYPES = new Set(['HERO', 'SUPER_HERO']);
+
+function fantasyTarget(attackerType, defenderType) {
+  const row = FANTASY_TARGETS[attackerType];
+  if (!row) return null;
+  return row[defenderType];
+}
+function resolveFantasyCombat({ attacker, defender, rng, attackerTier, defenderTier }) {
+  const baseTarget = fantasyTarget(attacker.type, defender.type);
+  if (baseTarget == null) return { ok:false, reason:`no fantasy entry for ${attacker.type} vs ${defender.type}` };
+  let target = baseTarget;
+  // Wizard target adjustments — column has @ when defender is magic-user
+  if (defender.type === 'WIZARD') target += (defenderTier ?? 0);
+  const dice = roll2d6(rng);
+  let total = dice.sum;
+  // Wizard attacker dice adjustment
+  if (attacker.type === 'WIZARD') total += (attackerTier ?? 0);
+  let outcome;
+  if (total > target)      outcome = 'killed';
+  else if (total === target) outcome = 'fallback';
+  else                     outcome = 'no_effect';
+  return { ok:true, target, baseTarget, dice, total, outcome };
+}
+
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
   const n = Math.ceil(count / maxGroup);
@@ -1339,6 +1403,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       (isIndiv
         ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
+          (u.maxHp > 1 ? `<div class="stat"><span class="k">HP / strength</span><span class="v">${u.hp} / ${u.maxHp}</span></div>` : '') +
           (u.meleeWeapon ? `<div class="stat"><span class="k">Melee wpn</span><span class="v">${(mtmWeaponById(u.meleeWeapon)||{name:u.meleeWeapon}).name} · cls ${(mtmWeaponById(u.meleeWeapon)||{cls:'?'}).cls}</span></div>` : '') +
           (u.armor ? `<div class="stat"><span class="k">Armor</span><span class="v">${(ARMOR_MTM.find(a=>a.id===u.armor)||{label:u.armor}).label}</span></div>` : '') +
           (u.mounted ? `<div class="stat"><span class="k">Mounted</span><span class="v">yes</span></div>` : '')
@@ -1629,13 +1694,21 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
-  // Dispatch by kind. Both mass → mass-melee. Both individual → man-to-man.
-  // Mixed (individual + mass) → defer to fantasy resolver slice.
-  if (a.kind === 'individual' && d.kind === 'individual') return onResolveMtm(a, d);
+  // Dispatch by kind:
+  //  · both mass → mass melee
+  //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
+  //  · individual+mass: hero-class (has FIGHTING_STRENGTH) → mixed mass melee
+  //                     · other individual vs mass → deferred
+  if (a.kind === 'individual' && d.kind === 'individual') {
+    if (MORTAL_TYPES.has(a.type) && MORTAL_TYPES.has(d.type)) return onResolveMtm(a, d);
+    return onResolveFantasy(a, d);
+  }
   if (a.kind === 'individual' || d.kind === 'individual') {
+    const ind = a.kind === 'individual' ? a : d;
+    if (FIGHTING_STRENGTH[ind.type]) return onResolveMixed(a, d);
     appendTurn(
       `Melee resolver — skipped`,
-      `<div class="step">Individual vs mass not yet wired. Hero-vs-mass (with the 4-figure "fighting strength" rule) lands in the fantasy resolver slice.</div>`
+      `<div class="step">${typeById(ind.type).name} (Special attack/defense per Appendix D) vs mass isn't wired yet. The "Special" types need bespoke rules per the fantasy supplement; a follow-up slice covers wizards, dragons, wights, etc. versus mass.</div>`
     );
     return;
   }
@@ -1961,6 +2034,149 @@ function onResolveMtm(a, d) {
   renderBoard();
 }
 
+// Fantasy combat resolver — both combatants are individuals and at least
+// one is a non-mortal (or the matchup is explicitly fantasy-class). Uses
+// Appendix E 2d6 matrix.
+function onResolveFantasy(a, d) {
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const edge = engagementEdge(a, d);
+  // Wizards use default tier (WIZARD/0) until a magic-tier selector ships.
+  const attackerTier = (a.type === 'WIZARD') ? (MAGIC_TIERS[a.magicTier] || 0) : 0;
+  const defenderTier = (d.type === 'WIZARD') ? (MAGIC_TIERS[d.magicTier] || 0) : 0;
+  const r = resolveFantasyCombat({ attacker:a, defender:d, rng:state.rng, attackerTier, defenderTier });
+  let html = '';
+  if (!r.ok) {
+    html += `<div class="verdict v-noeffect">${r.reason}</div>`;
+    appendTurn(`Fantasy · ${aT.name} (A) → ${dT.name} (B)`, html);
+    return;
+  }
+  const wizTail = (a.type === 'WIZARD' && attackerTier) ? ` ${attackerTier > 0 ? '+' : ''}${attackerTier} tier` : '';
+  const targetTail = (d.type === 'WIZARD' && defenderTier)
+    ? ` (base ${r.baseTarget}${defenderTier > 0 ? '+' : ''}${defenderTier} tier = ${r.target})` : '';
+  html += `<div class="step">A · ${aT.name} → B · ${dT.name} · ${edge.toUpperCase()} · ` +
+          `Appendix E target ${r.target}+${targetTail}</div>`;
+  html += `<div class="step">2d6 = ${r.dice.a}+${r.dice.b} = <b>${r.dice.sum}</b>${wizTail}` +
+          (r.total !== r.dice.sum ? ` = <b>${r.total}</b>` : '') + `</div>`;
+
+  if (r.outcome === 'killed') {
+    html += `<div class="verdict v-rout">B · ${dT.name} → killed (${r.total} > ${r.target})</div>`;
+    d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
+    cleanupEngagementsForUnit(d.id);
+    if (d.id === state.targetId) state.targetId = null;
+  } else if (r.outcome === 'fallback') {
+    html += `<div class="verdict v-back2">B · ${dT.name} falls back one move (${r.total} = ${r.target})</div>`;
+    // Displace defender directly away by one full move allowance
+    performAutoMove(d, a, d.status || 'ready');
+  } else {
+    html += `<div class="verdict v-noeffect">no effect (${r.total} < ${r.target})</div>`;
+  }
+  appendTurn(`Fantasy · ${aT.name} (A) → ${dT.name} (B) · ${edge}`, html);
+  a.acted.fought = true;
+  d.acted.fought = true;
+  cleanupEngagementsForUnit(a.id);
+  cleanupEngagementsForUnit(d.id);
+  renderBoard();
+}
+
+// Mixed melee — one side is a hero-class individual (has FIGHTING_STRENGTH),
+// the other is a mass unit. The individual fights as N synthetic AF figures
+// through the mass-melee engine; casualties on the individual side bleed
+// into hp and may kill the individual when hp hits 0.
+function onResolveMixed(a, d) {
+  const aIsIndiv = a.kind === 'individual';
+  const ind = aIsIndiv ? a : d;
+  const mass = aIsIndiv ? d : a;
+  const indT = typeById(ind.type), massT = typeById(mass.type);
+  const edge = engagementEdge(a, d);
+  const fs = FIGHTING_STRENGTH[ind.type] || 1;
+  const effFigures = Math.min(ind.hp, fs);  // synthetic count for the engine
+  if (effFigures < 1) {
+    appendTurn(`Mixed melee — skipped`,
+      `<div class="step">${indT.name} has 0 hp left.</div>`);
+    return;
+  }
+  // Build a proxy that the mass engine reads as a count-N AF unit. Other
+  // unit-level state (charged, fatigued, polearm) is honored.
+  const proxy = {
+    ...ind,
+    type: FIGHTING_CLASS, count: effFigures, startCount: effFigures,
+    polearm: false, hedgehog: false, kind: 'mass',
+  };
+  // Run the mass melee with proxy in the same slot as the individual.
+  const attacker = aIsIndiv ? proxy : a;
+  const defender = aIsIndiv ? d : proxy;
+  const round = (findEngagement(a.id, d.id)?.round || 0) + 1;
+  const attackerParams = { type: typeById(attacker.type).id, count: attacker.count,
+    fightingFromEdge: edge, polearm: !!attacker.polearm,
+    impetus: !!attacker.charged, attackingRear: edge === 'rear', fatigued: !!attacker.fatigued };
+  const defenderParams = { type: typeById(defender.type).id, count: defender.count,
+    polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
+  const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
+
+  let html = `<div class="step">${aIsIndiv?'A · '+indT.name:'A · '+massT.name+' × '+mass.count} → ` +
+             `${aIsIndiv?'B · '+massT.name+' × '+mass.count:'B · '+indT.name} · ` +
+             `${edge.toUpperCase()} · round ${round} · ${indT.name} as ${effFigures}×${FIGHTING_CLASS} (hp ${ind.hp}/${ind.maxHp})</div>`;
+  html += `<div class="step">A casualties: ${melee.attacker.casualties} · B casualties: ${melee.defender.casualties}</div>`;
+
+  // Route casualties: attacker casualties go to a; defender casualties go to d.
+  // The individual side uses hp; the mass side uses count (applyCasualties).
+  const aCas = melee.attacker.casualties;
+  const dCas = melee.defender.casualties;
+  if (aIsIndiv) {
+    // a = ind, d = mass
+    ind.hp = Math.max(0, ind.hp - aCas);
+    applyCasualties(mass, dCas);
+  } else {
+    // a = mass, d = ind
+    applyCasualties(mass, aCas);
+    ind.hp = Math.max(0, ind.hp - dCas);
+  }
+  // Individual death
+  if (ind.hp <= 0) {
+    ind.count = 0; ind.destroyed = true;
+    html += `<div class="verdict v-rout">${aIsIndiv?'A':'B'} · ${indT.name} → killed (hp 0)</div>`;
+    cleanupEngagementsForUnit(ind.id);
+    if (ind.id === state.selectedId) state.selectedId = null;
+    if (ind.id === state.targetId)   state.targetId = null;
+  } else {
+    html += `<div class="step">${aIsIndiv?'A':'B'} · ${indT.name} hp now ${ind.hp}/${ind.maxHp}</div>`;
+  }
+  // Mass-side post-melee morale + loss check if still alive
+  if (!mass.destroyed && mass.count > 0) {
+    const massSide = aIsIndiv ? 'B' : 'A';
+    const massCas = aIsIndiv ? dCas : aCas;
+    if (massCas > 0) {
+      const cas = mass.startCount - mass.count;
+      const lr = resolveLossMorale({ type: mass.type, startCount: mass.startCount, casualties: cas, surrounded: false,
+        rng: state.rng, fatigued: !!mass.fatigued && state.settings.applyFatigue });
+      if (lr.triggered) {
+        const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        html += `<div class="step">${massSide} · ${massT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+                `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+        html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${massSide} ${lr.passed?'holds':lr.action}</div>`;
+        if (!lr.passed) mass.destroyed = true;
+      }
+    }
+  }
+  // Engagement bookkeeping (mixed melee can continue across rounds)
+  if (!ind.destroyed && !mass.destroyed) {
+    const existing = findEngagement(a.id, d.id);
+    if (existing) existing.round = round;
+    else state.engagements.push({ aId: a.id, dId: d.id, round, startTurn: state.turn, prevFirstStriker: 'attacker' });
+    html += `<div class="verdict v-stable">mixed melee continues — round ${round}</div>`;
+  } else {
+    cleanupEngagementsForUnit(a.id);
+    cleanupEngagementsForUnit(d.id);
+  }
+  appendTurn(`Mixed · ${indT.name} (${aIsIndiv?'A':'B'}) vs ${massT.name} · round ${round}`, html);
+  a.acted.fought = true;
+  d.acted.fought = true;
+  if (a.destroyed && state.selectedId === a.id) state.selectedId = null;
+  if (d.destroyed && state.targetId   === d.id) state.targetId = null;
+  renderBoard();
+}
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -2124,9 +2340,11 @@ function spawnUnit() {
     const meleeWeapon = $('#f-mtm-weapon').value || 'sword';
     const armor = $('#f-armor').value || 'chain_sh';
     const mounted = $('#f-mounted').checked;
+    const maxHp = FIGHTING_STRENGTH[type] || 1;
     u = { ...common, count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false,
       formation: null, customCols: null, spacing: 'close', polearm: false,
-      meleeWeapon, armor, mounted, prone: false, parry: false };
+      meleeWeapon, armor, mounted, prone: false, parry: false,
+      hp: maxHp, maxHp };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
@@ -2192,9 +2410,12 @@ function onContextMenuAction(evt) {
     u.moveStreak = 0;
     u.charged = false;
     u.prisoners = 0;
+    if (u.maxHp) u.hp = u.maxHp;
     clearActed(u);
-    const dims = formationDims(u.formation || 'line', u.count, u.customCols);
-    u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
+    if (u.kind !== 'individual') {
+      const dims = formationDims(u.formation || 'line', u.count, u.customCols);
+      u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
+    }
   } else if (act === 'reset-actions') {
     clearActed(u);
   } else if (act === 'reset-status') {
