@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.5.0 · Game settings (display preferences + optional-rule slots) -->
+<!-- chainmail-board.html · v0.6.0 · Slice 6c: auto-move on rout / retreat / back N -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.5.0</title>
+<title>Chainmail — Battlefield · v0.6.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -120,7 +120,7 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Game settings · display preferences · captured unit · grid default · arc</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6c · auto-move on rout · retreat · back N</div>
   <hr>
 
   <div class="toolbar">
@@ -222,7 +222,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.5.0';
+const SIM_VERSION = '0.6.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -999,6 +999,41 @@ function applyCasualties(unit, n) {
   else unit.rows = Math.ceil(unit.count / unit.cols);
 }
 
+// Auto-displacement on post-melee status (back1/back2/retreat/routing).
+// Moves the loser directly away from the aggressor by N * MOVE_ALLOWANCE.
+// Routing also rotates facing so the unit's back is to the enemy (p.16).
+// Returns { distanceIn, faced } or null if no move applies.
+const STATUS_MOVES = { back1:1, back2:2, retreat:1, routing:1.5 };
+function performAutoMove(loser, against, status) {
+  const moves = STATUS_MOVES[status];
+  if (!moves) return null;
+  const allow = MOVE_ALLOWANCE[loser.type] || 12;
+  const inches = allow * moves;
+  let dx = loser.x - against.x;
+  let dy = loser.y - against.y;
+  const mag = Math.hypot(dx, dy);
+  if (mag < 0.1) {
+    // Stacked centers (shouldn't happen post-melee). Fall back to loser's
+    // current facing → move forward in their own facing direction.
+    const fr = loser.facing * Math.PI / 180;
+    dx = Math.sin(fr); dy = -Math.cos(fr);
+  } else {
+    dx /= mag; dy /= mag;
+  }
+  const totalPx = inches * PX_PER_INCH;
+  loser.x = Math.max(20, Math.min(BOARD_W - 20, loser.x + dx * totalPx));
+  loser.y = Math.max(20, Math.min(BOARD_H - 20, loser.y + dy * totalPx));
+  let faced = null;
+  if (status === 'routing') {
+    // Rotate so loser faces in the direction of motion (away from enemy)
+    const deg = Math.atan2(dx, -dy) * 180 / Math.PI;
+    loser.facing = ((deg % 360) + 360) % 360;
+    faced = loser.facing;
+  }
+  loser.acted.moved = true;
+  return { distanceIn: inches, faced };
+}
+
 function diceTrace(dice, kills) {
   if (!dice.length) return '<small style="color:var(--ink-soft)">no dice</small>';
   return `<small style="color:var(--ink-soft); font-family: var(--sans)">[ ${dice.map(v => kills.includes(v) ? `<b style="color:var(--ink)">${v}</b>` : String(v)).join(' ')} ]</small>`;
@@ -1065,14 +1100,24 @@ function onResolveMelee() {
 
   // Post-melee verdict → loser unit status. Surrender additionally removes
   // the unit from play (captured, per rules p.16) unless the
-  // "keep captured units visible" setting is on.
+  // "keep captured units visible" setting is on. Non-surrender statuses
+  // trigger auto-displacement away from the aggressor.
   const tagToStatus = { back1:'back1', back2:'back2', retreat:'retreat', rout:'routing', surrender:'surrendered' };
   const newStatus = tagToStatus[tag];
   if (pm.loser && newStatus) {
     const loserUnit = pm.loser === 'A' ? a : d;
+    const aggressor = pm.loser === 'A' ? d : a;
     if (!loserUnit.destroyed) loserUnit.status = newStatus;
     if (newStatus === 'surrendered' && !state.settings.keepCapturedVisible) {
       loserUnit.destroyed = true;
+    }
+    if (newStatus !== 'surrendered' && !loserUnit.destroyed) {
+      const disp = performAutoMove(loserUnit, aggressor, newStatus);
+      if (disp) {
+        const facedNote = disp.faced != null ? ` · faced ${disp.faced.toFixed(0)}°` : '';
+        html += `<div class="step">${pm.loser} · ${pm.loser === 'A' ? aT.name : dT.name} ` +
+                `displaced ${disp.distanceIn.toFixed(1)}″ away from contact${facedNote}</div>`;
+      }
     }
   }
 
