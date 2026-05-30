@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.33 · log: stamp every entry with the turn number (consistent melee/missile/breath/morale structure); melee still carries its engagement round -->
+<!-- chainmail-board.html · v0.9.34 · Slice 7B: asymmetric attack/defend classes + Giant bonus die — Giant HF/AF+die, Lycan AF/HF, Roc & Wight LH/HH (fantasy supp.); resolveMassMelee gains optional defendType + bonusDice -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.33</title>
+<title>Chainmail — Battlefield · v0.9.34</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · v0.9.33 · log turn stamps</div>
-    <span class="version-tag">v0.9.33</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7B · asymmetric classes</div>
+    <span class="version-tag">v0.9.34</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.33';
+const SIM_VERSION = '0.9.34';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -507,13 +507,14 @@ function resolveMassMelee({ attacker, defender, rng }) {
 
   const aEff   = effectiveAttackerClass(aT.cls, attacker);
   const aBonus = classBumpsToBonus(aT.cls, attacker);
-  const aRow   = COMBAT[aEff]?.[dT.cls];
-  if (!aRow) throw new Error(`no combat row: ${aEff} vs ${dT.cls}`);
+  const dTargetCls = defender.defendType || dT.cls;   // class the attacker rolls against
+  const aRow   = COMBAT[aEff]?.[dTargetCls];
+  if (!aRow) throw new Error(`no combat row: ${aEff} vs ${dTargetCls}`);
   let aDPM = aRow.dice / aRow.perMen;
   const aPolearm = POLEARM_CLASSES.has(aT.cls) && attacker.polearm;
   if (aPolearm) aDPM += 1;
   if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
-  const aTotal = Math.floor(attacker.count * aDPM);
+  const aTotal = Math.floor(attacker.count * aDPM) + (attacker.bonusDice || 0);
   const aKills = applyDieBonus(aRow.kills, aBonus ? 1 : 0);
   const aRoll = rollKills(aTotal, aKills, rng);
   result.attacker = {
@@ -528,12 +529,13 @@ function resolveMassMelee({ attacker, defender, rng }) {
       dicePerMan:0, totalDice:0, dice:[], killsDealt:0, noReturn:true };
   } else {
     const dRetCls = effectiveDefenderReturnClass(dT.cls, defender);
-    const dRow = COMBAT[dRetCls]?.[aT.cls];
+    const aTargetCls = attacker.defendType || aT.cls;   // class the defender rolls against
+    const dRow = COMBAT[dRetCls]?.[aTargetCls];
     let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
     const dPolearm = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
     if (dPolearm) dDPM += 1;
     if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
-    const dTotal = Math.floor(defender.count * dDPM);
+    const dTotal = Math.floor(defender.count * dDPM) + (defender.bonusDice || 0);
     const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng) : { dice:[], kills:0 };
     result.defender = {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
@@ -910,6 +912,13 @@ const FANTASY_FIGHTING_CLASS = {
   TROLL: 'HF', GIANT: 'HF',
 };
 const fightingClassFor = (type) => FANTASY_FIGHTING_CLASS[type] || 'AF';
+// A few creatures defend as a different class than they attack (fantasy supp.):
+// Giant attacks as Heavy Foot but defends as Armored Foot; Lycanthrope attacks
+// AF / defends HF; Roc and Wight melee as Light Horse but defend as Heavy Horse.
+// Others defend as they attack. Giants add one die whenever they swing.
+const FANTASY_DEFEND_CLASS = { GIANT: 'AF', LYCAN: 'HF', ROC: 'HH', WIGHT: 'HH' };
+const defendClassFor = (type) => FANTASY_DEFEND_CLASS[type] || fightingClassFor(type);
+const FANTASY_BONUS_DICE = { GIANT: 1 };
 
 // Appendix E — 2d6 target threshold for fantasy combat. Roll < target =
 // no effect; roll == target = defender falls back one full move; roll >
@@ -2247,6 +2256,9 @@ function onResolveMixed(a, d) {
   const edge = engagementEdge(a, d);
   const fs = FIGHTING_STRENGTH[ind.type] || 1;
   const cls = fightingClassFor(ind.type);
+  const defCls = defendClassFor(ind.type);
+  const bonusDice = FANTASY_BONUS_DICE[ind.type] || 0;
+  const clsDesc = (cls === defCls ? cls : `${cls} atk / ${defCls} def`) + (bonusDice ? ` +${bonusDice} die` : '');
   const indImmune = MELEE_IMMUNE_INDIV.has(ind.type);
   const effFigures = Math.min(ind.hp, fs);  // synthetic count for the engine
   if (effFigures < 1) {
@@ -2270,6 +2282,11 @@ function onResolveMixed(a, d) {
     impetus: !!attacker.charged, attackingRear: edge === 'rear', fatigued: !!attacker.fatigued };
   const defenderParams = { type: typeById(defender.type).id, count: defender.count,
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
+  // The individual (proxy) attacks as `cls` and defends as `defCls`; Giants add
+  // a die whenever they swing. Attach those to whichever slot the creature is in.
+  const creatureParams = aIsIndiv ? attackerParams : defenderParams;
+  creatureParams.defendType = defCls;
+  if (bonusDice) creatureParams.bonusDice = bonusDice;
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   // Casualties, with imperviousness applied: a creature immune to normal melee
@@ -2280,11 +2297,11 @@ function onResolveMixed(a, d) {
 
   // Labels: each side gets a "name × count" or "name (as Nx{class}, hp X/Y)" prefix
   const attLabel = aIsIndiv
-    ? `<b style="color:var(--side-a-d)">A · ${indT.name}</b> (as ${effFigures}×${cls}, hp ${ind.hp}/${ind.maxHp})`
+    ? `<b style="color:var(--side-a-d)">A · ${indT.name}</b> (as ${effFigures}×${clsDesc}, hp ${ind.hp}/${ind.maxHp})`
     : `<b style="color:var(--side-a-d)">A · ${massT.name} × ${mass.count}</b>`;
   const defLabel = aIsIndiv
     ? `<b style="color:var(--side-b-d)">B · ${massT.name} × ${mass.count}</b>`
-    : `<b style="color:var(--side-b-d)">B · ${indT.name}</b> (as ${effFigures}×${cls}, hp ${ind.hp}/${ind.maxHp})`;
+    : `<b style="color:var(--side-b-d)">B · ${indT.name}</b> (as ${effFigures}×${clsDesc}, hp ${ind.hp}/${ind.maxHp})`;
   const aMods = [];
   if (melee.attacker.fatigueApplied)   aMods.push('fatigued (one class down)');
   if (melee.attacker.polearmApplied)   aMods.push('pike/halberd +1/man');
@@ -3156,6 +3173,24 @@ renderBoard();
   console.assert(inFiringArc(horseFirer, { x:-100, y:0 })   === true,  'horse: left flank in arc (180° left)');
   console.assert(inFiringArc(horseFirer, { x:-100, y:100 }) === true,  'horse: left-rear in arc');
   console.assert(inFiringArc(horseFirer, { x:100, y:0 })    === false, 'horse: right flank out of arc');
+
+  // Asymmetric attack/defend classes + Giant die (Slice 7B).
+  console.assert(fightingClassFor('GIANT') === 'HF' && defendClassFor('GIANT') === 'AF', 'Giant attacks HF / defends AF');
+  console.assert(fightingClassFor('ROC')   === 'LH' && defendClassFor('ROC')   === 'HH', 'Roc attacks LH / defends HH');
+  console.assert(fightingClassFor('WIGHT') === 'LH' && defendClassFor('WIGHT') === 'HH', 'Wight melees LH / defends HH');
+  console.assert(fightingClassFor('LYCAN') === 'AF' && defendClassFor('LYCAN') === 'HF', 'Lycan attacks AF / defends HF');
+  console.assert(defendClassFor('DRAGON') === fightingClassFor('DRAGON'), 'Dragon defends as it attacks (HH)');
+  console.assert(FANTASY_BONUS_DICE.GIANT === 1, 'Giant gets +1 die');
+  // defendType changes what the attacker rolls against: HF vs AF is 0.5/man, so
+  // 10 HF rolling all-6 score 5 (not 10 as vs HF).
+  const defAsAF = resolveMassMelee({ attacker:{ type:'HF', count:10 }, defender:{ type:'HF', count:1, defendType:'AF' }, rng: always(6) });
+  console.assert(defAsAF.attacker.killsDealt === 5, 'defendType AF halves HF offense (10 → 5)');
+  // attacker defendType drives the defender's return lookup the same way.
+  const retAsAF = resolveMassMelee({ attacker:{ type:'HF', count:1, defendType:'AF' }, defender:{ type:'HF', count:10 }, rng: always(6) });
+  console.assert(retAsAF.defender.killsDealt === 5, 'attacker defendType AF → defender HF return is 0.5/man (10 → 5)');
+  // Bonus die adds to the attacker's total roll.
+  const withBonus = resolveMassMelee({ attacker:{ type:'HF', count:10, bonusDice:1 }, defender:{ type:'HF', count:20 }, rng: always(6) });
+  console.assert(withBonus.attacker.totalDice === 11 && withBonus.attacker.killsDealt === 11, 'bonus die: HF×10 +1 → 11 dice/kills');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
