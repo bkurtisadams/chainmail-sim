@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.18 · Slice 6P: mass missile fire at individual target (hp routing + missile-immune guard) -->
+<!-- chainmail-board.html · v0.9.19 · Slice 6Q: indirect-fire toggle + cover detection (per-target cover level, indirect negates cover) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.18</title>
+<title>Chainmail — Battlefield · v0.9.19</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -145,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6P · mass missile fire at individual target</div>
-    <span class="version-tag">v0.9.18</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6Q · indirect fire + cover</div>
+    <span class="version-tag">v0.9.19</span>
   </div>
 
   <div class="toolbar">
@@ -235,6 +235,8 @@
   <button data-act="reset-status">Reset status (set to ready)</button>
   <button data-act="declare-charge">Declare charge (+1 die/man in melee)</button>
   <button data-act="cancel-charge">Cancel charge</button>
+  <button data-act="toggle-indirect">Indirect fire</button>
+  <button data-act="cycle-cover">Cover</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -300,7 +302,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.18';
+const SIM_VERSION = '0.9.19';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1042,12 +1044,21 @@ function inMeleeContact(a, b) {
 
 function inMissileRange(firer, target) {
   if (!firer.weapon) return { ok:false, reason:'no weapon' };
-  const maxRangePx = inchesToPx(WEAPON_RANGES[firer.weapon]);
+  const indirect = !!firer.indirect;
+  // Indirect fire reduces a weapon's range by one-third (p.12).
+  let maxIn = WEAPON_RANGES[firer.weapon];
+  if (indirect) maxIn = Math.floor(maxIn * 2 / 3);
+  const maxRangePx = inchesToPx(maxIn);
   const centerDistPx = dist(firer, target);
-  if (centerDistPx > maxRangePx) {
-    return { ok:false, reason:`out of range (${pxToInches(centerDistPx).toFixed(1)}″ > ${WEAPON_RANGES[firer.weapon]}″)` };
+  const distIn = pxToInches(centerDistPx);
+  // Indirect fire must clear intervening troops — only possible past 3″ (p.12).
+  if (indirect && distIn <= 3) {
+    return { ok:false, reason:'indirect fire requires more than 3″ to clear intervening troops' };
   }
-  return { ok:true, distanceIn: pxToInches(centerDistPx) };
+  if (centerDistPx > maxRangePx) {
+    return { ok:false, reason:`out of range (${distIn.toFixed(1)}″ > ${maxIn}″${indirect?' indirect':''})` };
+  }
+  return { ok:true, distanceIn: distIn, indirect };
 }
 
 /* === F. RENDER ========================================================= */
@@ -1396,6 +1407,8 @@ function updateSidebar() {
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
+      (u.indirect ? `<div class="stat"><span class="k">Indirect fire</span><span class="v" style="color:#8a6d3b">ON · range −⅓, +1 armor cat</span></div>` : '') +
+      (u.cover && u.cover !== 'none' ? `<div class="stat"><span class="k">Cover</span><span class="v" style="color:#8a6d3b">${u.cover.toUpperCase()}</span></div>` : '') +
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
@@ -2200,6 +2213,16 @@ function onResolveMixed(a, d) {
   renderBoard();
 }
 
+// Cover & indirect-fire helpers (p.12). Cover is a property of the *target*
+// unit (u.cover: 'none'|'soft'|'hard'); indirect is a property of the *shooter*
+// (u.indirect). Indirect fire negates cover entirely, so callers pass 0/false
+// for cover when firing indirect.
+const COVER_ORDER = ['none', 'soft', 'hard'];
+const coverLabel = (lvl) => lvl === 'soft' ? 'soft cover' : lvl === 'hard' ? 'hard cover' : 'no cover';
+const coverHalves = (lvl) => lvl === 'soft' || lvl === 'hard';      // mass: halve casualties
+const coverDiceMinus = (lvl) => lvl === 'hard' ? 2 : lvl === 'soft' ? 1 : 0;  // individual: −dice
+const weaponIndirectAllowed = (id) => !!rangedWeaponById(id)?.indirectAllowed;
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -2210,17 +2233,32 @@ function onResolveMissile() {
   if (d.kind === 'individual') return onMassMissileAtIndiv(a, d);
   const rng = state.rng;
   const aT = typeById(a.type), dT = typeById(d.type);
-  const armorGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
+  const baseGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
   const reach = inMissileRange(a, d);
-  if (!reach.ok) return;
+  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
+  // Indirect (p.12): bows/longbows only, range −⅓ (in inMissileRange), target
+  // bumped one armor category, and cover is negated.
+  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   const firingCount = Math.min(a.count, a.cols * 2);
   const rankCapped = firingCount < a.count;
-  const res = resolveMassMissile({ firingCount, armorGroup, cover:false, indirect:false, rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
+  const tags = [];
+  if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
+  if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
+  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} (${dT.cls}) · ` +
-             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}${rankNote}</div>`;
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}${rankNote}${tagNote}</div>`;
+  if (res.arrowProof) {
+    html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+    a.acted.fired = true;
+    return;
+  }
   res.groups.forEach((g, i) => {
     if (g.reason) {
       html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
@@ -2229,6 +2267,9 @@ function onResolveMissile() {
               `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
     }
   });
+  if (cover && res.totalRaw !== res.totalKills) {
+    html += `<div class="step">soft cover · ${res.totalRaw} → halved → <b>${res.totalKills}</b></div>`;
+  }
   html += `<div class="verdict v-${res.totalKills>0?'killed':'noeffect'}">${res.totalKills} kill${res.totalKills===1?'':'s'}</div>`;
 
   applyCasualties(d, res.totalKills);
@@ -2268,18 +2309,25 @@ function onIndivMissile(a, d) {
     return;
   }
   const reach = inMissileRange(a, d);
-  if (!reach.ok) return;
+  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
   const armorIdx = targetArmorIdx(d);
   const armorLabel = (d.kind === 'individual')
     ? (ARMOR_MTM[armorIdx] || {label:'?'}).label
     : `${dT.name} (${ARMOR_MTM[armorIdx].label})`;
+  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const coverPenalty = indirect ? 0 : coverDiceMinus(d.cover);
   const r = resolveIndividualMissile({
-    weapon, distance: reach.distanceIn, armorIdx, cover: 0, indirect: false, rng: state.rng,
+    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, indirect, rng: state.rng,
   });
 
+  const tags = [];
+  if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
+  if (coverPenalty) tags.push(`${coverLabel(d.cover)} (−${coverPenalty} dice)`);
+  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   let html = `<div class="step">A · ${aT.name} fires ${weapon.name} (range ${weapon.range}″) at ` +
              `B · ${dT.name}${d.kind === 'mass' ? ` × ${d.count}` : ''} · ` +
-             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${armorLabel}</div>`;
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${armorLabel}${tagNote}</div>`;
   if (!r.ok) {
     html += `<div class="verdict v-noeffect">${r.reason}</div>`;
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
@@ -2345,7 +2393,7 @@ function indivArmorIdxToMassGroup(idx) {
 function onMassMissileAtIndiv(a, d) {
   const aT = typeById(a.type), dT = typeById(d.type);
   const reach = inMissileRange(a, d);
-  if (!reach.ok) return;
+  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
 
   if (MISSILE_IMMUNE_INDIV.has(d.type)) {
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
@@ -2357,17 +2405,30 @@ function onMassMissileAtIndiv(a, d) {
   }
 
   const armorIdx = targetArmorIdx(d);
-  const armorGroup = indivArmorIdxToMassGroup(armorIdx);
+  const baseGroup = indivArmorIdxToMassGroup(armorIdx);
+  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   const firingCount = Math.min(a.count, a.cols * 2);
   const rankCapped = firingCount < a.count;
-  const res = resolveMassMissile({ firingCount, armorGroup, cover:false, indirect:false, rng: state.rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng: state.rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
+  const tags = [];
+  if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
+  if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
+  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   const hpBefore = d.hp;
   let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
-             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}` +
-             ` · hp ${hpBefore}/${d.maxHp}${rankNote}</div>`;
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}` +
+             ` · hp ${hpBefore}/${d.maxHp}${rankNote}${tagNote}</div>`;
+  if (res.arrowProof) {
+    html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+    a.acted.fired = true;
+    return;
+  }
   res.groups.forEach((g, i) => {
     if (g.reason) {
       html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
@@ -2376,6 +2437,9 @@ function onMassMissileAtIndiv(a, d) {
               `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> hit${g.kills===1?'':'s'}</div>`;
     }
   });
+  if (cover && res.totalRaw !== res.totalKills) {
+    html += `<div class="step">soft cover · ${res.totalRaw} → halved → <b>${res.totalKills}</b></div>`;
+  }
 
   d.hp = Math.max(0, (d.hp || 0) - res.totalKills);
   if (d.hp <= 0) {
@@ -2408,6 +2472,8 @@ function spawnUnit() {
     moveStreak: 0,
     charged: false,
     prisoners: 0,
+    indirect: false,
+    cover: 'none',
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,
@@ -2464,6 +2530,13 @@ function onUnitContextMenu(evt, unitId) {
   const canCharge = IMPETUS_CLASSES.has(u.type) || u.kind === 'individual';
   document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged;
   document.querySelector('#ctx-menu [data-act="cancel-charge"]').hidden = !canCharge || !u.charged;
+  // Indirect fire — bows/longbows only (not crossbows, p.12). Label reflects state.
+  const indirectBtn = document.querySelector('#ctx-menu [data-act="toggle-indirect"]');
+  indirectBtn.hidden = !(u.weapon && weaponIndirectAllowed(u.weapon));
+  indirectBtn.textContent = `Indirect fire: ${u.indirect ? 'ON' : 'off'}`;
+  // Cover — any unit can be a target behind cover. Label cycles none→soft→hard.
+  const coverBtn = document.querySelector('#ctx-menu [data-act="cycle-cover"]');
+  coverBtn.textContent = `Cover: ${u.cover || 'none'} (tap to cycle)`;
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -2488,6 +2561,8 @@ function onContextMenuAction(evt) {
     u.moveStreak = 0;
     u.charged = false;
     u.prisoners = 0;
+    u.indirect = false;
+    u.cover = 'none';
     if (u.maxHp) u.hp = u.maxHp;
     clearActed(u);
     if (u.kind !== 'individual') {
@@ -2506,6 +2581,11 @@ function onContextMenuAction(evt) {
     u.charged = true;
   } else if (act === 'cancel-charge') {
     u.charged = false;
+  } else if (act === 'toggle-indirect') {
+    u.indirect = !u.indirect;
+  } else if (act === 'cycle-cover') {
+    const i = COVER_ORDER.indexOf(u.cover || 'none');
+    u.cover = COVER_ORDER[(i + 1) % COVER_ORDER.length];
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
     reshapeUnit(u, target);
