@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.10 · Slice 6k.1: clamp displacement to unit visual extent -->
+<!-- chainmail-board.html · v0.9.11 · Slice 6L: individual unit kind foundation (hero/wizard/dragon/etc.) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.10</title>
+<title>Chainmail — Battlefield · v0.9.11</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6k.1 · displacement clamp respects unit visual extent</div>
-    <span class="version-tag">v0.9.10</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6L · individual unit foundation (hero / wizard / dragon)</div>
+    <span class="version-tag">v0.9.11</span>
   </div>
 
   <div class="toolbar">
@@ -178,19 +178,23 @@
         <div class="field"><label>Side</label><select id="f-side">
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
+        <div class="field"><label>Kind</label><select id="f-kind">
+          <option value="mass">Mass unit</option>
+          <option value="individual">Individual (hero / monster)</option>
+        </select></div>
         <div class="field"><label>Type</label><select id="f-type"></select></div>
-        <div class="field"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
-        <div class="field"><label>Formation</label><select id="f-form">
+        <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
+        <div class="field f-mass-only"><label>Formation</label><select id="f-form">
           <option value="line">Line</option>
           <option value="column">Column</option>
           <option value="square">Square</option>
           <option value="hedgehog">Hedgehog</option>
         </select></div>
-        <div class="field"><label>Cols (optional)</label><input type="number" id="f-cols" min="1" max="50" placeholder="auto"></div>
-        <div class="field"><label>Spacing</label><select id="f-spacing">
+        <div class="field f-mass-only"><label>Cols (optional)</label><input type="number" id="f-cols" min="1" max="50" placeholder="auto"></div>
+        <div class="field f-mass-only"><label>Spacing</label><select id="f-spacing">
           <option value="close">Close (≤ 1″)</option><option value="open">Open (&gt; 1″)</option>
         </select></div>
-        <div class="field" id="f-pike-row" style="display:none">
+        <div class="field f-mass-only" id="f-pike-row" style="display:none">
           <label>Pikes</label>
           <input type="checkbox" id="f-pike">
           <span class="field-note">+1 die/man</span>
@@ -288,7 +292,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.10';
+const SIM_VERSION = '0.9.11';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -322,7 +326,7 @@ const TYPES = Object.freeze([
   { id:'SP',  name:'Swiss Pikemen',    cls:'HF', morale:9, loss:{ pct:0.50, score:5 } },
   { id:'MK',  name:'Mounted Knights',  cls:'HH', morale:8, loss:{ pct:0.50, score:4 } },
 ]);
-const typeById = (id) => TYPES.find(t => t.id === id);
+const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t => t.id === id);
 
 const COMBAT = Object.freeze({
   LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
@@ -385,7 +389,30 @@ const MASS_ARMOR_BY_TYPE = {
 const MOVE_ALLOWANCE = {
   PE:9, LV:12, LF:12, HF:9, EHF:9, SP:6, AF:6,
   LH:24, MH:18, HH:12, MK:12,
+  // Fantasy types (Appendix D — ground move only this slice; fly moves come
+  // with the fantasy resolver slice)
+  HERO:12, SUPER_HERO:12, WIZARD:12, BALROG:6, DRAGON:9, ELEMENTAL:12,
+  ENT:6, GIANT:12, LYCAN:9, ROC:24, TROLL:9, WIGHT:9, WRAITH:18,
 };
+
+// Inline fantastic types (mirrors data/fantasy.js — used by the board for
+// spawn / display only this slice. Combat matrix lands with the fantasy slice).
+const FANTASTIC_TYPES = Object.freeze([
+  { id:'HERO',       name:'Hero',          morale:20,   point:20  },
+  { id:'SUPER_HERO', name:'Super Hero',    morale:40,   point:50  },
+  { id:'WIZARD',     name:'Wizard',        morale:50,   point:100 },
+  { id:'BALROG',     name:'Balrog',        morale:50,   point:75  },
+  { id:'DRAGON',     name:'Dragon',        morale:'—',  point:100 },
+  { id:'ELEMENTAL',  name:'Elemental',     morale:'—',  point:'—' },
+  { id:'ENT',        name:'Ent (Tree)',    morale:20,   point:15  },
+  { id:'GIANT',      name:'Giant',         morale:'—',  point:50  },
+  { id:'LYCAN',      name:'Lycanthrope',   morale:20,   point:20  },
+  { id:'ROC',        name:'Roc',           morale:'—',  point:20  },
+  { id:'TROLL',      name:'Troll / Ogre',  morale:8,    point:15  },
+  { id:'WIGHT',      name:'Wight / Ghoul', morale:10,   point:10  },
+  { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
+]);
+const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
 
 // Missile weapon ranges (p.11)
 const WEAPON_RANGES = {
@@ -682,6 +709,12 @@ const pxToInches = (p) => p / PX_PER_INCH;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
+  // Individual unit: single bigger pip (hero / monster), fixed size.
+  if (u.kind === 'individual') {
+    const pip = 26, gap = 0, pad = 3;
+    const w = pip + 2 * pad, h = pip + 2 * pad;
+    return { w, h, pip, gap, pad };
+  }
   // Chainmail scale: 1" = 10 yards; 1 figure = 1" frontage in close order, 2" in open.
   // PX_PER_INCH = 24, so close-order step = 24, open-order step = 48.
   const pip = 12;
@@ -740,7 +773,25 @@ function fillSelect(id, items, render, value) {
 }
 fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
 
+function syncKindFields() {
+  const kind = $('#f-kind').value;
+  const isIndividual = kind === 'individual';
+  document.querySelectorAll('.f-mass-only').forEach(el => {
+    el.style.display = isIndividual ? 'none' : '';
+  });
+  // Repopulate type dropdown for the chosen kind
+  if (isIndividual) {
+    fillSelect('#f-type', FANTASTIC_TYPES, t => t.name, 'HERO');
+  } else {
+    fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
+  }
+  syncPikeRow();
+}
+$('#f-kind').addEventListener('change', syncKindFields);
+
 function syncPikeRow() {
+  const kind = $('#f-kind').value;
+  if (kind === 'individual') { $('#f-pike-row').style.display = 'none'; return; }
   const type = $('#f-type').value;
   const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
   $('#f-pike-row').style.display = pikeable ? '' : 'none';
@@ -825,23 +876,34 @@ function renderUnit(u) {
 
   // Pips
   let pips = '';
-  let placed = 0;
-  for (let r = 0; r < u.rows; r++) {
-    for (let c = 0; c < u.cols; c++) {
-      if (placed >= u.count) break;
-      const px = c * (pip + gap) + pad - w/2;
-      const py = r * (pip + gap) + pad - h/2;
-      const isFront = (r === 0 && !u.hedgehog);
-      const fill = isFront ? sideD : sideC;
-      pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.6"/>`;
-      placed++;
+  if (u.kind === 'individual') {
+    // Single, larger pip with a gold ring to mark "special" status.
+    const r = pip / 2;
+    pips += `<circle cx="0" cy="0" r="${r}" fill="${sideD}" stroke="#d8b25a" stroke-width="2.4"/>`;
+    pips += `<circle cx="0" cy="0" r="${r - 4}" fill="none" stroke="${sideC}" stroke-width="1"/>`;
+  } else {
+    let placed = 0;
+    for (let r = 0; r < u.rows; r++) {
+      for (let c = 0; c < u.cols; c++) {
+        if (placed >= u.count) break;
+        const px = c * (pip + gap) + pad - w/2;
+        const py = r * (pip + gap) + pad - h/2;
+        const isFront = (r === 0 && !u.hedgehog);
+        const fill = isFront ? sideD : sideC;
+        pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.6"/>`;
+        placed++;
+      }
     }
   }
 
   // Edges
   const xL = -w/2, xR = w/2, yT = -h/2, yB = h/2;
   let edges = '';
-  if (u.hedgehog) {
+  if (u.kind === 'individual') {
+    // Single facing marker — a small triangle pointing forward (up in local frame)
+    const ms = 5;
+    edges += `<polygon points="0,${yT - 4} ${-ms},${yT + 2} ${ms},${yT + 2}" fill="var(--front)" stroke="${sideD}" stroke-width="0.5"/>`;
+  } else if (u.hedgehog) {
     // All four edges drawn in front-color (defends all around)
     edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="1.5" stroke-dasharray="3 3"/>`;
   } else {
@@ -1024,11 +1086,15 @@ function updateSidebar() {
     if (!u || u.destroyed) { el.className = 'empty'; el.textContent = 'none'; continue; }
     el.className = '';
     const T = typeById(u.type);
+    const isIndiv = u.kind === 'individual';
     const pct = u.startCount ? (100 * (u.startCount - u.count) / u.startCount).toFixed(0) : 0;
     el.innerHTML =
       `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
+      `<div class="stat"><span class="k">Kind</span><span class="v">${isIndiv ? 'individual' : 'mass'}</span></div>` +
       `<div class="stat"><span class="k">Type</span><span class="v">${T.name}</span></div>` +
-      `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
+      (isIndiv
+        ? `<div class="stat"><span class="k">Status</span><span class="v">${u.count === 1 ? 'in play' : 'destroyed'}</span></div>`
+        : `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>`) +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
@@ -1038,9 +1104,11 @@ function updateSidebar() {
         : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
-      `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
-      `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
-      (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '') +
+      (isIndiv
+        ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>`
+        : `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
+          `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
+          (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '')) +
       (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` : '');
   }
 }
@@ -1227,6 +1295,7 @@ const STATUS_MOVES = { back1:1, back2:2, retreat:1, rallying:1.5, routing:1.5 };
 // Horse types — square is foot only; hedgehog is Swiss Pikemen with 10+ figs.
 const HORSE_TYPES = new Set(['LH', 'MH', 'HH', 'MK']);
 function canReshape(u, target) {
+  if (u.kind === 'individual') return false;
   if (u.formation === target) return false;
   if (target === 'square'   && HORSE_TYPES.has(u.type)) return false;
   if (target === 'hedgehog' && (u.type !== 'SP' || u.count < 10)) return false;
@@ -1324,6 +1393,13 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  if (a.kind === 'individual' || d.kind === 'individual') {
+    appendTurn(
+      `Mass-melee resolver — skipped`,
+      `<div class="step">One or both combatants is an individual unit. Man-to-man / fantasy resolution lands in a later slice; mass-vs-mass only for now.</div>`
+    );
+    return;
+  }
   const edge = engagementEdge(a, d);
 
   // Engagement round: continued melee from prior turn means round = prev + 1
@@ -1584,6 +1660,13 @@ function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
+  if (a.kind === 'individual' || d.kind === 'individual') {
+    appendTurn(
+      `Mass-missile resolver — skipped`,
+      `<div class="step">One or both combatants is an individual unit. Individual missile resolution lands in a later slice; mass-vs-mass only for now.</div>`
+    );
+    return;
+  }
   const rng = state.rng;
   const aT = typeById(a.type), dT = typeById(d.type);
   const armorGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
@@ -1635,22 +1718,13 @@ function onResolveMissile() {
 /* === I. UI WIRING ====================================================== */
 function spawnUnit() {
   const side = $('#f-side').value;
+  const kind = $('#f-kind').value;
   const type = $('#f-type').value;
-  const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
-  const formation = $('#f-form').value;
-  const spacing = $('#f-spacing').value;
   const weapon = $('#f-weapon').value || null;
-  const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
-  const polearm = pikeable ? $('#f-pike').checked : false;
-  const customColsRaw = parseInt($('#f-cols').value, 10);
-  const customCols = (Number.isFinite(customColsRaw) && customColsRaw > 0) ? customColsRaw : null;
-  const dims = formationDims(formation, count, customCols);
-  const u = {
+  const common = {
     id: state.nextId++,
-    side, type, count, startCount: count,
-    cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
-    formation, customCols,
-    spacing, weapon, polearm,
+    side, kind, type,
+    weapon,
     acted: { moved: false, fired: false, fought: false },
     status: 'ready',
     fatigued: false,
@@ -1659,8 +1733,26 @@ function spawnUnit() {
     prisoners: 0,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
-    facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
+    facing: side === 'A' ? 90 : 270,
   };
+  let u;
+  if (kind === 'individual') {
+    // Single-figure unit; no formation, count is always 1, no polearm/pike.
+    u = { ...common, count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false,
+      formation: null, customCols: null, spacing: 'close', polearm: false };
+  } else {
+    const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
+    const formation = $('#f-form').value;
+    const spacing = $('#f-spacing').value;
+    const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
+    const polearm = pikeable ? $('#f-pike').checked : false;
+    const customColsRaw = parseInt($('#f-cols').value, 10);
+    const customCols = (Number.isFinite(customColsRaw) && customColsRaw > 0) ? customColsRaw : null;
+    const dims = formationDims(formation, count, customCols);
+    u = { ...common, count, startCount: count,
+      cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
+      formation, customCols, spacing, polearm };
+  }
   state.units.push(u);
   state.selectedId = u.id;
   renderBoard();
