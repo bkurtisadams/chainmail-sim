@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.28 · Slice 6Y: throwing weapons (axe/spear 3″, javelin 6″) — mass missile table, never indirect, fire once / may loose at chargers -->
+<!-- chainmail-board.html · v0.9.29 · fix: missile range measured edge-to-edge (was center-to-center) so the Fire-missiles button enables when units are visually in range; matches melee + RAW (range from firing rank, p.11) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.28</title>
+<title>Chainmail — Battlefield · v0.9.29</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6Y · throwing weapons</div>
-    <span class="version-tag">v0.9.28</span>
+    <div class="sub">Chainmail HTML Sim · v0.9.29 · missile range fix</div>
+    <span class="version-tag">v0.9.29</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.28';
+const SIM_VERSION = '0.9.29';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1076,13 +1076,18 @@ function inMissileRange(firer, target) {
   let maxIn = WEAPON_RANGES[firer.weapon];
   if (indirect) maxIn = Math.floor(maxIn * 2 / 3);
   const maxRangePx = inchesToPx(maxIn);
-  const centerDistPx = dist(firer, target);
-  const distIn = pxToInches(centerDistPx);
+  // Range is measured from the firing rank (p.11), so use edge-to-edge distance
+  // — subtract each unit's half-extent — matching how melee contact is judged.
+  // Center-to-center under-counts reach badly for big units / short throws.
+  const aMax = Math.max(unitBounds(firer).w, unitBounds(firer).h) / 2;
+  const bMax = Math.max(unitBounds(target).w, unitBounds(target).h) / 2;
+  const edgeDistPx = Math.max(0, dist(firer, target) - aMax - bMax);
+  const distIn = pxToInches(edgeDistPx);
   // Indirect fire must clear intervening troops — only possible past 3″ (p.12).
   if (indirect && distIn <= 3) {
     return { ok:false, reason:'indirect fire requires more than 3″ to clear intervening troops' };
   }
-  if (centerDistPx > maxRangePx) {
+  if (edgeDistPx > maxRangePx) {
     return { ok:false, reason:`out of range (${distIn.toFixed(1)}″ > ${maxIn}″${indirect?' indirect':''})` };
   }
   return { ok:true, distanceIn: distIn, indirect };
@@ -3049,6 +3054,15 @@ renderBoard();
   console.assert(weaponIndirectAllowed('javelin') === false && weaponIndirectAllowed('longbow') === true, 'thrown weapons can never fire indirectly');
   const thrownVolley = resolveMassMissile({ firingCount:10, armorGroup:'unarmored', cover:false, indirect:false, rng: always(6) });
   console.assert(thrownVolley.totalKills === 5, 'thrown volley uses the standard mass missile table (10 unarmored → 5)');
+
+  // Missile range is edge-to-edge (range fix): a longbow reaches a 5″ target
+  // and not a 25″ one; a 6″ javelin reaches 5″ but not 9″.
+  const shooter = { kind:'individual', x:0, y:0, weapon:'longbow', indirect:false };
+  console.assert(inMissileRange(shooter, { kind:'individual', x:inchesToPx(5), y:0 }).ok === true,  'longbow reaches a 5″ target');
+  console.assert(inMissileRange(shooter, { kind:'individual', x:inchesToPx(25), y:0 }).ok === false, 'longbow cannot reach 25″');
+  const thrower = { kind:'individual', x:0, y:0, weapon:'javelin', indirect:false };
+  console.assert(inMissileRange(thrower, { kind:'individual', x:inchesToPx(5), y:0 }).ok === true,  'javelin reaches a 5″ target');
+  console.assert(inMissileRange(thrower, { kind:'individual', x:inchesToPx(9), y:0 }).ok === false, 'javelin cannot reach 9″');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
