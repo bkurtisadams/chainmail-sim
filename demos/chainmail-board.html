@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.8 · Slice 6j: cavalry-charge morale check (p.17) -->
+<!-- chainmail-board.html · v0.9.9 · Slice 6k: prisoners step on surrender (p.17) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.8</title>
+<title>Chainmail — Battlefield · v0.9.9</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6j · cavalry-charge morale check (p.17)</div>
-    <span class="version-tag">v0.9.8</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6k · prisoners step on surrender (p.17)</div>
+    <span class="version-tag">v0.9.9</span>
   </div>
 
   <div class="toolbar">
@@ -276,6 +276,7 @@
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
       <label><input type="checkbox" data-setting="applyCavalryChargeMorale"> Cavalry-charge morale check (p.17)</label>
+      <label><input type="checkbox" data-setting="applyPrisoners"> Prisoners step on surrender (p.17)</label>
       <p>Charge impetus bonus, prisoners step, and cavalry-charge morale check
          will appear here as their slices land. Chainmail p.16–18.</p>
     </section>
@@ -287,7 +288,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.8';
+const SIM_VERSION = '0.9.9';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -565,6 +566,34 @@ const CAVALRY_CHARGE_TARGETS = {
   MK:  { L: 3,  M: 4,  H: 5 },
 };
 function isMountedType(t) { return CHARGE_CLASS[t] !== undefined; }
+
+// Prisoners step (p.17). When a unit surrenders, the winner rolls for the
+// number of figures captured. Formula depends on whether winner/loser are
+// foot or horse. Swiss/Landsknechte (SP) winners take NO prisoners — the
+// rolled count is added to the loser's casualties instead (p.17 caveat).
+// Turks per RAW also take no prisoners; not modeled here as a type.
+function rollPrisoners({ winnerType, loserType, rng }) {
+  const wHorse = isMountedType(winnerType);
+  const lHorse = isMountedType(loserType);
+  const wDie = d6(rng);
+  const lDie = d6(rng);
+  let count, formula;
+  if (!wHorse && lHorse) {
+    // Foot capturing Horse: positive difference
+    count = Math.max(0, wDie - lDie);
+    formula = `max(0, W ${wDie} - L ${lDie}) = ${count}`;
+  } else if (wHorse && !lHorse) {
+    // Horse capturing Foot: both dice added
+    count = wDie + lDie;
+    formula = `W ${wDie} + L ${lDie} = ${count}`;
+  } else {
+    // Same-type (Foot vs Foot or Horse vs Horse) or Mixed: winner die only
+    count = wDie;
+    formula = `W ${wDie} (loser die not used)`;
+  }
+  const noPrisoners = winnerType === 'SP';  // Swiss/Landsknechte take no prisoners
+  return { wDie, lDie, count, formula, noPrisoners };
+}
 function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, rng }) {
   if (!isMountedType(charger.type)) return null;
   // SP/Landsknechte with polearm facing the enemy auto-stand any charge (p.17)
@@ -641,6 +670,7 @@ const state = {
     applyWrapAroundBonus: true,
     applyFatigue: false,
     applyCavalryChargeMorale: false,
+    applyPrisoners: false,
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -1002,6 +1032,7 @@ function updateSidebar() {
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
+      (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
@@ -1467,6 +1498,30 @@ function onResolveMelee() {
     const loserUnit = pm.loser === 'A' ? a : d;
     const aggressor = pm.loser === 'A' ? d : a;
     if (!loserUnit.destroyed) loserUnit.status = newStatus;
+    // Prisoners step (slice 6k, p.17). Fires on surrender, before captured-unit
+    // visibility / destruction is applied so the prisoner roll is independent
+    // of the keep-captured-visible setting. Skipped when the loser was already
+    // annihilated by casualties — no figures left to take prisoner.
+    if (state.settings.applyPrisoners && newStatus === 'surrendered' && loserUnit.count > 0) {
+      const pris = rollPrisoners({ winnerType: aggressor.type, loserType: loserUnit.type, rng: state.rng });
+      const cap = Math.min(pris.count, loserUnit.count);
+      if (pris.noPrisoners) {
+        // Swiss/Landsknechte take no prisoners — count is added to loser casualties
+        const extraKills = cap;
+        loserUnit.count = Math.max(0, loserUnit.count - extraKills);
+        html += `<div class="step">Prisoner roll · winner ${typeById(aggressor.type).name} (no prisoners — p.17) · ` +
+                `${pris.formula} → <b>${extraKills}</b> additional kills on loser</div>`;
+        if (loserUnit.count === 0) loserUnit.destroyed = true;
+      } else if (cap > 0) {
+        aggressor.prisoners = (aggressor.prisoners || 0) + cap;
+        loserUnit.count = Math.max(0, loserUnit.count - cap);
+        html += `<div class="step">Prisoner roll · winner ${typeById(aggressor.type).name} captures from ` +
+                `loser ${typeById(loserUnit.type).name} · ${pris.formula} → <b>${cap}</b> prisoners ` +
+                `<small style="color:var(--ink-soft); font-family:var(--sans)">(total: ${aggressor.prisoners})</small></div>`;
+      } else {
+        html += `<div class="step">Prisoner roll · ${pris.formula} → <b>0</b> prisoners (loser escapes)</div>`;
+      }
+    }
     if (newStatus === 'surrendered' && !state.settings.keepCapturedVisible) {
       loserUnit.destroyed = true;
     }
@@ -1596,6 +1651,7 @@ function spawnUnit() {
     fatigued: false,
     moveStreak: 0,
     charged: false,
+    prisoners: 0,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1651,6 +1707,7 @@ function onContextMenuAction(evt) {
     u.fatigued = false;
     u.moveStreak = 0;
     u.charged = false;
+    u.prisoners = 0;
     clearActed(u);
     const dims = formationDims(u.formation || 'line', u.count, u.customCols);
     u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
