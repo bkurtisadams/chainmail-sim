@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.0 · Slice 6f: wrap-around bonus dice in round 2+ -->
+<!-- chainmail-board.html · v0.9.1 · Three-column layout · log right-side · newest-on-top -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.0</title>
+<title>Chainmail — Battlefield · v0.9.1</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -14,21 +14,27 @@
   }
   * { box-sizing: border-box; }
   html, body { background: var(--bg); color: var(--ink); margin: 0; font-family: var(--serif); }
-  .page { max-width: 1600px; margin: 0 auto; padding: 22px 26px 50px; }
-  h1 { font-size: 28px; font-weight: 700; margin: 0 0 4px; }
-  .sub { font-family: var(--sans); font-size: 12px; letter-spacing: 2.4px; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 18px; }
+  .page { max-width: 1600px; margin: 0 auto; padding: 16px 26px 30px; }
+  .header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+  .header h1 { font-size: 22px; font-weight: 700; margin: 0; line-height: 1; }
+  .header .sub { margin: 0; flex: 1; }
+  .header .version-tag { font-size: 10px; letter-spacing: 1.5px; color: var(--ink-soft);
+    font-family: var(--sans); text-transform: uppercase; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-family: var(--sans); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); }
   hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0 18px; }
   .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
     font-weight: 700; color: var(--ink); margin: 0 0 10px; }
 
-  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    background: var(--panel); border: 1px solid var(--rule); padding: 10px 14px;
-    border-radius: 6px; margin-bottom: 12px; font-family: var(--sans); }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--rule); padding: 8px 12px;
+    border-radius: 6px; margin-bottom: 10px; font-family: var(--sans); }
   .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
-  .toolbar .hint { font-size: 11px; color: var(--ink-soft); margin-left: auto; letter-spacing: 0.4px; }
+  .toolbar .hint { display: none; }
   button { font-family: var(--sans); font-size: 11.5px; letter-spacing: 1.8px; text-transform: uppercase;
     font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 8px 12px;
     border-radius: 3px; cursor: pointer; }
@@ -38,7 +44,11 @@
   button.gold { background: var(--gold); color: var(--ink); }
   button.danger { background: var(--rear); }
 
-  .layout { display: grid; grid-template-columns: 1fr 280px; gap: 12px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
+  aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  aside.log-panel  { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  aside.log-panel > .panel { display: flex; flex-direction: column; flex: 1; min-height: 320px; padding: 10px 12px; }
+  aside.log-panel #log { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 4px 4px 0; }
   .field input[type=checkbox] { flex: 0 0 auto; width: auto; margin-right: 4px; }
   .field .field-note { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px;
     color: var(--ink-soft); }
@@ -66,8 +76,7 @@
   .stat .v { font-variant-numeric: tabular-nums; font-weight: 700; }
   .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
 
-  #log { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px;
-    min-height: 200px; max-height: 360px; overflow-y: auto; font-size: 13.5px; line-height: 1.55; }
+  #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
     font-family: var(--sans); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
   .turn { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed var(--rule); }
@@ -120,9 +129,11 @@
 </head>
 <body>
 <div class="page">
-  <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6f · wrap-around bonus in round 2+</div>
-  <hr>
+  <div class="header">
+    <h1>Battlefield</h1>
+    <div class="sub">Chainmail HTML Sim · Three-column layout · log right-side</div>
+    <span class="version-tag">v0.9.1</span>
+  </div>
 
   <div class="toolbar">
     <button id="btn-melee" disabled>Resolve melee</button>
@@ -140,7 +151,7 @@
 
   <div class="layout">
     <svg id="board" viewBox="0 0 960 540"></svg>
-    <aside>
+    <aside class="side-panel">
       <div class="panel">
         <h2>Selected <span class="swatch" style="background:var(--side-a)"></span></h2>
         <div id="selected-pane" class="empty">none</div>
@@ -182,11 +193,13 @@
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
     </aside>
+    <aside class="log-panel">
+      <div class="panel">
+        <h2>Combat log</h2>
+        <div id="log"></div>
+      </div>
+    </aside>
   </div>
-
-  <hr>
-  <div class="sec-head">Log</div>
-  <div id="log"></div>
 </div>
 
 <div id="ctx-menu" class="ctx-menu" hidden>
@@ -228,7 +241,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.0';
+const SIM_VERSION = '0.9.1';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1011,8 +1024,9 @@ function appendTurn(headline, bodyHtml) {
   const d = document.createElement('div');
   d.className = 'turn';
   d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
-  $('#log').appendChild(d);
-  d.scrollIntoView({ behavior:'smooth', block:'end' });
+  const log = $('#log');
+  log.prepend(d);
+  log.scrollTop = 0;
 }
 
 function applyCasualties(unit, n) {
