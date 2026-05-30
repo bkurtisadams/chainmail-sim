@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.23 · Slice 6V: inline self-test coverage for resolvers (forced-dice); modular tree demoted to frozen reference -->
+<!-- chainmail-board.html · v0.9.26 · Slice 6W: ctrl+wheel rotates selected unit (±15°) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.23</title>
+<title>Chainmail — Battlefield · v0.9.26</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6V · inline self-test coverage</div>
-    <span class="version-tag">v0.9.23</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6W · ctrl+wheel rotate</div>
+    <span class="version-tag">v0.9.26</span>
   </div>
 
   <div class="toolbar">
@@ -162,7 +162,7 @@
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
     <button id="btn-reset" class="danger">Reset board</button>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
-    <span class="hint">click → select · shift+click → target · drag → move · [ ] → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
+    <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
   </div>
 
   <div class="layout">
@@ -259,6 +259,7 @@
       <tr><td>drag</td><td>Move unit (ruler shows distance vs allowance)</td></tr>
       <tr><td>arrows</td><td>Nudge selected unit by ¼″</td></tr>
       <tr><td>[ &nbsp; ]</td><td>Rotate selected unit ±15°</td></tr>
+      <tr><td>ctrl + wheel</td><td>Rotate selected unit ±15°</td></tr>
       <tr><td>wheel</td><td>Zoom board at cursor</td></tr>
       <tr><td>+ &nbsp; –</td><td>Zoom in / zoom out</td></tr>
       <tr><td>0</td><td>Reset zoom &amp; pan</td></tr>
@@ -306,7 +307,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.23';
+const SIM_VERSION = '0.9.26';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1535,6 +1536,16 @@ function zoomAt(clientX, clientY, factor) {
 
 function onWheel(evt) {
   evt.preventDefault();
+  // Ctrl + wheel rotates the selected unit by ±15° — a smoother alternative to
+  // the [ ] keys. Falls through to zoom when nothing is selected.
+  if (evt.ctrlKey) {
+    const u = state.units.find(u => u.id === state.selectedId);
+    if (u && !u.destroyed) {
+      u.facing = (u.facing + (evt.deltaY > 0 ? 15 : -15) + 360) % 360;
+      renderBoard();
+      return;
+    }
+  }
   const factor = evt.deltaY > 0 ? 1.15 : 1 / 1.15;
   zoomAt(evt.clientX, evt.clientY, factor);
 }
