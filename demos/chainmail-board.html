@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.3 · Slice 6g: fatigue rule (3-rounds-of-melee trigger) -->
+<!-- chainmail-board.html · v0.9.4 · Slice 6g.1: manual fatigue toggle on context menu -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.3</title>
+<title>Chainmail — Battlefield · v0.9.4</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6g · fatigue rule (3 melee rounds)</div>
-    <span class="version-tag">v0.9.3</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6g.1 · manual fatigue toggle</div>
+    <span class="version-tag">v0.9.4</span>
   </div>
 
   <div class="toolbar">
@@ -220,6 +220,8 @@
   <button data-act="restore">Restore unit (count + status + fatigue + actions)</button>
   <button data-act="reset-actions">Reset actions (this round)</button>
   <button data-act="reset-status">Reset status (set to ready)</button>
+  <button data-act="mark-fatigued">Mark as fatigued</button>
+  <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
   <button data-act="reshape-column">Form column</button>
   <button data-act="reshape-square">Form square</button>
@@ -281,7 +283,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.3';
+const SIM_VERSION = '0.9.4';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1459,6 +1461,11 @@ function onUnitContextMenu(evt, unitId) {
     const target = b.dataset.act.replace('reshape-', '');
     b.hidden = !canReshape(u, target);
   });
+  // Fatigue entries — only when the optional rule is enabled, and only the
+  // direction that makes sense for the current state.
+  const fatigueOn = !!state.settings.applyFatigue;
+  document.querySelector('#ctx-menu [data-act="mark-fatigued"]').hidden = !fatigueOn || !!u.fatigued;
+  document.querySelector('#ctx-menu [data-act="clear-fatigue"]').hidden = !fatigueOn || !u.fatigued;
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -1487,6 +1494,10 @@ function onContextMenuAction(evt) {
     clearActed(u);
   } else if (act === 'reset-status') {
     u.status = 'ready';
+  } else if (act === 'mark-fatigued') {
+    u.fatigued = true;
+  } else if (act === 'clear-fatigue') {
+    u.fatigued = false;
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
     reshapeUnit(u, target);
