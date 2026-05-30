@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.3.2 · Slice 5: Battlefield  ·  + per-unit context menu, arc-of-fire visibility -->
+<!-- chainmail-board.html · v0.4.0 · Slice 6a: Turn flow + action tracking -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.3.2</title>
+<title>Chainmail — Battlefield · v0.4.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -100,17 +100,19 @@
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 5 · free placement · facing · engagement · live resolver wiring</div>
+  <div class="sub">Chainmail HTML Sim · Slice 6a · turn flow · action tracking · per-side phases</div>
   <hr>
 
   <div class="toolbar">
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
+    <button id="btn-end-side" class="gold">End A's turn</button>
+    <button id="btn-end-round" class="gold">End round</button>
     <button id="btn-clear-sel" class="secondary">Clear selection</button>
     <button id="btn-reset-view" class="secondary">Reset view</button>
     <button id="btn-grid" class="secondary">Grid: off</button>
     <button id="btn-reset" class="danger">Reset board</button>
-    <span class="phase-tag" id="phase">Phase: Setup</span>
+    <span class="phase-tag" id="phase">Turn 1 · Side A</span>
     <span class="hint">click → select · shift+click → target · drag → move · [ ] → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
   </div>
 
@@ -168,12 +170,13 @@
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
   <button data-act="restore">Restore to full strength</button>
+  <button data-act="reset-actions">Reset actions (this round)</button>
   <button data-act="rotate-90">Rotate 90°</button>
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.3.2';
+const SIM_VERSION = '0.4.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 960;
 const BOARD_H = 540;
@@ -455,6 +458,8 @@ const state = {
   viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
   showGrid: false,
   ctxUnitId: null,
+  turn: 1,
+  activeSide: 'A',
   rng: mulberry32(Date.now() & 0xffff),
 };
 
@@ -632,6 +637,24 @@ function renderUnit(u) {
       fill="${arcFill}" stroke="${arcStroke}" stroke-width="0.8" stroke-dasharray="3 4" pointer-events="none"/>`;
   }
 
+  // Action status badges (above the unit, screen-fixed orientation)
+  const acted = u.acted || { moved:false, fired:false, fought:false };
+  const allSpent = acted.moved && acted.fired && acted.fought;
+  const badgeY = u.y - Math.max(b.w, b.h)/2 - 8;
+  const badgeData = [
+    { label:'M', used: acted.moved  },
+    { label:'F', used: acted.fired  },
+    { label:'X', used: acted.fought },
+  ];
+  const badges = badgeData.map((bd, i) => {
+    const bx = u.x - 14 + i * 14;
+    const fill = bd.used ? 'var(--ink)' : 'rgba(255,250,230,0.65)';
+    const stroke = bd.used ? 'var(--ink)' : 'rgba(0,0,0,0.35)';
+    const tFill = bd.used ? '#f3ead4' : 'rgba(0,0,0,0.45)';
+    return `<rect x="${bx-5}" y="${badgeY-5}" width="10" height="10" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="0.6" pointer-events="none"/>` +
+           `<text x="${bx}" y="${badgeY+3}" font-family="sans-serif" font-size="8.5" font-weight="700" fill="${tFill}" text-anchor="middle" pointer-events="none">${bd.label}</text>`;
+  }).join('');
+
   // Selection / target outline (inside the rotated group so it tracks facing)
   let outline = '';
   if (sel) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
@@ -639,7 +662,7 @@ function renderUnit(u) {
 
   const T = typeById(u.type);
   return `
-    <g class="unit-group" data-id="${u.id}" style="cursor:grab">
+    <g class="unit-group" data-id="${u.id}" style="cursor:grab" opacity="${allSpent ? 0.6 : 1}">
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
@@ -647,6 +670,7 @@ function renderUnit(u) {
         ${edges}
         ${outline}
       </g>
+      ${badges}
       <text x="${u.x}" y="${u.y + Math.max(b.w, b.h)/2 + 14}" font-family="sans-serif" font-size="10.5" font-weight="700"
             fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
         ${u.side} · ${T.name} · ${u.count}/${u.startCount}
@@ -816,7 +840,13 @@ function onBoardMouseMove(evt) {
 }
 function onBoardMouseUp() {
   if (state.panning) { state.panning = null; $('#board').classList.remove('panning'); }
-  if (state.dragging) state.dragging = null;
+  if (state.dragging) {
+    const u = state.units.find(x => x.id === state.dragging.unitId);
+    if (u && Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY) > 0.5) {
+      u.acted.moved = true;
+    }
+    state.dragging = null;
+  }
   renderBoard();
 }
 function onBoardClick(evt) {
@@ -847,10 +877,10 @@ function onKeyDown(evt) {
   let handled = true;
   if (evt.key === '[') u.facing = (u.facing - 15 + 360) % 360;
   else if (evt.key === ']') u.facing = (u.facing + 15) % 360;
-  else if (evt.key === 'ArrowLeft')  u.x = Math.max(20, u.x - PX_PER_INCH/4);
-  else if (evt.key === 'ArrowRight') u.x = Math.min(BOARD_W-20, u.x + PX_PER_INCH/4);
-  else if (evt.key === 'ArrowUp')    u.y = Math.max(20, u.y - PX_PER_INCH/4);
-  else if (evt.key === 'ArrowDown')  u.y = Math.min(BOARD_H-20, u.y + PX_PER_INCH/4);
+  else if (evt.key === 'ArrowLeft')  { u.x = Math.max(20, u.x - PX_PER_INCH/4); u.acted.moved = true; }
+  else if (evt.key === 'ArrowRight') { u.x = Math.min(BOARD_W-20, u.x + PX_PER_INCH/4); u.acted.moved = true; }
+  else if (evt.key === 'ArrowUp')    { u.y = Math.max(20, u.y - PX_PER_INCH/4); u.acted.moved = true; }
+  else if (evt.key === 'ArrowDown')  { u.y = Math.min(BOARD_H-20, u.y + PX_PER_INCH/4); u.acted.moved = true; }
   else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
   else if (evt.key === 'Delete' || evt.key === 'Backspace') {
     state.units = state.units.filter(x => x.id !== u.id);
@@ -956,6 +986,8 @@ function onResolveMelee() {
   }
 
   appendTurn(`Melee · ${aT.name} (A) → ${dT.name} (B) · ${edge}`, html);
+  a.acted.fought = true;
+  d.acted.fought = true;
   if (a.destroyed && state.selectedId === a.id) state.selectedId = null;
   if (d.destroyed && state.targetId   === d.id) state.targetId = null;
   renderBoard();
@@ -1004,6 +1036,7 @@ function onResolveMissile() {
   }
 
   appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  a.acted.fired = true;
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
 }
@@ -1024,6 +1057,7 @@ function spawnUnit() {
     side, type, count, startCount: count,
     cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
     spacing, weapon, polearm,
+    acted: { moved: false, fired: false, fought: false },
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1060,8 +1094,11 @@ function onContextMenuAction(evt) {
   if (act === 'restore') {
     u.count = u.startCount;
     u.destroyed = false;
+    clearActed(u);
     const dims = formationDims(u.hedgehog ? 'hedgehog' : (u.cols >= u.rows ? 'line' : 'column'), u.count);
     u.cols = dims.cols; u.rows = dims.rows;
+  } else if (act === 'reset-actions') {
+    clearActed(u);
   } else if (act === 'rotate-90') {
     u.facing = (u.facing + 90) % 360;
   } else if (act === 'delete') {
@@ -1079,10 +1116,36 @@ function resetBoard() {
   state.targetId = null;
   state.dragging = null;
   state.nextId = 1;
+  state.turn = 1;
+  state.activeSide = 'A';
   $('#log').innerHTML = '';
+  renderTurnUI();
   renderBoard();
 }
 
+function clearActed(u) { u.acted = { moved: false, fired: false, fought: false }; }
+
+function renderTurnUI() {
+  const sideC = state.activeSide === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+  $('#phase').innerHTML = `Turn ${state.turn} · Side <b style="color:${sideC}">${state.activeSide}</b>`;
+  $('#btn-end-side').textContent = `End ${state.activeSide}'s turn`;
+}
+
+function endSideTurn() {
+  state.activeSide = state.activeSide === 'A' ? 'B' : 'A';
+  renderTurnUI();
+}
+
+function endRound() {
+  state.turn += 1;
+  state.activeSide = 'A';
+  for (const u of state.units) clearActed(u);
+  renderTurnUI();
+  renderBoard();
+}
+
+$('#btn-end-side').addEventListener('click', endSideTurn);
+$('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', onResolveMelee);
 $('#btn-missile').addEventListener('click', onResolveMissile);
@@ -1103,6 +1166,7 @@ document.addEventListener('mousedown', e => {
 });
 document.addEventListener('keydown', onKeyDown);
 
+renderTurnUI();
 renderBoard();
 
 /* === J. TESTS (geometry + casualty + class bump) ====================== */
