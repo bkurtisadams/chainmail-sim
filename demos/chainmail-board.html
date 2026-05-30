@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.27 · Slice 6X: fantasy creatures vs mass melee (melee-as-N profiles, per-type class, normal-attack immunity) -->
+<!-- chainmail-board.html · v0.9.28 · Slice 6Y: throwing weapons (axe/spear 3″, javelin 6″) — mass missile table, never indirect, fire once / may loose at chargers -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.27</title>
+<title>Chainmail — Battlefield · v0.9.28</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6X · fantasy vs mass melee</div>
-    <span class="version-tag">v0.9.27</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6Y · throwing weapons</div>
+    <span class="version-tag">v0.9.28</span>
   </div>
 
   <div class="toolbar">
@@ -216,6 +216,9 @@
           <option value="light_crossbow">Light Crossbow (18″)</option>
           <option value="heavy_crossbow">Heavy Crossbow (24″)</option>
           <option value="arquebus">Arquebus (18″)</option>
+          <option value="throwing_axe">Throwing Axe (3″)</option>
+          <option value="throwing_spear">Throwing Spear (3″)</option>
+          <option value="javelin">Javelin (6″)</option>
         </select></div>
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
@@ -307,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.27';
+const SIM_VERSION = '0.9.28';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -433,7 +436,17 @@ const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
 const WEAPON_RANGES = {
   short_bow:15, horsebow:18, light_crossbow:18, longbow:21,
   composite:24, heavy_crossbow:24, arquebus:18,
+  throwing_axe:3, throwing_spear:3, javelin:6,
 };
+// Thrown weapons (p.11): short-ranged, may never fire indirectly, fire only
+// once per turn, and may always loose at enemies charging them. Modeled as a
+// massed-troop weapon (Vikings/Saxons/javelinmen) using the standard mass
+// missile table — individual thrown fire isn't in Appendix B, so it's not
+// offered. The fire-once and at-chargers rules attach mechanically once
+// rate-of-fire and pass-through fire land; until then "once per turn" is
+// already the de-facto behavior.
+const THROWN_WEAPONS = new Set(['throwing_axe', 'throwing_spear', 'javelin']);
+const isThrown = (id) => THROWN_WEAPONS.has(id);
 
 // Initial formation → cols/rows from count
 function formationDims(formation, count, customCols) {
@@ -1058,7 +1071,7 @@ function inMeleeContact(a, b) {
 
 function inMissileRange(firer, target) {
   if (!firer.weapon) return { ok:false, reason:'no weapon' };
-  const indirect = !!firer.indirect;
+  const indirect = !!firer.indirect && weaponIndirectAllowed(firer.weapon);
   // Indirect fire reduces a weapon's range by one-third (p.12).
   let maxIn = WEAPON_RANGES[firer.weapon];
   if (indirect) maxIn = Math.floor(maxIn * 2 / 3);
@@ -2346,6 +2359,7 @@ function onResolveMissile() {
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
   const tags = [];
+  if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
   if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
@@ -2401,6 +2415,12 @@ function onResolveMissile() {
 // queued as context-menu polish in a later slice).
 function onIndivMissile(a, d) {
   const aT = typeById(a.type), dT = typeById(d.type);
+  if (isThrown(a.weapon)) {
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
+      `<div class="step">A · ${aT.name} → B · ${dT.name}</div>` +
+      `<div class="verdict v-noeffect">thrown weapons are a massed-troop weapon here — individual thrown fire isn't on the Appendix B table</div>`);
+    return;
+  }
   const weapon = rangedWeaponById(a.weapon);
   if (!weapon) {
     appendTurn(`Missile · invalid weapon`,
@@ -2519,6 +2539,7 @@ function onMassMissileAtIndiv(a, d) {
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
   const tags = [];
+  if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
   if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
@@ -3021,6 +3042,13 @@ renderBoard();
   // Dragon fights as 4 Heavy Horse: HH vs HF = 3 dice/man, kills 5-6 → 4×3 = 12 dice; all-6 → 12 kills.
   const dragVsMass = resolveMassMelee({ attacker:{ type:'HH', count:4 }, defender:{ type:'HF', count:20 }, rng: always(6) });
   console.assert(dragVsMass.attacker.totalDice === 12 && dragVsMass.attacker.killsDealt === 12, 'dragon (4×HH) all-6 → 12 kills vs HF mass');
+
+  // Throwing weapons (Slice 6Y): short range, never indirect, mass table.
+  console.assert(WEAPON_RANGES.throwing_axe === 3 && WEAPON_RANGES.throwing_spear === 3 && WEAPON_RANGES.javelin === 6, 'thrown ranges: axe/spear 3″, javelin 6″');
+  console.assert(isThrown('javelin') && !isThrown('longbow'), 'isThrown identifies thrown weapons');
+  console.assert(weaponIndirectAllowed('javelin') === false && weaponIndirectAllowed('longbow') === true, 'thrown weapons can never fire indirectly');
+  const thrownVolley = resolveMassMissile({ firingCount:10, armorGroup:'unarmored', cover:false, indirect:false, rng: always(6) });
+  console.assert(thrownVolley.totalKills === 5, 'thrown volley uses the standard mass missile table (10 unarmored → 5)');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
