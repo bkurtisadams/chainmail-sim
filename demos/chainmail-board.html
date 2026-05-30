@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.35 · Slice 7C: figure size tiers (tiny/small/man/large/huge per fantasy supp. scale table); individual footprint scales with size, man unchanged -->
+<!-- chainmail-board.html · v0.9.36 · Slice 7D: fantasy races core roster (orc/goblin/kobold/dwarf/gnome/elf/hobbit/sprite) as mass troops with Appendix D attack/defend classes, move, armor, size; specials deferred -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.35</title>
+<title>Chainmail — Battlefield · v0.9.36</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7C · figure size tiers</div>
-    <span class="version-tag">v0.9.35</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7D · fantasy races</div>
+    <span class="version-tag">v0.9.36</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.35';
+const SIM_VERSION = '0.9.36';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -343,8 +343,23 @@ const TYPES = Object.freeze([
   { id:'HH',  name:'Heavy Horse',      cls:'HH', morale:8, loss:{ pct:0.50, score:6 } },
   { id:'SP',  name:'Swiss Pikemen',    cls:'HF', morale:9, loss:{ pct:0.50, score:5 } },
   { id:'MK',  name:'Mounted Knights',  cls:'HH', morale:8, loss:{ pct:0.50, score:4 } },
+  // Fantasy races (Appendix D). cls is the attack class; defendCls (when given)
+  // is the class used when they're struck — Dwarves/Goblins/Kobolds attack as
+  // Heavy Foot but defend as Light Foot. Size + per-race specials handled
+  // elsewhere/deferred (see SIZE_BY_TYPE; vision, light penalty, Elf bonuses,
+  // Dwarf half-kills-vs-big, obedience die, sprite/elf invisibility, etc.).
+  { id:'ORC',    name:'Orc',            cls:'HF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'GOBLIN', name:'Goblin',         cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'KOBOLD', name:'Kobold',         cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'DWARF',  name:'Dwarf',          cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'GNOME',  name:'Gnome',          cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'ELF',    name:'Elf',            cls:'HF', morale:6, loss:{ pct:1/3,  score:6 } },
+  { id:'HOBBIT', name:'Hobbit',         cls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'SPRITE', name:'Sprite / Pixie', cls:'LF', morale:3, loss:{ pct:0.25, score:8 } },
 ]);
 const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t => t.id === id);
+// Asymmetric defend class for a mass type (Appendix D), if it differs from cls.
+const defendTypeForMass = (id) => typeById(id)?.defendCls;
 
 const COMBAT = Object.freeze({
   LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
@@ -401,6 +416,8 @@ const MASS_ARMOR_BY_TYPE = {
   PE:'unarmored', LF:'unarmored', LV:'half',
   HF:'half', EHF:'half', SP:'half', AF:'fully',
   LH:'half', MH:'half', HH:'fully', MK:'fully',
+  ORC:'half', GOBLIN:'unarmored', KOBOLD:'unarmored', DWARF:'half', GNOME:'half',
+  ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
 };
 
 // Move allowances (p.9)
@@ -411,6 +428,8 @@ const MOVE_ALLOWANCE = {
   // with the fantasy resolver slice)
   HERO:12, SUPER_HERO:12, WIZARD:12, BALROG:6, DRAGON:9, ELEMENTAL:12,
   ENT:6, GIANT:12, LYCAN:9, ROC:24, TROLL:9, WIGHT:9, WRAITH:18,
+  // Fantasy races (Appendix D)
+  ORC:9, GOBLIN:6, KOBOLD:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
 };
 
 // Inline fantastic types (mirrors data/fantasy.js — used by the board for
@@ -449,6 +468,10 @@ const SIZE_BY_TYPE = {
   HERO: 'man', SUPER_HERO: 'man', WIZARD: 'man', WRAITH: 'man', WIGHT: 'man', LYCAN: 'man',
   TROLL: 'large', BALROG: 'large',
   GIANT: 'huge', DRAGON: 'huge', ELEMENTAL: 'huge', ENT: 'huge', ROC: 'huge',
+  // Fantasy races (scale table)
+  HOBBIT: 'tiny', SPRITE: 'tiny',
+  DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
+  ELF: 'man', ORC: 'man',
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -1968,6 +1991,7 @@ function onResolveMelee() {
   // Build attacker/defender param objects for the engine
   const attackerParams = {
     type: a.type, count: a.count,
+    defendType: defendTypeForMass(a.type),
     polearm: !!a.polearm,
     impetus: !!a.charged,
     flank: edge === 'left' || edge === 'right',
@@ -1976,6 +2000,7 @@ function onResolveMelee() {
   };
   const defenderParams = {
     type: d.type, count: d.count,
+    defendType: defendTypeForMass(d.type),
     polearm: !!d.polearm,
     impetus: !!d.charged,
     standingHorseFirstRound: false,
@@ -2309,6 +2334,9 @@ function onResolveMixed(a, d) {
   const creatureParams = aIsIndiv ? attackerParams : defenderParams;
   creatureParams.defendType = defCls;
   if (bonusDice) creatureParams.bonusDice = bonusDice;
+  // The mass side carries its own asymmetric defend class (e.g. a goblin unit).
+  const massParams = aIsIndiv ? defenderParams : attackerParams;
+  if (defendTypeForMass(mass.type)) massParams.defendType = defendTypeForMass(mass.type);
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   // Casualties, with imperviousness applied: a creature immune to normal melee
@@ -3220,7 +3248,18 @@ renderBoard();
   console.assert(sizeOf('HERO') === 'man' && sizeOf('WIGHT') === 'man' && sizeOf('LYCAN') === 'man', 'heroes/wights/lycanthropes man-sized');
   console.assert(unitBounds({ kind:'individual', type:'HERO' }).pip === 20, 'man footprint unchanged (pip 20)');
   console.assert(unitBounds({ kind:'individual', type:'DRAGON' }).pip > unitBounds({ kind:'individual', type:'HERO' }).pip, 'huge footprint larger than man');
-  console.assert(unitBounds({ kind:'individual', type:'GOBLIN' }).pip === 20, 'unknown type defaults to man-size');
+  console.assert(unitBounds({ kind:'individual', type:'NOTATYPE' }).pip === 20, 'unknown type defaults to man-size');
+
+  // Fantasy races core roster (Slice 7D).
+  console.assert(typeById('ORC').cls === 'HF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, hobbit as LF');
+  console.assert(defendTypeForMass('GOBLIN') === 'LF' && defendTypeForMass('DWARF') === 'LF', 'goblins/dwarves defend as LF');
+  console.assert(defendTypeForMass('ORC') === undefined && defendTypeForMass('ELF') === undefined, 'orcs/elves symmetric (no defend override)');
+  console.assert(sizeOf('HOBBIT') === 'tiny' && sizeOf('GOBLIN') === 'small' && sizeOf('ORC') === 'man', 'race size tiers');
+  console.assert(MOVE_ALLOWANCE.ELF === 12 && MOVE_ALLOWANCE.DWARF === 6 && MOVE_ALLOWANCE.SPRITE === 9, 'race move allowances');
+  // Goblin defends as LF: HF attacker rolling all-5 kills it (HF-vs-LF kills 5-6),
+  // whereas vs an HF defender 5s would miss — confirms the defend class applies.
+  const hfVsGoblinLF = resolveMassMelee({ attacker:{ type:'HF', count:10 }, defender:{ type:'GOBLIN', count:20, defendType: defendTypeForMass('GOBLIN') }, rng: always(5) });
+  console.assert(hfVsGoblinLF.attacker.killsDealt === 10, 'goblin defends as LF → HF kills on 5-6 (all-5 → 10)');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
