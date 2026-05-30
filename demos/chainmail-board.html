@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.17 · Slice 6O.1: mixed melee log shows full dice trace -->
+<!-- chainmail-board.html · v0.9.18 · Slice 6P: mass missile fire at individual target (hp routing + missile-immune guard) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.17</title>
+<title>Chainmail — Battlefield · v0.9.18</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -145,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6O.1 · mixed-melee log shows full dice trace</div>
-    <span class="version-tag">v0.9.17</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6P · mass missile fire at individual target</div>
+    <span class="version-tag">v0.9.18</span>
   </div>
 
   <div class="toolbar">
@@ -300,7 +300,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.17';
+const SIM_VERSION = '0.9.18';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2207,13 +2207,7 @@ function onResolveMissile() {
   // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
   // mass shooters use the mass missile table (existing path).
   if (a.kind === 'individual') return onIndivMissile(a, d);
-  if (d.kind === 'individual') {
-    appendTurn(
-      `Missile resolver — skipped`,
-      `<div class="step">Mass fire at an individual target isn't wired yet. A unit of archers shooting a single Hero ships with a later polish slice.</div>`
-    );
-    return;
-  }
+  if (d.kind === 'individual') return onMassMissileAtIndiv(a, d);
   const rng = state.rng;
   const aT = typeById(a.type), dT = typeById(d.type);
   const armorGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
@@ -2337,7 +2331,68 @@ function onIndivMissile(a, d) {
   renderBoard();
 }
 
-/* === I. UI WIRING ====================================================== */
+// Mass missile fire at an individual target. The mass missile resolver still
+// produces a kill count; those kills bleed into the individual's hp pool
+// (FIGHTING_STRENGTH — e.g. 4 for a Hero, the "four simultaneous kills" rule,
+// p.30). Types explicitly impervious to normal missile fire (Wraith, Balrog,
+// Ent, Dragon, Wight/Ghoul, Wizard, Elemental) are unharmed.
+const MISSILE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'WIGHT', 'WIZARD', 'ELEMENTAL']);
+function indivArmorIdxToMassGroup(idx) {
+  if (idx <= 1) return 'unarmored';     // none / leather
+  if (idx <= 5) return 'half';          // shield, leather+sh, chain, chain+sh
+  return 'fully';                       // plate, plate+sh, barded horse
+}
+function onMassMissileAtIndiv(a, d) {
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const reach = inMissileRange(a, d);
+  if (!reach.ok) return;
+
+  if (MISSILE_IMMUNE_INDIV.has(d.type)) {
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
+      `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
+      `distance ${reach.distanceIn.toFixed(1)}″</div>` +
+      `<div class="verdict v-noeffect">${dT.name} is impervious to normal missile fire</div>`);
+    a.acted.fired = true;
+    return;
+  }
+
+  const armorIdx = targetArmorIdx(d);
+  const armorGroup = indivArmorIdxToMassGroup(armorIdx);
+  // Chainmail p.11: only the first two ranks of missile troops may fire.
+  const firingCount = Math.min(a.count, a.cols * 2);
+  const rankCapped = firingCount < a.count;
+  const res = resolveMassMissile({ firingCount, armorGroup, cover:false, indirect:false, rng: state.rng });
+
+  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
+  const hpBefore = d.hp;
+  let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[armorGroup].label}` +
+             ` · hp ${hpBefore}/${d.maxHp}${rankNote}</div>`;
+  res.groups.forEach((g, i) => {
+    if (g.reason) {
+      html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
+    } else {
+      html += `<div class="step">group ${i+1} · ${g.count} firing · ` +
+              `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> hit${g.kills===1?'':'s'}</div>`;
+    }
+  });
+
+  d.hp = Math.max(0, (d.hp || 0) - res.totalKills);
+  if (d.hp <= 0) {
+    html += `<div class="verdict v-rout">B · ${dT.name} → killed (${res.totalKills} hits, hp ${hpBefore}/${d.maxHp})</div>`;
+    d.count = 0; d.destroyed = true;
+    cleanupEngagementsForUnit(d.id);
+    if (d.id === state.targetId) state.targetId = null;
+  } else if (res.totalKills > 0) {
+    html += `<div class="verdict v-killed">B · ${dT.name} takes ${res.totalKills} hit${res.totalKills===1?'':'s'} → hp ${d.hp}/${d.maxHp}</div>`;
+  } else {
+    html += `<div class="verdict v-noeffect">no hits</div>`;
+  }
+
+  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  a.acted.fired = true;
+  renderBoard();
+}
 function spawnUnit() {
   const side = $('#f-side').value;
   const kind = $('#f-kind').value;
