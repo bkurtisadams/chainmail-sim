@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.14 · Slice 6M.1: mtm polish (parry default, log scroll, dropdown, charge) -->
+<!-- chainmail-board.html · v0.9.15 · Slice 6N: individual missile fire (Appendix B bottom) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.14</title>
+<title>Chainmail — Battlefield · v0.9.15</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -145,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6M.1 · mtm polish (parry default, log scroll, dropdown fits, hero charge)</div>
-    <span class="version-tag">v0.9.14</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6N · individual missile fire (hero w/ bow, etc.)</div>
+    <span class="version-tag">v0.9.15</span>
   </div>
 
   <div class="toolbar">
@@ -300,7 +300,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.14';
+const SIM_VERSION = '0.9.15';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -785,6 +785,89 @@ function mtmResolveRound(state) {
     }
   }
   return { blows, outcome:'continues', nextFirstStriker:first, parryCase:pCase, defenderReturns };
+}
+
+/* === E. INDIVIDUAL MISSILE ENGINE (Appendix B bottom) ================== */
+// Each cell is a compact "close-medium-max" 2d6 threshold string per armor index.
+// Notation: 0=10, 1=11, 2=12, /=null (no kill possible at this range/armor).
+const RANGED_WEAPONS_INDIV = Object.freeze([
+  { id:'short_bow',      name:'Short Bow',      range:15, indirectAllowed:true,
+    rows:['6-7-8','6-7-8','6-7-8','7-8-9','8-9-0','9-0-1','1-2-/','2-/-/','0-2-/','2-/-/'] },
+  { id:'horsebow',       name:'Horsebow',       range:18, indirectAllowed:true, mountedFire:true,
+    rows:['5-6-7','5-6-8','5-6-8','6-7-8','8-9-0','9-0-1','1-2-/','2-/-/','9-0-1','2-/-/'] },
+  { id:'light_crossbow', name:'Light Crossbow', range:18, indirectAllowed:false,
+    rows:['5-6-7','5-7-8','5-7-8','6-7-9','8-9-0','0-1-/','1-2-/','2-/-/','9-0-/','2-/-/'] },
+  { id:'longbow',        name:'Longbow',        range:21, indirectAllowed:true,
+    rows:['5-6-7','5-6-7','5-6-7','5-6-8','6-7-9','8-9-0','9-1-/','1-2-/','7-9-2','9-1-/'] },
+  { id:'composite',      name:'Composite Bow',  range:24, indirectAllowed:true,
+    rows:['5-6-7','5-6-7','5-6-7','5-7-8','6-8-0','8-0-1','9-2-/','1-/-/','7-0-2','0-2-/'] },
+  { id:'heavy_crossbow', name:'Heavy Crossbow', range:24, indirectAllowed:false, halfRoF:true,
+    rows:['4-5-6','4-6-7','4-6-7','5-7-8','6-8-9','7-9-0','8-0-1','0-1-2','7-9-2','9-1-/'] },
+  { id:'arquebus',       name:'Arquebus',       range:18, indirectAllowed:false, halfRoF:true,
+    rows:['5-6-8','5-6-8','5-6-8','5-6-8','6-7-8','6-8-9','7-9-0','8-0-2','6-9-1','8-0-2'] },
+]);
+const rangedWeaponById = (id) => RANGED_WEAPONS_INDIV.find(w => w.id === id);
+
+const parseRow = (s) => s.split('-').map(t => {
+  if (t === '/') return null;
+  if (t === '0') return 10;
+  if (t === '1') return 11;
+  if (t === '2') return 12;
+  return parseInt(t, 10);
+});
+const BAND_INDEX = Object.freeze({ close:0, medium:1, max:2 });
+function rangeBand(distance, range) {
+  if (distance < 1 || distance > range) return null;
+  const t = range / 3;
+  if (distance <= t)     return 'close';
+  if (distance <= 2 * t) return 'medium';
+  return 'max';
+}
+function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, indirect = false, rng }) {
+  let effRange = weapon.range;
+  let effArmor = armorIdx;
+  let arrowProof = false;
+  if (indirect) {
+    if (!weapon.indirectAllowed) return { ok:false, reason:'indirect not permitted for this weapon' };
+    effRange = Math.floor(weapon.range * 2 / 3);
+    effArmor = armorIdx + 1;
+    if (effArmor > 7) arrowProof = true; // beyond plate+shield → arrow proof
+  }
+  const band = rangeBand(distance, effRange);
+  if (!band) return { ok:false, reason:'out of range', effRange };
+  if (arrowProof) return { ok:true, band, target:null, arrowProof:true, kill:false };
+  const row = parseRow(weapon.rows[effArmor]);
+  const target = row[BAND_INDEX[band]];
+  if (target === null) return { ok:true, band, target:null, kill:false, reason:'no kill possible at this range/armor' };
+  const dice = roll2d6(rng);
+  const total = dice.sum - cover;
+  return {
+    ok:true, band, target, dice, cover, total,
+    kill: total >= target, effRange, effArmor, indirect,
+  };
+}
+
+// Mass-troop type → individual ARMOR_MTM index. Used when an individual fires
+// at a mass unit and the mass armor needs to be looked up in the individual
+// missile table.
+const MASS_TO_INDIV_ARMOR_IDX = {
+  PE: 0, LV: 1, LF: 1,
+  HF: 4, EHF: 4, SP: 4, AF: 6,
+  LH: 1, MH: 4, HH: 6, MK: 6,
+};
+// Fantasy-type fallback when an individual without u.armor set is hit. Real
+// rules use special defense for monsters; this is a usable approximation.
+const FANTASY_TO_INDIV_ARMOR_IDX = {
+  HERO: 4, SUPER_HERO: 5, WIZARD: 0,
+  TROLL: 1, WIGHT: 0, WRAITH: 0, LYCAN: 1,
+  GIANT: 1, ENT: 4, ROC: 4, DRAGON: 6, BALROG: 6, ELEMENTAL: 0,
+};
+function targetArmorIdx(target) {
+  if (target.kind === 'individual') {
+    if (target.armor) return armorIndexMtm(target.armor);
+    return FANTASY_TO_INDIV_ARMOR_IDX[target.type] ?? 4;
+  }
+  return MASS_TO_INDIV_ARMOR_IDX[target.type] ?? 4;
 }
 
 function splitFiringGroups(count, maxGroup) {
@@ -1882,10 +1965,13 @@ function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
-  if (a.kind === 'individual' || d.kind === 'individual') {
+  // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
+  // mass shooters use the mass missile table (existing path).
+  if (a.kind === 'individual') return onIndivMissile(a, d);
+  if (d.kind === 'individual') {
     appendTurn(
-      `Mass-missile resolver — skipped`,
-      `<div class="step">One or both combatants is an individual unit. Individual missile resolution lands in a later slice; mass-vs-mass only for now.</div>`
+      `Missile resolver — skipped`,
+      `<div class="step">Mass fire at an individual target isn't wired yet. A unit of archers shooting a single Hero ships with a later polish slice.</div>`
     );
     return;
   }
@@ -1932,6 +2018,81 @@ function onResolveMissile() {
   }
 
   appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  a.acted.fired = true;
+  if (d.destroyed && state.targetId === d.id) state.targetId = null;
+  renderBoard();
+}
+
+// Individual missile (Appendix B bottom). Shooter is always an individual;
+// target can be either kind. Cover defaults to 0, indirect to false (both
+// queued as context-menu polish in a later slice).
+function onIndivMissile(a, d) {
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const weapon = rangedWeaponById(a.weapon);
+  if (!weapon) {
+    appendTurn(`Missile · invalid weapon`,
+      `<div class="step">A · ${aT.name} has no individual missile weapon assigned.</div>`);
+    return;
+  }
+  const reach = inMissileRange(a, d);
+  if (!reach.ok) return;
+  const armorIdx = targetArmorIdx(d);
+  const armorLabel = (d.kind === 'individual')
+    ? (ARMOR_MTM[armorIdx] || {label:'?'}).label
+    : `${dT.name} (${ARMOR_MTM[armorIdx].label})`;
+  const r = resolveIndividualMissile({
+    weapon, distance: reach.distanceIn, armorIdx, cover: 0, indirect: false, rng: state.rng,
+  });
+
+  let html = `<div class="step">A · ${aT.name} fires ${weapon.name} (range ${weapon.range}″) at ` +
+             `B · ${dT.name}${d.kind === 'mass' ? ` × ${d.count}` : ''} · ` +
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${armorLabel}</div>`;
+  if (!r.ok) {
+    html += `<div class="verdict v-noeffect">${r.reason}</div>`;
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
+    return;
+  }
+  if (r.arrowProof) {
+    html += `<div class="step">band ${r.band} · arrow-proof at this armor/range</div>`;
+    html += `<div class="verdict v-noeffect">no effect (arrow-proof)</div>`;
+  } else if (r.target === null) {
+    html += `<div class="step">band ${r.band} · row cell = / (no kill possible at this range/armor)</div>`;
+    html += `<div class="verdict v-noeffect">no effect</div>`;
+  } else {
+    const coverStr = r.cover ? ` − ${r.cover} cover` : '';
+    html += `<div class="step">band ${r.band} · TN ${r.target}+ · 2d6 = ${r.dice.a}+${r.dice.b} = ` +
+            `<b>${r.dice.sum}</b>${coverStr}${r.cover?` = <b>${r.total}</b>`:''} → ` +
+            (r.kill ? `<b style="color:#a3322a">HIT</b>` : 'miss') + `</div>`;
+    if (r.kill) {
+      if (d.kind === 'individual') {
+        html += `<div class="verdict v-rout">B · ${dT.name} → killed</div>`;
+        d.count = 0; d.destroyed = true;
+        cleanupEngagementsForUnit(d.id);
+        if (d.id === state.targetId) state.targetId = null;
+      } else {
+        applyCasualties(d, 1);
+        html += `<div class="verdict v-${d.destroyed?'rout':'killed'}">B · ${dT.name} loses 1 figure → ${d.count} left${d.destroyed?' (destroyed)':''}</div>`;
+        if (!d.destroyed) {
+          const cas = d.startCount - d.count;
+          const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
+            fatigued: !!d.fatigued && state.settings.applyFatigue });
+          if (lr.triggered) {
+            const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+            const fatTail = lr.fatiguePenalty
+              ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>`
+              : '';
+            html += `<div class="step">B · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+                    `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+            html += `<div class="verdict v-${lr.passed?'stable':lr.action}">B ${lr.passed?'holds':lr.action}</div>`;
+            if (!lr.passed) d.destroyed = true;
+          }
+        }
+      }
+    } else {
+      html += `<div class="verdict v-noeffect">no effect</div>`;
+    }
+  }
+  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
   a.acted.fired = true;
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
