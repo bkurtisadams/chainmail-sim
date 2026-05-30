@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.31 · Slice 6Z: rate-of-fire enforcement — once per turn baseline, held archers/longbows loose twice, heavy crossbow and arquebus every other turn (p.11) -->
+<!-- chainmail-board.html · v0.9.33 · log: stamp every entry with the turn number (consistent melee/missile/breath/morale structure); melee still carries its engagement round -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.31</title>
+<title>Chainmail — Battlefield · v0.9.33</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6Z · rate of fire</div>
-    <span class="version-tag">v0.9.31</span>
+    <div class="sub">Chainmail HTML Sim · v0.9.33 · log turn stamps</div>
+    <span class="version-tag">v0.9.33</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.31';
+const SIM_VERSION = '0.9.33';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1061,6 +1061,25 @@ function engagementEdge(attacker, defender) {
   return angle > 0 ? 'right' : 'left';
 }
 
+// Arc of fire (p.11). Foot may shoot 45° to either side of facing; horsemen
+// 180° to the left plus 45° to the right (the Parthian arc — everything except
+// the right flank/rear). Bearing uses the same convention as engagementEdge:
+// 0 = dead ahead, + = right, − = left, ±180 = directly behind.
+function isHorseman(u) {
+  return u.kind === 'individual' ? !!u.mounted : HORSE_TYPES.has(u.type);
+}
+function bearingTo(firer, target) {
+  const dx = target.x - firer.x, dy = target.y - firer.y;
+  const f = -firer.facing * Math.PI / 180;
+  const lx = dx * Math.cos(f) - dy * Math.sin(f);
+  const ly = dx * Math.sin(f) + dy * Math.cos(f);
+  return Math.atan2(lx, -ly) * 180 / Math.PI;
+}
+function inFiringArc(firer, target) {
+  const b = bearingTo(firer, target);
+  return isHorseman(firer) ? (b <= 45) : (Math.abs(b) <= 45);
+}
+
 // Approximate contact: center-to-center distance ≤ MELEE_RANGE + half-widths.
 function inMeleeContact(a, b) {
   const range = inchesToPx(MELEE_RANGE_IN);
@@ -1307,13 +1326,22 @@ function renderUnit(u) {
   const showArc = u.weapon && !u.hedgehog && (sel || state.settings.arcForAllMissile);
   if (showArc) {
     const radius = inchesToPx(WEAPON_RANGES[u.weapon]) || inchesToPx(18);
-    const half = Math.PI / 4; // 45° foot
-    const lx = -radius * Math.sin(half), ly = yT - radius * Math.cos(half);
-    const rx =  radius * Math.sin(half), ry = yT - radius * Math.cos(half);
     const arcStroke = u.side === 'A' ? 'rgba(58,110,144,0.65)' : 'rgba(156,59,44,0.65)';
     const arcFill   = u.side === 'A' ? 'rgba(58,110,144,0.12)' : 'rgba(156,59,44,0.12)';
-    arc = `<path d="M 0 ${yT} L ${lx} ${ly} A ${radius} ${radius} 0 0 1 ${rx} ${ry} Z"
-      fill="${arcFill}" stroke="${arcStroke}" stroke-width="0.8" stroke-dasharray="3 4" pointer-events="none"/>`;
+    if (isHorseman(u)) {
+      // 180° left + 45° right — a 225° wedge from the +45° ray, swept left
+      // (through front and left flank) round to directly behind.
+      const ax =  radius * Math.sin(Math.PI/4), ay = yT - radius * Math.cos(Math.PI/4); // +45° right
+      const bx = 0, by = yT + radius;                                                   // 180° rear
+      arc = `<path d="M 0 ${yT} L ${ax} ${ay} A ${radius} ${radius} 0 1 0 ${bx} ${by} Z"
+        fill="${arcFill}" stroke="${arcStroke}" stroke-width="0.8" stroke-dasharray="3 4" pointer-events="none"/>`;
+    } else {
+      const half = Math.PI / 4; // 45° foot, each side of facing
+      const lx = -radius * Math.sin(half), ly = yT - radius * Math.cos(half);
+      const rx =  radius * Math.sin(half), ry = yT - radius * Math.cos(half);
+      arc = `<path d="M 0 ${yT} L ${lx} ${ly} A ${radius} ${radius} 0 0 1 ${rx} ${ry} Z"
+        fill="${arcFill}" stroke="${arcStroke}" stroke-width="0.8" stroke-dasharray="3 4" pointer-events="none"/>`;
+    }
   }
 
   // Action status badges (above the unit, screen-fixed orientation)
@@ -1535,7 +1563,7 @@ function updateButtons() {
   const d = state.units.find(u => u.id === state.targetId);
   const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
   $('#btn-melee').disabled   = !(valid && inMeleeContact(a, d));
-  $('#btn-missile').disabled = !(valid && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok);
+  $('#btn-missile').disabled = !(valid && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -1699,7 +1727,9 @@ function onKeyDown(evt) {
 function appendTurn(headline, bodyHtml) {
   const d = document.createElement('div');
   d.className = 'turn';
-  d.innerHTML = `<div class="turn-head">${headline}</div>${bodyHtml}`;
+  // Every entry is stamped with the turn so the log reads consistently;
+  // melee additionally carries its engagement round in the headline.
+  d.innerHTML = `<div class="turn-head">Turn ${state.turn} · ${headline}</div>${bodyHtml}`;
   const log = $('#log');
   log.prepend(d);
   log.scrollTop = 0;
@@ -2376,6 +2406,13 @@ function onResolveMissile() {
     const why = (w && w.halfRoF) ? 'reloading — fires every other turn' : 'already fired this turn';
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
       `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${why}</div>`);
+    return;
+  }
+  if (!inFiringArc(a, d)) {
+    const aT = typeById(a.type), dT = typeById(d.type);
+    const arcTxt = isHorseman(a) ? '180° left / 45° right' : '45° to either side';
+    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
+      `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">target outside the firing arc (${arcTxt}) — rotate to bear</div>`);
     return;
   }
   // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
@@ -3109,6 +3146,16 @@ renderBoard();
   console.assert(missileShotsAllowed({ weapon:'light_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0 }) === 1, 'crossbow never doubles');
   console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn:null }) === 1, 'heavy crossbow fires when reloaded');
   console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn: state.turn }) === 0, 'heavy crossbow reloading → 0 shots');
+
+  // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
+  const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
+  console.assert(inFiringArc(footFirer, { x:0, y:-100 }) === true,  'foot: target dead ahead in arc');
+  console.assert(inFiringArc(footFirer, { x:100, y:0 })  === false, 'foot: right flank out of arc');
+  console.assert(inFiringArc(footFirer, { x:-100, y:0 }) === false, 'foot: left flank out of arc');
+  const horseFirer = { kind:'individual', mounted:true, x:0, y:0, facing:0 };
+  console.assert(inFiringArc(horseFirer, { x:-100, y:0 })   === true,  'horse: left flank in arc (180° left)');
+  console.assert(inFiringArc(horseFirer, { x:-100, y:100 }) === true,  'horse: left-rear in arc');
+  console.assert(inFiringArc(horseFirer, { x:100, y:0 })    === false, 'horse: right flank out of arc');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
