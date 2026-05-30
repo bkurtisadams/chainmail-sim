@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.7.0 · Slice 6d: formation reshape via context menu -->
+<!-- chainmail-board.html · v0.7.1 · Fix: hidden ctx-menu buttons were ignored by display:block -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.7.0</title>
+<title>Chainmail — Battlefield · v0.7.1</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -93,6 +93,7 @@
     border: 0; padding: 6px 14px; text-align: left; text-transform: none; letter-spacing: 0.4px;
     font-weight: 500; font-size: 12px; cursor: pointer; border-radius: 0; }
   .ctx-menu button:hover { background: rgba(0,0,0,0.06); }
+  .ctx-menu button[hidden] { display: none; }
   .ctx-menu button.danger { color: var(--rear); }
   .ctx-menu[hidden] { display: none; }
 
@@ -226,7 +227,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.7.0';
+const SIM_VERSION = '0.7.1';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
