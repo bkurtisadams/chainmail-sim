@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.4.4 · Surrendered units removed from play -->
+<!-- chainmail-board.html · v0.5.0 · Game settings (display preferences + optional-rule slots) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.4.4</title>
+<title>Chainmail — Battlefield · v0.5.0</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -95,12 +95,32 @@
   .ctx-menu button:hover { background: rgba(0,0,0,0.06); }
   .ctx-menu button.danger { color: var(--rear); }
   .ctx-menu[hidden] { display: none; }
+
+  .modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
+  .modal[hidden] { display: none; }
+  .modal-bg { position: absolute; inset: 0; background: rgba(0,0,0,0.42); }
+  .modal-card { position: relative; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); padding: 18px 22px 16px;
+    min-width: 400px; max-width: 480px; font-family: var(--serif); color: var(--ink); }
+  .modal-card .modal-head { font-family: var(--sans); font-size: 13px; letter-spacing: 3px;
+    text-transform: uppercase; color: var(--ink); margin: 0 0 14px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule); font-weight: 700; }
+  .modal-card h3 { font-family: var(--sans); font-size: 10.5px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--ink-soft); margin: 12px 0 4px; }
+  .modal-card section { margin-bottom: 8px; }
+  .modal-card label { display: flex; align-items: center; padding: 5px 0; cursor: pointer;
+    font-size: 13px; gap: 8px; user-select: none; }
+  .modal-card label input { margin: 0; }
+  .modal-card .modal-foot { display: flex; justify-content: flex-end; margin-top: 12px;
+    padding-top: 10px; border-top: 1px solid var(--rule); }
+  .modal-card small { color: var(--ink-soft); font-weight: normal; letter-spacing: 0.5px; text-transform: none; }
+  .modal-card p { font-size: 11.5px; color: var(--ink-soft); margin: 4px 0 6px; font-family: var(--sans); line-height: 1.5; }
 </style>
 </head>
 <body>
 <div class="page">
   <h1>Battlefield</h1>
-  <div class="sub">Chainmail HTML Sim · Slice 6b · post-melee status pipeline · routing · retreat · surrender</div>
+  <div class="sub">Chainmail HTML Sim · Game settings · display preferences · captured unit · grid default · arc</div>
   <hr>
 
   <div class="toolbar">
@@ -111,6 +131,7 @@
     <button id="btn-clear-sel" class="secondary">Clear selection</button>
     <button id="btn-reset-view" class="secondary">Reset view</button>
     <button id="btn-grid" class="secondary">Grid: off</button>
+    <button id="btn-settings" class="secondary">Settings</button>
     <button id="btn-reset" class="danger">Reset board</button>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
     <span class="hint">click → select · shift+click → target · drag → move · [ ] → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
@@ -176,8 +197,32 @@
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
 
+<div id="settings-modal" class="modal" hidden>
+  <div class="modal-bg" data-act="close"></div>
+  <div class="modal-card">
+    <div class="modal-head">Game Settings</div>
+
+    <section>
+      <h3>Display</h3>
+      <label><input type="checkbox" data-setting="gridOnByDefault"> Show grid at startup</label>
+      <label><input type="checkbox" data-setting="keepCapturedVisible"> Keep captured units visible (faded)</label>
+      <label><input type="checkbox" data-setting="arcForAllMissile"> Show arc of fire for all missile units</label>
+    </section>
+
+    <section>
+      <h3>Optional Rules</h3>
+      <p>Charge impetus bonus, prisoners step, and cavalry-charge morale check
+         will appear here as their slices land. Chainmail p.16–18.</p>
+    </section>
+
+    <div class="modal-foot">
+      <button class="secondary" data-act="close">Close</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
-const SIM_VERSION = '0.4.4';
+const SIM_VERSION = '0.5.0';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -461,6 +506,11 @@ const state = {
   ctxUnitId: null,
   turn: 1,
   activeSide: 'A',
+  settings: {
+    gridOnByDefault: true,
+    keepCapturedVisible: true,
+    arcForAllMissile: false,
+  },
   rng: mulberry32(Date.now() & 0xffff),
 };
 
@@ -638,9 +688,10 @@ function renderUnit(u) {
     edges += `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
   }
 
-  // Arc of fire (missile-armed) — only render for the currently selected unit
+  // Arc of fire (missile-armed) — render for selected unit, or all missile units when the setting is on
   let arc = '';
-  if (u.weapon && !u.hedgehog && sel) {
+  const showArc = u.weapon && !u.hedgehog && (sel || state.settings.arcForAllMissile);
+  if (showArc) {
     const radius = inchesToPx(WEAPON_RANGES[u.weapon]) || inchesToPx(18);
     const half = Math.PI / 4; // 45° foot
     const lx = -radius * Math.sin(half), ly = yT - radius * Math.cos(half);
@@ -910,6 +961,7 @@ function onKeyDown(evt) {
   }
   if (evt.key === '0') { resetView(); evt.preventDefault(); return; }
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
+  if (evt.key === 'Escape' && !$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#ctx-menu').hidden) { closeContextMenu(); evt.preventDefault(); return; }
 
   const u = state.units.find(u => u.id === state.selectedId);
@@ -1012,13 +1064,16 @@ function onResolveMelee() {
   applyCasualties(d, melee.defender.casualties);
 
   // Post-melee verdict → loser unit status. Surrender additionally removes
-  // the unit from play (captured, per rules p.16).
+  // the unit from play (captured, per rules p.16) unless the
+  // "keep captured units visible" setting is on.
   const tagToStatus = { back1:'back1', back2:'back2', retreat:'retreat', rout:'routing', surrender:'surrendered' };
   const newStatus = tagToStatus[tag];
   if (pm.loser && newStatus) {
     const loserUnit = pm.loser === 'A' ? a : d;
     if (!loserUnit.destroyed) loserUnit.status = newStatus;
-    if (newStatus === 'surrendered') loserUnit.destroyed = true;
+    if (newStatus === 'surrendered' && !state.settings.keepCapturedVisible) {
+      loserUnit.destroyed = true;
+    }
   }
 
   // Loss-morale check on whichever side(s) crossed threshold
@@ -1179,6 +1234,29 @@ function resetBoard() {
 
 function clearActed(u) { u.acted = { moved: false, fired: false, fought: false }; }
 
+function syncSettingsCheckboxes() {
+  document.querySelectorAll('[data-setting]').forEach(el => {
+    el.checked = !!state.settings[el.dataset.setting];
+  });
+}
+function openSettings() {
+  syncSettingsCheckboxes();
+  $('#settings-modal').hidden = false;
+}
+function closeSettings() { $('#settings-modal').hidden = true; }
+function onSettingChange(evt) {
+  const key = evt.target.dataset.setting;
+  if (!key) return;
+  state.settings[key] = evt.target.checked;
+  renderBoard();
+  if (key === 'gridOnByDefault') {
+    // Apply immediately for the current session so users can preview.
+    state.showGrid = state.settings.gridOnByDefault;
+    $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
+    renderBoard();
+  }
+}
+
 function renderTurnUI() {
   const sideC = state.activeSide === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   $('#phase').innerHTML = `Turn ${state.turn} · Side <b style="color:${sideC}">${state.activeSide}</b>`;
@@ -1206,6 +1284,9 @@ $('#btn-missile').addEventListener('click', onResolveMissile);
 $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; state.targetId = null; renderBoard(); });
 $('#btn-reset-view').addEventListener('click', resetView);
 $('#btn-grid').addEventListener('click', toggleGrid);
+$('#btn-settings').addEventListener('click', openSettings);
+$('#settings-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeSettings(); });
+document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
 $('#btn-reset').addEventListener('click', resetBoard);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
@@ -1220,6 +1301,8 @@ document.addEventListener('mousedown', e => {
 });
 document.addEventListener('keydown', onKeyDown);
 
+state.showGrid = state.settings.gridOnByDefault;
+$('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 renderTurnUI();
 renderBoard();
 
