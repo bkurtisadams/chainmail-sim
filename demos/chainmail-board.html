@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.19 · Slice 6Q: indirect-fire toggle + cover detection (per-target cover level, indirect negates cover) -->
+<!-- chainmail-board.html · v0.9.20 · Slice 6R: scrollable/compacted side panel + grid opacity setting (non-scaling stroke) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.19</title>
+<title>Chainmail — Battlefield · v0.9.20</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -45,7 +45,8 @@
   button.danger { background: var(--rear); }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
-  aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0;
+    max-height: calc(100vh - 160px); overflow-y: auto; padding-right: 4px; }
   aside.log-panel  { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   aside.log-panel > .panel { display: flex; flex-direction: column; flex: 1; min-height: 320px;
     max-height: calc(100vh - 160px); padding: 10px 12px; }
@@ -59,12 +60,12 @@
   #board.spawning { cursor: crosshair; }
   #board.panning  { cursor: grabbing; }
   aside { display: flex; flex-direction: column; gap: 12px; }
-  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 9px 12px; }
   .panel h2 { font-family: var(--sans); font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase;
-    font-weight: 700; margin: 0 0 10px; color: var(--ink); }
+    font-weight: 700; margin: 0 0 7px; color: var(--ink); }
   .panel .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px;
     vertical-align: -1px; }
-  .field { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .field { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
   .field label { width: 76px; font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.4px;
     text-transform: uppercase; color: var(--ink-soft); }
   .field select, .field input { flex: 1; min-width: 0; padding: 4px 6px; font-family: var(--serif); font-size: 13px;
@@ -145,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6Q · indirect fire + cover</div>
-    <span class="version-tag">v0.9.19</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6R · panel scroll + grid opacity</div>
+    <span class="version-tag">v0.9.20</span>
   </div>
 
   <div class="toolbar">
@@ -281,6 +282,8 @@
     <section>
       <h3>Display</h3>
       <label><input type="checkbox" data-setting="gridOnByDefault"> Show grid at startup</label>
+      <label style="justify-content:space-between; gap:12px;"><span>Grid opacity</span>
+        <input type="range" min="0" max="1" step="0.05" data-setting-range="gridOpacity" style="flex:0 0 140px;"></label>
       <label><input type="checkbox" data-setting="keepCapturedVisible"> Keep captured units visible (faded)</label>
       <label><input type="checkbox" data-setting="arcForAllMissile"> Show arc of fire for all missile units</label>
     </section>
@@ -302,7 +305,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.19';
+const SIM_VERSION = '0.9.20';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -985,6 +988,7 @@ const state = {
   activeSide: 'A',
   settings: {
     gridOnByDefault: true,
+    gridOpacity: 0.5,
     keepCapturedVisible: true,
     arcForAllMissile: false,
     applyWrapAroundBonus: true,
@@ -1148,17 +1152,21 @@ function renderBg() {
 function renderGrid() {
   if (!state.showGrid) return '';
   const lines = [];
+  // vector-effect:non-scaling-stroke keeps line width constant in screen px at
+  // any zoom level (the board only updates its viewBox on zoom, not re-render),
+  // so the grid stays legible when zoomed out. Group opacity is user-tunable.
   for (let i = 1; i < BOARD_W / PX_PER_INCH; i++) {
     const x = i * PX_PER_INCH;
     const big = (i % 6 === 0);
-    lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${BOARD_H}" stroke="rgba(0,0,0,${big?0.20:0.08})" stroke-width="${big?0.6:0.3}"/>`);
+    lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${BOARD_H}" stroke="#000" stroke-width="${big?1:0.5}" stroke-opacity="${big?0.55:0.3}" vector-effect="non-scaling-stroke"/>`);
   }
   for (let i = 1; i < BOARD_H / PX_PER_INCH; i++) {
     const y = i * PX_PER_INCH;
     const big = (i % 6 === 0);
-    lines.push(`<line x1="0" y1="${y}" x2="${BOARD_W}" y2="${y}" stroke="rgba(0,0,0,${big?0.20:0.08})" stroke-width="${big?0.6:0.3}"/>`);
+    lines.push(`<line x1="0" y1="${y}" x2="${BOARD_W}" y2="${y}" stroke="#000" stroke-width="${big?1:0.5}" stroke-opacity="${big?0.55:0.3}" vector-effect="non-scaling-stroke"/>`);
   }
-  return `<g id="grid" pointer-events="none">${lines.join('')}</g>`;
+  const op = state.settings.gridOpacity ?? 0.5;
+  return `<g id="grid" pointer-events="none" opacity="${op}">${lines.join('')}</g>`;
 }
 
 function statusVisual(status) {
@@ -2621,6 +2629,9 @@ function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting]').forEach(el => {
     el.checked = !!state.settings[el.dataset.setting];
   });
+  document.querySelectorAll('[data-setting-range]').forEach(el => {
+    el.value = state.settings[el.dataset.settingRange] ?? el.value;
+  });
 }
 function openSettings() {
   syncSettingsCheckboxes();
@@ -2640,6 +2651,19 @@ function onSettingChange(evt) {
     state.showGrid = state.settings.gridOnByDefault;
     $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
     renderBoard();
+  }
+}
+function onSettingRange(evt) {
+  const key = evt.target.dataset.settingRange;
+  if (!key) return;
+  const val = parseFloat(evt.target.value);
+  state.settings[key] = val;
+  // Live-update the grid group opacity without a full board re-render (smooth
+  // while dragging). Falls back to render if the grid layer isn't present.
+  if (key === 'gridOpacity') {
+    const g = $('#grid');
+    if (g) g.setAttribute('opacity', val);
+    else renderBoard();
   }
 }
 
@@ -2689,6 +2713,7 @@ $('#new-unit-toggle').addEventListener('click', toggleNewUnit);
 $('#settings-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeSettings(); });
 $('#help-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeHelp(); });
 document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
+document.querySelectorAll('[data-setting-range]').forEach(el => el.addEventListener('input', onSettingRange));
 $('#btn-reset').addEventListener('click', resetBoard);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
