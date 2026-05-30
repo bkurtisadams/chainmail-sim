@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.13 · Slice 6M: man-to-man resolver hookup (individual vs individual) -->
+<!-- chainmail-board.html · v0.9.14 · Slice 6M.1: mtm polish (parry default, log scroll, dropdown, charge) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.13</title>
+<title>Chainmail — Battlefield · v0.9.14</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -47,7 +47,8 @@
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
   aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   aside.log-panel  { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  aside.log-panel > .panel { display: flex; flex-direction: column; flex: 1; min-height: 320px; padding: 10px 12px; }
+  aside.log-panel > .panel { display: flex; flex-direction: column; flex: 1; min-height: 320px;
+    max-height: calc(100vh - 160px); padding: 10px 12px; }
   aside.log-panel #log { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 4px 4px 0; }
   .field input[type=checkbox] { flex: 0 0 auto; width: auto; margin-right: 4px; }
   .field .field-note { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px;
@@ -66,8 +67,9 @@
   .field { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
   .field label { width: 76px; font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.4px;
     text-transform: uppercase; color: var(--ink-soft); }
-  .field select, .field input { flex: 1; padding: 4px 6px; font-family: var(--serif); font-size: 13px;
-    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink); }
+  .field select, .field input { flex: 1; min-width: 0; padding: 4px 6px; font-family: var(--serif); font-size: 13px;
+    background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink);
+    text-overflow: ellipsis; }
   .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0;
     border-bottom: 1px dashed var(--rule); }
   .stat:last-child { border-bottom: 0; }
@@ -143,8 +145,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 6M · man-to-man resolver (individual vs individual)</div>
-    <span class="version-tag">v0.9.13</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6M.1 · mtm polish (parry default, log scroll, dropdown fits, hero charge)</div>
+    <span class="version-tag">v0.9.14</span>
   </div>
 
   <div class="toolbar">
@@ -298,7 +300,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.13';
+const SIM_VERSION = '0.9.14';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1963,7 +1965,7 @@ function spawnUnit() {
     const mounted = $('#f-mounted').checked;
     u = { ...common, count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false,
       formation: null, customCols: null, spacing: 'close', polearm: false,
-      meleeWeapon, armor, mounted, prone: false, parry: true };
+      meleeWeapon, armor, mounted, prone: false, parry: false };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
@@ -2002,7 +2004,7 @@ function onUnitContextMenu(evt, unitId) {
   document.querySelector('#ctx-menu [data-act="clear-fatigue"]').hidden = !fatigueOn || !u.fatigued;
   // Charge entries — only for impetus-capable classes (p.16); only the direction
   // that makes sense given the current charged state.
-  const canCharge = IMPETUS_CLASSES.has(u.type);
+  const canCharge = IMPETUS_CLASSES.has(u.type) || u.kind === 'individual';
   document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged;
   document.querySelector('#ctx-menu [data-act="cancel-charge"]').hidden = !canCharge || !u.charged;
   const m = $('#ctx-menu');
