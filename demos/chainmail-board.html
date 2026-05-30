@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.2 · Help popover + collapsible New-unit form -->
+<!-- chainmail-board.html · v0.9.3 · Slice 6g: fatigue rule (3-rounds-of-melee trigger) -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.2</title>
+<title>Chainmail — Battlefield · v0.9.3</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -143,8 +143,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · UI polish · help popover · collapsible new-unit form</div>
-    <span class="version-tag">v0.9.2</span>
+    <div class="sub">Chainmail HTML Sim · Slice 6g · fatigue rule (3 melee rounds)</div>
+    <span class="version-tag">v0.9.3</span>
   </div>
 
   <div class="toolbar">
@@ -217,7 +217,7 @@
 
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
-  <button data-act="restore">Restore unit (count + status + actions)</button>
+  <button data-act="restore">Restore unit (count + status + fatigue + actions)</button>
   <button data-act="reset-actions">Reset actions (this round)</button>
   <button data-act="reset-status">Reset status (set to ready)</button>
   <button data-act="reshape-line">Form line</button>
@@ -269,6 +269,7 @@
     <section>
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
+      <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
       <p>Charge impetus bonus, prisoners step, and cavalry-charge morale check
          will appear here as their slices land. Chainmail p.16–18.</p>
     </section>
@@ -280,7 +281,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.2';
+const SIM_VERSION = '0.9.3';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -334,6 +335,8 @@ const POLEARM_CLASSES = new Set(['HF', 'AF']);
 const IMPETUS_CLASSES = new Set(['HF', 'AF', 'LH', 'MH', 'HH']);
 const CLASS_UP   = { LF:'HF', HF:'AF', LH:'MH', MH:'HH' };
 const CLASS_DOWN = { HH:'MH', MH:'LH', LH:'AF' };
+const FATIGUE_DOWN = { AF:'HF', HF:'LF', MH:'LH', HH:'MH' };
+const FATIGUE_THRESHOLD = (type) => (type === 'SP' ? 6 : 3);
 
 const REACTION_BANDS = Object.freeze([
   { max:19,       tag:'continues', text:'melee continues' },
@@ -399,15 +402,21 @@ function formationDims(formation, count) {
 
 /* === C. ENGINES (mass melee, morale, loss, mass missile) =============== */
 function effectiveAttackerClass(cls, mods) {
-  if (mods.flank || mods.rear) return CLASS_UP[cls] || cls;
-  return cls;
+  let c = cls;
+  if (mods.fatigued) c = FATIGUE_DOWN[c] || c;
+  if (mods.flank || mods.rear) c = CLASS_UP[c] || c;
+  return c;
 }
 function classBumpsToBonus(cls, mods) {
-  return (mods.flank || mods.rear) && !(cls in CLASS_UP);
+  let c = cls;
+  if (mods.fatigued) c = FATIGUE_DOWN[c] || c;
+  return (mods.flank || mods.rear) && !(c in CLASS_UP);
 }
-function effectiveDefenderReturnClass(cls, standing) {
-  if (!standing) return cls;
-  return CLASS_DOWN[cls] || cls;
+function effectiveDefenderReturnClass(cls, defender) {
+  let c = cls;
+  if (defender && defender.fatigued) c = FATIGUE_DOWN[c] || c;
+  if (defender && defender.standingHorseFirstRound) c = CLASS_DOWN[c] || c;
+  return c;
 }
 function applyDieBonus(kills, bonus) {
   if (!bonus) return kills.slice();
@@ -443,14 +452,15 @@ function resolveMassMelee({ attacker, defender, rng }) {
   result.attacker = {
     type:aT.id, startCount:attacker.count, effectiveClass:aEff, dicePerMan:aDPM, totalDice:aTotal,
     polearmApplied:aPolearm, impetusApplied:IMPETUS_CLASSES.has(aT.cls) && attacker.impetus,
-    flankBumpToBonus:aBonus, killScores:aKills, dice:aRoll.dice, killsDealt:aRoll.kills,
+    flankBumpToBonus:aBonus, fatigueApplied: !!attacker.fatigued,
+    killScores:aKills, dice:aRoll.dice, killsDealt:aRoll.kills,
   };
 
   if (attacker.rear) {
     result.defender = { type:dT.id, startCount:defender.count, effectiveClass:dT.cls,
       dicePerMan:0, totalDice:0, dice:[], killsDealt:0, noReturn:true };
   } else {
-    const dRetCls = effectiveDefenderReturnClass(dT.cls, !!defender.standingHorseFirstRound);
+    const dRetCls = effectiveDefenderReturnClass(dT.cls, defender);
     const dRow = COMBAT[dRetCls]?.[aT.cls];
     let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
     const dPolearm = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
@@ -462,7 +472,8 @@ function resolveMassMelee({ attacker, defender, rng }) {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
       dicePerMan:dDPM, totalDice:dTotal, polearmApplied:dPolearm,
       impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
-      standingHorseApplied: dRetCls !== dT.cls, killScores:dRow ? dRow.kills : [],
+      standingHorseApplied: dRetCls !== dT.cls, fatigueApplied: !!defender.fatigued,
+      killScores:dRow ? dRow.kills : [],
       dice:dRoll.dice, killsDealt:dRoll.kills,
     };
   }
@@ -569,6 +580,7 @@ const state = {
     keepCapturedVisible: true,
     arcForAllMissile: false,
     applyWrapAroundBonus: true,
+    applyFatigue: false,
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -787,13 +799,27 @@ function renderUnit(u) {
 
   const T = typeById(u.type);
   const sv = statusVisual(u.status || 'ready');
-  const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity;
+  const fatigueOpacity = u.fatigued ? 0.85 : 1;
+  const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity;
   const labelY = u.y + Math.max(b.w, b.h)/2 + 14;
+  const fatigueBadgeStr = u.fatigued
+    ? (() => {
+        const txt = 'FATIGUED';
+        const tw = txt.length * 6.5 + 14;
+        return `
+          <g transform="translate(${u.x} ${labelY + 14})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#8a6d3b" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${txt}</text>
+          </g>`;
+      })()
+    : '';
+  const statusBadgeY = labelY + (u.fatigued ? 30 : 14);
   const statusBadgeStr = sv.text
     ? (() => {
         const tw = sv.text.length * 6.5 + 14;
         return `
-          <g transform="translate(${u.x} ${labelY + 14})" pointer-events="none">
+          <g transform="translate(${u.x} ${statusBadgeY})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="${sv.color}" opacity="0.95"/>
             <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
                   fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${sv.text}</text>
@@ -816,6 +842,7 @@ function renderUnit(u) {
         ${u.side} · ${T.name} · ${u.count}/${u.startCount}
       </text>
       ${statusBadgeStr}
+      ${fatigueBadgeStr}
     </g>
   `;
 }
@@ -896,6 +923,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Type</span><span class="v">${T.name}</span></div>` +
       `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>` +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
+      (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
@@ -1186,6 +1214,14 @@ function onResolveMelee() {
   const round = existing ? existing.round + 1 : 1;
   const oh = frontageOverhang(a, d);
 
+  // Fatigue trigger (slice 6g, p.10-11): once a unit has been meleeing past
+  // its threshold (3 rounds default, 6 for SP/Landsknechte), it becomes
+  // fatigued for this round and onward until rested.
+  if (state.settings.applyFatigue) {
+    if (round > FATIGUE_THRESHOLD(a.type)) a.fatigued = true;
+    if (round > FATIGUE_THRESHOLD(d.type)) d.fatigued = true;
+  }
+
   // Build attacker/defender param objects for the engine
   const attackerParams = {
     type: a.type, count: a.count,
@@ -1193,24 +1229,28 @@ function onResolveMelee() {
     impetus: false,
     flank: edge === 'left' || edge === 'right',
     rear: edge === 'rear',
+    fatigued: !!a.fatigued && state.settings.applyFatigue,
   };
   const defenderParams = {
     type: d.type, count: d.count,
     polearm: !!d.polearm,
     impetus: false,
     standingHorseFirstRound: false,
+    fatigued: !!d.fatigued && state.settings.applyFatigue,
   };
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   const aT = typeById(a.type), dT = typeById(d.type);
   let html = '';
   const aMods = [];
+  if (melee.attacker.fatigueApplied)   aMods.push('fatigued (one class down)');
   if (melee.attacker.polearmApplied)  aMods.push('pike/halberd +1/man');
   if (melee.attacker.impetusApplied)  aMods.push('impetus +1/man');
   if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
+  if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
   if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
 
   html += `<div class="step"><b style="color:var(--side-a-d)">A · ${aT.name} × ${a.count}</b> attacks ${edge.toUpperCase()} → ` +
@@ -1252,10 +1292,12 @@ function onResolveMelee() {
 
   html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
 
-  // Post-melee morale
+  // Post-melee morale (fatigued unit drops -1 morale rating, p.10)
+  const aMorale = (a.fatigued && state.settings.applyFatigue) ? Math.max(1, aT.morale - 1) : aT.morale;
+  const dMorale = (d.fatigued && state.settings.applyFatigue) ? Math.max(1, dT.morale - 1) : dT.morale;
   const pm = resolvePostMelee({
-    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aT.morale },
-    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dT.morale },
+    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale },
+    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale },
     rng: state.rng,
   });
   html += `<div class="step">post-melee — A total ${pm.a.total} vs B total ${pm.b.total} · ` +
@@ -1394,6 +1436,7 @@ function spawnUnit() {
     spacing, weapon, polearm,
     acted: { moved: false, fired: false, fought: false },
     status: 'ready',
+    fatigued: false,
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,  // A faces east, B faces west
@@ -1436,6 +1479,7 @@ function onContextMenuAction(evt) {
     u.count = u.startCount;
     u.destroyed = false;
     u.status = 'ready';
+    u.fatigued = false;
     clearActed(u);
     const dims = formationDims(u.formation || 'line', u.count);
     u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
@@ -1514,7 +1558,12 @@ function endSideTurn() {
 function endRound() {
   state.turn += 1;
   state.activeSide = 'A';
-  for (const u of state.units) clearActed(u);
+  for (const u of state.units) {
+    if (u.fatigued && !u.acted.moved && state.settings.applyFatigue) {
+      u.fatigued = false;
+    }
+    clearActed(u);
+  }
   renderTurnUI();
   renderBoard();
 }
