@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.7 · Moved-over-½ fire gate (p.11–12): a missile unit (thrown weapons excepted) that moved more than half its NORMAL move this turn — charging excluded — may loose only if it beats the target's opposed d6 (strictly greater; ties fail). overHalfMoveFire() rolls shooter-die then foe-die off movedThisTurn from the movement pillar. Resolved as its own "Move-gate" log card before the shot. Hard under enforceMovement (a fail spends the shot and looses nothing); advisory otherwise so the freeform play-aid still fires. This is the last missing rate-of-fire rule. -->
+<!-- chainmail-board.html · v0.10.8 · Measure tool (free-standing ruler): toggle (Measure button / `m`) a pre-decision range check. Click to anchor — snaps to a unit's centre if you click a unit, else to the 1″ grid when snap is on — the gold ruler then follows the cursor live with an inch readout (1″ = 10 yds); a second click locks the far end, a third starts over, esc clears. Mutually exclusive with dragging (anchors instead of moving) and never touches the move budget. Built on v0.10.7 (= the v0.10.6 fire-gate content, re-stamped). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.7</title>
+<title>Chainmail — Battlefield · v0.10.8</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -41,6 +41,7 @@
   button:hover:not(:disabled) { filter: brightness(1.1); }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
   button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+  button.secondary.active { background: var(--ink); color: #f3ead4; }
   button.gold { background: var(--gold); color: var(--ink); }
   button.danger { background: var(--rear); }
 
@@ -171,8 +172,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Moved-over-½ fire gate</div>
-    <span class="version-tag">v0.10.7</span>
+    <div class="sub">Chainmail HTML Sim · Measure tool</div>
+    <span class="version-tag">v0.10.8</span>
   </div>
 
   <div class="toolbar">
@@ -184,6 +185,7 @@
     <button id="btn-clear-sel" class="secondary">Clear selection</button>
     <button id="btn-reset-view" class="secondary">Reset view</button>
     <button id="btn-grid" class="secondary">Grid: off</button>
+    <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
     <button id="btn-settings" class="secondary">Settings</button>
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
     <button id="btn-reset" class="danger">Reset board</button>
@@ -301,6 +303,7 @@
       <tr><td>0</td><td>Reset zoom &amp; pan</td></tr>
       <tr><td>middle-drag</td><td>Pan the board</td></tr>
       <tr><td>g</td><td>Toggle grid</td></tr>
+      <tr><td>m</td><td>Measure tool — click to anchor (snaps to a unit's centre, or the grid when snap is on), the ruler follows the cursor, click again to lock; reads inches. esc clears the line</td></tr>
       <tr><td>delete</td><td>Remove selected unit</td></tr>
       <tr><td>esc</td><td>Clear selection / close menus</td></tr>
       <tr><td>?</td><td>Open this reference</td></tr>
@@ -355,7 +358,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.6';
+const SIM_VERSION = '0.10.8';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1218,6 +1221,7 @@ const state = {
   nextId: 1,
   dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
   panning: null,      // { clientX0, clientY0, vb0 }
+  measure: { active: false, a: null, b: null, live: null },  // free-standing ruler: a/b are locked board-px points, live follows the cursor while anchored
   viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
   showGrid: false,
   ctxUnitId: null,
@@ -1547,7 +1551,7 @@ function renderBoard() {
     renderBg() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -2083,6 +2087,7 @@ function toggleGrid() {
 }
 
 function onBoardMouseDown(evt) {
+  if (state.measure.active && evt.button === 0) { measureClick(svgPoint(evt), null); return; }
   // Middle-click → pan; ignore on units (their handlers stopPropagation)
   if (evt.button === 1) {
     evt.preventDefault();
@@ -2095,6 +2100,7 @@ function onUnitMouseDown(evt, unitId) {
   evt.stopPropagation();
   const u = state.units.find(u => u.id === unitId);
   if (!u || u.destroyed) return;
+  if (state.measure.active) { measureClick(svgPoint(evt), unitId); return; }
   if (evt.shiftKey) {
     state.targetId = unitId;
     if (state.targetId === state.selectedId) state.targetId = null;
@@ -2126,6 +2132,11 @@ function onBoardMouseMove(evt) {
     const dy = (evt.clientY - state.panning.clientY0) * scale;
     state.viewBox = { ...state.panning.vb0, x: state.panning.vb0.x - dx, y: state.panning.vb0.y - dy };
     applyViewBox();
+    return;
+  }
+  if (state.measure.active && state.measure.a && !state.measure.b) {
+    state.measure.live = measureSnap(svgPoint(evt));
+    renderBoard();
     return;
   }
   if (!state.dragging) return;
@@ -2174,11 +2185,69 @@ function onBoardMouseUp() {
   renderBoard();
 }
 function onBoardClick(evt) {
+  if (state.measure.active) return;   // measure mode handles its own clicks via mousedown
   // Click on empty space → deselect (unless shift)
   if (evt.target.tagName === 'svg' || evt.target.id === 'bg') {
     if (!evt.shiftKey) { state.selectedId = null; state.targetId = null; }
     renderBoard();
   }
+}
+
+/* === Measure tool (free-standing ruler) =============================== */
+// A pre-decision range check: click to anchor (snaps to a unit's centre if you
+// click a unit, else to the 1″ grid when snap is on), the ruler then follows
+// the cursor live; a second click locks the far end; a third starts over.
+// Reads in inches (1″ = 10 yds). Never moves a unit or touches the move budget.
+// Toggle with the Measure button or `m`; esc clears the current line.
+function toggleMeasure() {
+  const m = state.measure;
+  m.active = !m.active;
+  m.a = m.b = m.live = null;
+  if (m.active) state.dragging = null;   // measuring and dragging are mutually exclusive
+  syncMeasureButton();
+  renderBoard();
+}
+function syncMeasureButton() {
+  const btn = $('#btn-measure');
+  if (!btn) return;
+  btn.textContent = state.measure.active ? 'Measure: on' : 'Measure';
+  btn.classList.toggle('active', state.measure.active);
+}
+const measureSnap = (p) => state.settings.snapToGrid
+  ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) }
+  : { x: p.x, y: p.y };
+// Anchor → lock → restart. A non-null unitId anchors on that unit's true centre
+// (ignoring grid snap, so the reading runs from where the unit actually stands).
+function measureClick(pt, unitId) {
+  const m = state.measure;
+  const u = unitId != null ? state.units.find(x => x.id === unitId) : null;
+  const here = u ? { x: u.x, y: u.y } : measureSnap(pt);
+  if (!m.a || m.b) { m.a = here; m.b = null; m.live = here; }   // start fresh / restart after a locked line
+  else            { m.b = here; m.live = here; }                // lock the far end
+  renderBoard();
+}
+function renderMeasure() {
+  const m = state.measure;
+  if (!m.active || !m.a) return '';
+  const far = m.b || m.live || m.a;
+  const distIn = pxToInches(Math.hypot(far.x - m.a.x, far.y - m.a.y));
+  const locked = !!m.b;
+  const accent = 'var(--gold)';
+  const txt = `↔ ${distIn.toFixed(1)}″${locked ? '' : ' …'}`;
+  const fontPx = 18;
+  const tw = Math.max(80, txt.length * (fontPx * 0.55));
+  const pillW = tw + 18, pillH = 28, offX = 18, offY = -32;
+  return `
+    <line x1="${m.a.x}" y1="${m.a.y}" x2="${far.x}" y2="${far.y}"
+          stroke="${accent}" stroke-width="1.8" stroke-dasharray="2 6" stroke-linecap="round" pointer-events="none"/>
+    <circle cx="${m.a.x}" cy="${m.a.y}" r="4.5" fill="${accent}" pointer-events="none"/>
+    <circle cx="${far.x}" cy="${far.y}" r="4.5" fill="${accent}" pointer-events="none"/>
+    <g transform="translate(${far.x + offX} ${far.y + offY})" pointer-events="none">
+      <rect x="0" y="0" width="${pillW}" height="${pillH}" rx="4" fill="var(--ink)" opacity="0.94"/>
+      <text x="${pillW/2}" y="${pillH/2 + fontPx*0.35}" font-family="sans-serif" font-size="${fontPx}" font-weight="700"
+            fill="#f3ead4" text-anchor="middle" letter-spacing="0.6">${txt}</text>
+    </g>
+  `;
 }
 // Slice 8A: arrow-key nudge that respects the move-allowance accounting. In
 // hard-enforce mode a nudge that would exceed the remaining allowance is blocked
@@ -2224,10 +2293,14 @@ function onKeyDown(evt) {
   }
   if (evt.key === '0') { resetView(); evt.preventDefault(); return; }
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
+  if ((evt.key === 'm' || evt.key === 'M') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleMeasure(); evt.preventDefault(); return; }
   if (evt.key === '?') { openHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#help-modal').hidden) { closeHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#ctx-menu').hidden) { closeContextMenu(); evt.preventDefault(); return; }
+  if (evt.key === 'Escape' && state.measure.active && state.measure.a) {
+    state.measure.a = state.measure.b = state.measure.live = null; renderBoard(); evt.preventDefault(); return;
+  }
 
   const u = state.units.find(u => u.id === state.selectedId);
   if (!u || u.destroyed) return;
@@ -3602,6 +3675,8 @@ function resetBoard() {
   state.selectedId = null;
   state.targetId = null;
   state.dragging = null;
+  state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null;
+  syncMeasureButton();
   state.nextId = 1;
   state.turn = 1;
   state.activeSide = 'A';
@@ -3756,6 +3831,7 @@ $('#btn-missile').addEventListener('click', onResolveMissile);
 $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; state.targetId = null; renderBoard(); });
 $('#btn-reset-view').addEventListener('click', resetView);
 $('#btn-grid').addEventListener('click', toggleGrid);
+$('#btn-measure').addEventListener('click', toggleMeasure);
 $('#btn-settings').addEventListener('click', openSettings);
 $('#btn-help').addEventListener('click', openHelp);
 $('#new-unit-toggle').addEventListener('click', toggleNewUnit);
@@ -3796,6 +3872,7 @@ document.addEventListener('keydown', onKeyDown);
 
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
+syncMeasureButton();
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
@@ -3924,6 +4001,10 @@ renderBoard();
   console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(5), forDie(3)])).beat === true,  'over ½ and beats the foe die → may loose');
   console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(3), forDie(5)])).beat === false, 'over ½ and loses to the foe die → denied');
   console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(4), forDie(4)])).beat === false, 'tie does not beat — denied');
+
+  // Measure tool: the readout is the true inch distance between the two points
+  // (3-4-5 in px → 5″), independent of pan/zoom (svgPoint already de-projects).
+  console.assert(Math.abs(pxToInches(Math.hypot(inchesToPx(3), inchesToPx(4))) - 5) < 1e-9, 'measure reads true inch distance (3-4-5 → 5″)');
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
