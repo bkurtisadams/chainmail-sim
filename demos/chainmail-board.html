@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.3 · Slice 8D (Movement pillar #4): move/counter-move turn sequence (p.9). Replaces the freeform A/B toggle with a six-phase tracker — initiative (roll, winner elects move-first or -last) → first move → counter-move → artillery → missile → melee → next turn. "Next phase ▸" steps it; "End round" still jumps a whole turn. Optional enforcePhases setting (default OFF = advisory so the play-aid still works): when ON, only the active mover's side may move/rotate during its move phase, and melee/missile resolve only in their phases. Unlocks split-move/pass-through/auto-touch in later slices. -->
+<!-- chainmail-board.html · v0.10.5 · Slice 8F (Movement pillar UI): snap-to-grid — optional setting that snaps a unit's centre to the nearest 1″ grid intersection while dragging, so every cell crossed is exactly 1″ and the ruler / move-budget read in clean increments. Arrow nudges step a full 1″ when snap is on; spawns snap too, and toggling the setting on snaps all existing units. Snap is applied to the desired position before the move-allowance clamp, so hard-enforce still wins at the cap. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.3</title>
+<title>Chainmail — Battlefield · v0.10.5</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -51,6 +51,31 @@
   aside.log-panel > .panel { display: flex; flex-direction: column; flex: 1; min-height: 320px;
     max-height: calc(100vh - 160px); padding: 10px 12px; }
   aside.log-panel #log { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 4px 4px 0; }
+  /* Slice 8E: unit roster sits above the log; sizes to content (capped, scrollable)
+     rather than claiming an equal flex share like the log does. */
+  aside.log-panel > #roster-panel { flex: 0 0 auto; min-height: 0; }
+  #roster-panel .roster-count { font-family: var(--sans); font-size: 10px; font-weight: 600;
+    letter-spacing: 0.5px; color: var(--ink-soft); margin-left: auto; text-transform: none; }
+  #roster-list { max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column;
+    gap: 1px; margin-top: 4px; padding-right: 2px; }
+  .roster-empty { font-size: 11px; color: var(--ink-soft); font-style: italic; padding: 4px 2px; }
+  .roster-grp { font-family: var(--sans); font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--ink-soft); margin: 6px 2px 2px; display: flex; align-items: center; gap: 5px; }
+  .roster-row { display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 4px;
+    cursor: pointer; font-size: 12px; line-height: 1.15; }
+  .roster-row:hover { background: var(--rank-hi); }
+  .roster-row.sel { box-shadow: inset 0 0 0 2px var(--gold); }
+  .roster-row.tgt { box-shadow: inset 0 0 0 2px var(--rear); }
+  .roster-row.out { opacity: 0.5; }
+  .roster-row.ready { background: rgba(47,125,79,0.16); }
+  .roster-row .rsw { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+  .roster-grp .rsw { width: 9px; height: 9px; border-radius: 2px; }
+  .roster-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .roster-row .chips { display: flex; gap: 2px; flex: 0 0 auto; }
+  .roster-row .chip { width: 13px; height: 13px; border-radius: 2px; font-family: var(--sans);
+    font-size: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .roster-row .mv { font-family: var(--sans); font-size: 10px; color: var(--ink-soft); flex: 0 0 auto;
+    min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
   .field input[type=checkbox] { flex: 0 0 auto; width: auto; margin-right: 4px; }
   .field .field-note { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.4px;
     color: var(--ink-soft); }
@@ -146,8 +171,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 8D · Movement: phases</div>
-    <span class="version-tag">v0.10.3</span>
+    <div class="sub">Chainmail HTML Sim · Slice 8F · Snap to grid</div>
+    <span class="version-tag">v0.10.5</span>
   </div>
 
   <div class="toolbar">
@@ -225,6 +250,10 @@
       </div>
     </aside>
     <aside class="log-panel">
+      <div class="panel" id="roster-panel">
+        <h2 class="collapsible" id="roster-toggle">Units <span class="roster-count" id="roster-count"></span> <span class="caret">▾</span></h2>
+        <div id="roster-list"></div>
+      </div>
       <div class="panel">
         <h2>Combat log</h2>
         <div id="log"></div>
@@ -311,6 +340,7 @@
       <h3>Movement (p.9–11)</h3>
       <label><input type="checkbox" data-setting="enforceMovement"> Hard-enforce move allowance — clamp drags &amp; nudges at the remaining limit</label>
       <label><input type="checkbox" data-setting="enforcePhases"> Enforce turn phases — restrict movement/combat to the move/counter-move sequence (p.9)</label>
+      <label><input type="checkbox" data-setting="snapToGrid"> Snap to grid — clamp unit centres to the 1″ grid while moving (turn the grid on with <b>g</b>)</label>
       <p>Each unit's distance moved this turn is tracked against its type's
          allowance (the drag ruler and the unit pane show it). Off (default) is
          <b>advisory</b>: you can move freely and the sim only warns when a unit
@@ -325,7 +355,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.3';
+const SIM_VERSION = '0.10.5';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1207,6 +1237,7 @@ const state = {
     applyPrisoners: false,
     enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
     enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
+    snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -1215,6 +1246,9 @@ const state = {
 /* === E. GEOMETRY ======================================================= */
 const inchesToPx = (i) => i * PX_PER_INCH;
 const pxToInches = (p) => p / PX_PER_INCH;
+// Slice 8F: snap a pixel coordinate to the nearest 1″ grid line (the grid is
+// drawn at multiples of PX_PER_INCH), so movement lands on whole-inch steps.
+const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
 
 /* --- Movement accounting (Slice 8A) -----------------------------------
    Pure helpers so the per-turn move-allowance logic is testable without the
@@ -1523,7 +1557,73 @@ function renderBoard() {
   }
   updateSidebar();
   updateButtons();
+  renderRoster();
 }
+
+/* --- Unit roster (Slice 8E) -------------------------------------------
+   Surfaces the per-unit action/move state that already lives on each unit, so
+   a board full of tokens stays legible. Pure summary helper drives the header
+   count and is testable. */
+function rosterSummary(units) {
+  const live = units.filter(u => !u.destroyed);
+  const sides = { A: [], B: [] };
+  for (const u of live) (sides[u.side] = sides[u.side] || []).push(u);
+  const toMove = (arr = []) => arr.filter(u => remainingMoveIn(u) > 0.05).length;
+  return { A: (sides.A || []).length, B: (sides.B || []).length,
+           toMoveA: toMove(sides.A), toMoveB: toMove(sides.B) };
+}
+function rosterRowHtml(u) {
+  const T = typeById(u.type);
+  const acted = u.acted || {};
+  const allow = moveAllowanceOf(u);
+  const rem = remainingMoveIn(u);
+  const out = rem <= 0.05;
+  const ph = PHASES[state.phaseIdx];
+  const isMovePhase = ph.id === 'move1' || ph.id === 'move2';
+  const ready = state.settings.enforcePhases && isMovePhase && !out
+                && moverForPhase(ph.id, state.firstMover) === u.side;
+  const chip = (label, used) =>
+    `<span class="chip" style="background:${used ? 'var(--ink)' : 'rgba(255,250,230,0.65)'};` +
+    `color:${used ? '#f3ead4' : 'rgba(0,0,0,0.45)'};` +
+    `border:0.6px solid ${used ? 'var(--ink)' : 'rgba(0,0,0,0.35)'}">${label}</span>`;
+  const cls = ['roster-row'];
+  if (u.id === state.selectedId) cls.push('sel');
+  if (u.id === state.targetId) cls.push('tgt');
+  if (out) cls.push('out');
+  if (ready) cls.push('ready');
+  const name = u.kind === 'individual' ? T.name : `${T.name} ×${u.count}`;
+  const note = (u.status && u.status !== 'ready') ? ` · ${u.status}`
+             : u.charged ? ' · ⚔' : u.fatigued ? ' · fatig' : '';
+  const mv = out ? '0″' : `${rem.toFixed(rem < 10 ? 1 : 0)}″`;
+  return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${T.name}${note} — ${rem.toFixed(1)}″ of ${allow}″ left">` +
+    `<span class="rsw" style="background:var(--side-${u.side === 'A' ? 'a' : 'b'})"></span>` +
+    `<span class="nm">${name}${note}</span>` +
+    `<span class="chips">${chip('M', acted.moved)}${chip('F', acted.fired)}${chip('X', acted.fought)}</span>` +
+    `<span class="mv">${mv}</span></div>`;
+}
+function renderRoster() {
+  const list = $('#roster-list');
+  if (!list) return;
+  const sum = rosterSummary(state.units);
+  const cnt = $('#roster-count');
+  if (cnt) cnt.textContent = (sum.A + sum.B) === 0 ? ''
+    : `A ${sum.A} · B ${sum.B}` + (state.settings.enforcePhases ? ` · ${sum.toMoveA + sum.toMoveB} to move` : '');
+  const live = state.units.filter(u => !u.destroyed);
+  if (!live.length) { list.innerHTML = `<div class="roster-empty">No units on the board.</div>`; return; }
+  let html = '';
+  for (const side of ['A', 'B']) {
+    const arr = live.filter(u => u.side === side);
+    if (!arr.length) continue;
+    html += `<div class="roster-grp"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length}</div>`;
+    html += arr.map(rosterRowHtml).join('');
+  }
+  list.innerHTML = html;
+}
+function centerViewOn(u) {
+  state.viewBox = { ...state.viewBox, x: u.x - state.viewBox.w / 2, y: u.y - state.viewBox.h / 2 };
+  applyViewBox();
+}
+function toggleRoster() { $('#roster-panel').classList.toggle('collapsed'); }
 
 function renderBg() {
   // Inch tick marks along the borders for measuring
@@ -2034,6 +2134,10 @@ function onBoardMouseMove(evt) {
   const pt = svgPoint(evt);
   let nx = pt.x - state.dragging.grabOffsetX;
   let ny = pt.y - state.dragging.grabOffsetY;
+  // Slice 8F: snap the desired position to the grid first, so movement lands on
+  // whole-inch steps. Snapping before the enforce clamp means hard-enforce still
+  // wins at the cap (a snapped point past the budget gets pulled back in).
+  if (state.settings.snapToGrid) { nx = snapToGridPx(nx); ny = snapToGridPx(ny); }
   // Slice 8A: in hard-enforce mode, cap this drag's straight-line distance at
   // the allowance still remaining for the unit this turn (advisory mode never
   // clamps — it only warns via the ruler/pane colour).
@@ -2130,10 +2234,14 @@ function onKeyDown(evt) {
   let handled = true;
   if (evt.key === '[') rotateUnit(u, -15);
   else if (evt.key === ']') rotateUnit(u, 15);
-  else if (evt.key === 'ArrowLeft')  nudgeUnit(u, -PX_PER_INCH/4, 0);
-  else if (evt.key === 'ArrowRight') nudgeUnit(u,  PX_PER_INCH/4, 0);
-  else if (evt.key === 'ArrowUp')    nudgeUnit(u, 0, -PX_PER_INCH/4);
-  else if (evt.key === 'ArrowDown')  nudgeUnit(u, 0,  PX_PER_INCH/4);
+  else if (evt.key.startsWith('Arrow')) {
+    // Slice 8F: full 1″ step when snapping (stays on-grid), else the ¼″ fine nudge.
+    const step = state.settings.snapToGrid ? PX_PER_INCH : PX_PER_INCH / 4;
+    if (evt.key === 'ArrowLeft')       nudgeUnit(u, -step, 0);
+    else if (evt.key === 'ArrowRight') nudgeUnit(u,  step, 0);
+    else if (evt.key === 'ArrowUp')    nudgeUnit(u, 0, -step);
+    else if (evt.key === 'ArrowDown')  nudgeUnit(u, 0,  step);
+  }
   else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
   else if (evt.key === 'Delete' || evt.key === 'Backspace') {
     state.units = state.units.filter(x => x.id !== u.id);
@@ -3287,6 +3395,7 @@ function spawnUnit() {
       cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
       formation, customCols, spacing, polearm };
   }
+  if (state.settings.snapToGrid) { u.x = snapToGridPx(u.x); u.y = snapToGridPx(u.y); }
   state.units.push(u);
   state.selectedId = u.id;
   renderBoard();
@@ -3490,6 +3599,13 @@ function onSettingChange(evt) {
   state.settings[key] = evt.target.checked;
   renderBoard();
   renderTurnUI();   // Slice 8D: refresh phase tag/gating when enforcePhases toggles
+  if (key === 'snapToGrid' && state.settings.snapToGrid) {
+    // Slice 8F: snap every existing unit so the board is immediately consistent,
+    // and reveal the grid so the snapping is visible.
+    for (const u of state.units) { u.x = snapToGridPx(u.x); u.y = snapToGridPx(u.y); }
+    if (!state.showGrid) { state.showGrid = true; $('#btn-grid').textContent = 'Grid: on'; }
+    renderBoard();
+  }
   if (key === 'gridOnByDefault') {
     // Apply immediately for the current session so users can preview.
     state.showGrid = state.settings.gridOnByDefault;
@@ -3606,6 +3722,23 @@ $('#btn-grid').addEventListener('click', toggleGrid);
 $('#btn-settings').addEventListener('click', openSettings);
 $('#btn-help').addEventListener('click', openHelp);
 $('#new-unit-toggle').addEventListener('click', toggleNewUnit);
+$('#roster-toggle').addEventListener('click', toggleRoster);
+$('#roster-list').addEventListener('click', (e) => {
+  const row = e.target.closest('.roster-row');
+  if (!row) return;
+  const id = parseInt(row.dataset.id, 10);
+  const u = state.units.find(x => x.id === id);
+  if (!u || u.destroyed) return;
+  if (e.shiftKey) {
+    state.targetId = (state.targetId === id) ? null : id;
+    if (state.targetId === state.selectedId) state.targetId = null;
+  } else {
+    state.selectedId = id;
+    if (state.targetId === id) state.targetId = null;
+    centerViewOn(u);   // bring the picked unit into view
+  }
+  renderBoard();
+});
 $('#settings-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeSettings(); });
 $('#help-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeHelp(); });
 document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
@@ -3889,6 +4022,21 @@ renderBoard();
   console.assert(phaseAllowsMove('move1','A','A',true) && !phaseAllowsMove('move1','A','B',true), 'enforced: only the first mover moves in move1');
   console.assert(!phaseAllowsMove('missile','A','A',true), 'enforced: no movement during a fire phase');
   console.assert(phaseAllowsMove('missile','A','A',false) && phaseAllowsMove('move2','A','A',false), 'advisory: movement always allowed');
+
+  // Unit roster summary (Slice 8E).
+  const rs = rosterSummary([
+    { id:1, side:'A', type:'HF', movedThisTurn:0 },
+    { id:2, side:'A', type:'HF', movedThisTurn:9 },     // HF allowance 9 → no move left
+    { id:3, side:'B', type:'LH', movedThisTurn:0 },
+    { id:4, side:'B', type:'HF', destroyed:true },       // excluded from the roster
+  ]);
+  console.assert(rs.A===2 && rs.B===1, 'roster counts live units per side; destroyed excluded');
+  console.assert(rs.toMoveA===1 && rs.toMoveB===1, 'roster: only units with move budget left count as "to move"');
+
+  // Snap to grid (Slice 8F).
+  console.assert(snapToGridPx(0)===0 && snapToGridPx(24)===24 && snapToGridPx(100)===96, 'snaps a coordinate to the nearest 1″ grid line');
+  console.assert(snapToGridPx(11)===0 && snapToGridPx(13)===24, 'rounds to the nearest line (12px is the halfway point)');
+  console.assert(snapToGridPx(37) % PX_PER_INCH === 0 && pxToInches(snapToGridPx(150) - snapToGridPx(30)) === 5, 'snapped points sit on whole inches, so grid-to-grid moves are clean inch distances');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
