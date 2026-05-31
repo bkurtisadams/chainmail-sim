@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.1 · Slice 8B (Movement pillar #2): facing-change costs (p.11) — rotating a unit now spends part of its move allowance: oblique (≤45°) ¼ move, left/right face (≤90°) ½ move, about-face (≤180°) 1 move; ×2 for poorly-trained (peasants/levies), ×½ for Swiss/Landsknechte & horse/mounted. Cost is derived from net facing change vs turn-start, shares the movedThisTurn budget, shown in the pane, and (hard-enforce) blocks rotations past the allowance. turnStartFacing reset in endRound. Charge movement / phases follow. -->
+<!-- chainmail-board.html · v0.10.3 · Slice 8D (Movement pillar #4): move/counter-move turn sequence (p.9). Replaces the freeform A/B toggle with a six-phase tracker — initiative (roll, winner elects move-first or -last) → first move → counter-move → artillery → missile → melee → next turn. "Next phase ▸" steps it; "End round" still jumps a whole turn. Optional enforcePhases setting (default OFF = advisory so the play-aid still works): when ON, only the active mover's side may move/rotate during its move phase, and melee/missile resolve only in their phases. Unlocks split-move/pass-through/auto-touch in later slices. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.1</title>
+<title>Chainmail — Battlefield · v0.10.3</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,14 +146,15 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 8B · Movement: facing costs</div>
-    <span class="version-tag">v0.10.1</span>
+    <div class="sub">Chainmail HTML Sim · Slice 8D · Movement: phases</div>
+    <span class="version-tag">v0.10.3</span>
   </div>
 
   <div class="toolbar">
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
-    <button id="btn-end-side" class="gold">End A's turn</button>
+    <button id="btn-end-side" class="gold">Next phase ▸</button>
+    <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
     <button id="btn-end-round" class="gold">End round</button>
     <button id="btn-clear-sel" class="secondary">Clear selection</button>
     <button id="btn-reset-view" class="secondary">Reset view</button>
@@ -309,6 +310,7 @@
     <section>
       <h3>Movement (p.9–11)</h3>
       <label><input type="checkbox" data-setting="enforceMovement"> Hard-enforce move allowance — clamp drags &amp; nudges at the remaining limit</label>
+      <label><input type="checkbox" data-setting="enforcePhases"> Enforce turn phases — restrict movement/combat to the move/counter-move sequence (p.9)</label>
       <p>Each unit's distance moved this turn is tracked against its type's
          allowance (the drag ruler and the unit pane show it). Off (default) is
          <b>advisory</b>: you can move freely and the sim only warns when a unit
@@ -323,7 +325,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.1';
+const SIM_VERSION = '0.10.3';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -459,6 +461,52 @@ const MOVE_ALLOWANCE = {
   // Fantasy races (Appendix D)
   ORC:9, GOBLIN:6, KOBOLD:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
 };
+
+// Charge move distance (p.10 charge column / Appendix D). A declared charge
+// trades the normal allowance for this larger one. Historical: foot = move+3,
+// horse = move+6 (move/counter-move note p.9 fixes MH charge at 24 → +6).
+// Fantasy values are read off the Appendix D charge column; a "—"/"Special"
+// charge there (hobbit/sprite/elf/wizard/roc/elemental) falls back to the
+// normal move (no charge bonus).
+const CHARGE_ALLOWANCE = {
+  PE:12, LV:12, LF:12, HF:12, EHF:12, SP:15, AF:9,
+  LH:30, MH:24, HH:18, MK:18,
+  HERO:15, SUPER_HERO:15, WIZARD:12, BALROG:9, DRAGON:15, ELEMENTAL:12,
+  ENT:6, GIANT:18, LYCAN:12, ROC:24, TROLL:12, WIGHT:9, WRAITH:24,
+  ORC:12, GOBLIN:9, KOBOLD:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
+};
+
+// Move/counter-move turn sequence (Slice 8D, p.9). `side` marks the two move
+// phases; the rest (initiative + the fire/melee resolution steps) have no single
+// active mover. Artillery is a sequenced step even though catapults/cannon are
+// not built yet — it keeps the sequence faithful for when they land.
+const PHASES = Object.freeze([
+  { id:'initiative', label:'Initiative',   rule:'p.9 §1', side:null },
+  { id:'move1',      label:'First move',   rule:'p.9 §2', side:'first' },
+  { id:'move2',      label:'Counter-move', rule:'p.9 §3', side:'counter' },
+  { id:'artillery',  label:'Artillery',    rule:'p.9 §4', side:null },
+  { id:'missile',    label:'Missile fire', rule:'p.9 §5', side:null },
+  { id:'melee',      label:'Melee',        rule:'p.9 §6', side:null },
+]);
+// Which side may move in a given phase. Pure (state-free) so it is testable.
+function moverForPhase(phaseId, firstMover) {
+  if (phaseId === 'move1') return firstMover;
+  if (phaseId === 'move2') return firstMover === 'A' ? 'B' : 'A';
+  return null;
+}
+// May `side` move right now? Advisory mode (enforce=false) never restricts.
+function phaseAllowsMove(phaseId, firstMover, side, enforce) {
+  if (!enforce) return true;
+  if (phaseId !== 'move1' && phaseId !== 'move2') return false;
+  return moverForPhase(phaseId, firstMover) === side;
+}
+// Initiative (p.9 §1): each side rolls a d6, re-rolling ties; higher chooses.
+// Pure — takes an rng so tests can force the dice.
+function rollInitiative(rng) {
+  let a, b;
+  do { a = 1 + Math.floor(rng() * 6); b = 1 + Math.floor(rng() * 6); } while (a === b);
+  return { a, b, winner: a > b ? 'A' : 'B' };
+}
 
 // Inline fantastic types (mirrors data/fantasy.js — used by the board for
 // spawn / display only this slice. Combat matrix lands with the fantasy slice).
@@ -1145,6 +1193,9 @@ const state = {
   ctxUnitId: null,
   turn: 1,
   activeSide: 'A',
+  phaseIdx: 0,          // Slice 8D: index into PHASES
+  firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
+  initiativeRoll: null, // { a, b, winner } for display
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -1155,6 +1206,7 @@ const state = {
     applyCavalryChargeMorale: false,
     applyPrisoners: false,
     enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
+    enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -1168,7 +1220,10 @@ const pxToInches = (p) => p / PX_PER_INCH;
    Pure helpers so the per-turn move-allowance logic is testable without the
    DOM. A unit's allowance comes from MOVE_ALLOWANCE (default 12″); movedThisTurn
    accumulates straight-line drag/nudge distance and resets each round. */
-const moveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
+const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
+const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
+// The turn's move budget: a declared charge uses the larger charge distance.
+const moveAllowanceOf = (u) => (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -1193,7 +1248,9 @@ function facingDiscipline(u) {
   if (u.type === 'SP' || isMountedType(u.type) || u.mounted) return 0.5;  // Swiss/Landsknechte & horse → half
   return 1;
 }
-const facingCostInches = (u, netDeg) => facingTier(netDeg) * facingDiscipline(u) * moveAllowanceOf(u);
+// Facing cost is a fraction of a NORMAL move, never the charge distance, so a
+// charge doesn't inflate pivot costs (cavalry charges are near-straight anyway).
+const facingCostInches = (u, netDeg) => facingTier(netDeg) * facingDiscipline(u) * baseMoveAllowanceOf(u);
 function facingCostIn(u) {
   if (u.facing == null || u.turnStartFacing == null) return 0;  // no baseline → no cost (e.g. test stubs)
   return facingCostInches(u, angDist(u.facing, u.turnStartFacing));
@@ -1217,6 +1274,32 @@ function clampMoveVector(dxPx, dyPx, remainingIn) {
   const s = maxPx / lenPx;
   return { dx: dxPx * s, dy: dyPx * s, clamped: true };
 }
+
+/* --- Cavalry charge straight-line (Slice 8C, p.16) --------------------
+   "Cavalry charges must be in a relatively straight line (up to a maximum of a
+   45° curve)." facingHeadingRad converts a unit's facing (0 = screen-up, 90 =
+   +x, matching the render transform) into a movement heading. clampHeadingToward
+   rotates a drag vector back onto the nearest ±maxRad boundary if it strays,
+   preserving length. Applies to mounted/horse charges only; foot charges have
+   no curve limit. */
+const facingHeadingRad = (facingDeg) => {
+  const r = facingDeg * Math.PI / 180;
+  return Math.atan2(-Math.cos(r), Math.sin(r));   // facing vector (sinφ, −cosφ)
+};
+function clampHeadingToward(dxPx, dyPx, refRad, maxRad) {
+  const len = Math.hypot(dxPx, dyPx);
+  if (len === 0) return { dx: 0, dy: 0, clamped: false };
+  const cur = Math.atan2(dyPx, dxPx);
+  const diff = ((cur - refRad + Math.PI) % (2 * Math.PI)) - Math.PI;  // signed shortest, range -pi..pi
+  if (Math.abs(diff) <= maxRad + 1e-9) return { dx: dxPx, dy: dyPx, clamped: false };
+  const target = refRad + Math.sign(diff) * maxRad;
+  return { dx: Math.cos(target) * len, dy: Math.sin(target) * len, clamped: true };
+}
+const isCavalryCharge = (u) => !!u.charged && (isMountedType(u.type) || u.mounted);
+const CHARGE_CURVE_RAD = 45 * Math.PI / 180;
+// Slice 8D: gate a unit's movement on the current phase when enforcement is on.
+const canSideMoveNow = (side) =>
+  phaseAllowsMove(PHASES[state.phaseIdx].id, state.firstMover, side, state.settings.enforcePhases);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
@@ -1741,14 +1824,24 @@ function renderDragRuler() {
   const allow = moveAllowanceOf(u);
   const over = totalIn > allow + 1e-9;
   const atCap = state.settings.enforceMovement && (allow - totalIn) <= 0.05;
-  const accent = over ? 'var(--rear)' : (atCap ? 'var(--flank)' : 'var(--ink)');
+  // Slice 8C: warn when a cavalry charge drags more than 45° off its facing
+  // (in advisory mode; hard-enforce already clamps the heading so it won't show).
+  let offLine = false;
+  if (isCavalryCharge(u) && thisDragIn > 0.2) {
+    const h = clampHeadingToward(u.x - state.dragging.originX, u.y - state.dragging.originY,
+                                 facingHeadingRad(u.facing), CHARGE_CURVE_RAD);
+    offLine = h.clamped;
+  }
+  const accent = over ? 'var(--rear)' : (offLine ? 'var(--flank)' : (atCap ? 'var(--flank)' : 'var(--ink)'));
   // Show this drag's length, and (if the unit already moved this turn) the
   // running turn total vs allowance. atCap means the hard-enforce clamp is biting.
   let txt = before > 0.05
     ? `${thisDragIn.toFixed(1)}″ · turn ${totalIn.toFixed(1)}/${allow}″`
     : `${thisDragIn.toFixed(1)}″ / ${allow}″`;
+  if (u.charged) txt = '⚔ ' + txt;
   if (over) txt += ' · OVER';
   else if (atCap) txt += ' · MAX';
+  if (offLine) txt += ' · OFF-LINE';
   const fontPx = 18;
   const tw = Math.max(96, txt.length * (fontPx * 0.55));
   const pillW = tw + 18, pillH = 28;
@@ -1792,7 +1885,8 @@ function updateSidebar() {
         : `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>`) +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       (isParalyzed(u) ? `<div class="stat"><span class="k">Paralyzed</span><span class="v">${paralyzedFigures(u)}${isIndiv ? '' : ` / ${u.count}`} figure${paralyzedFigures(u)>1?'s':''} · ${paralysisReleaseLabel(u)}</span></div>` : '') +
-      (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
+      (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man · charge ${chargeAllowanceOf(u)}″</span></div>` : '') +
+      (!u.charged && u.chargedLastTurn ? `<div class="stat"><span class="k">Charge</span><span class="v" style="color:var(--ink-soft)">charged last turn · normal speed only</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
       (u.indirect ? `<div class="stat"><span class="k">Indirect fire</span><span class="v" style="color:#8a6d3b">ON · range −⅓, +1 armor cat</span></div>` : '') +
@@ -1825,8 +1919,14 @@ function updateButtons() {
   const d = state.units.find(u => u.id === state.targetId);
   const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
   const canAct = valid && activeFigures(a) > 0;
-  $('#btn-melee').disabled   = !(canAct && inMeleeContact(a, d));
-  $('#btn-missile').disabled = !(canAct && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
+  // Slice 8D: when phases are enforced, melee resolves only in the melee phase
+  // and missile fire only in the missile phase (split-move/pass-through fire
+  // during the move phases is a later slice).
+  const phaseId = PHASES[state.phaseIdx].id;
+  const meleeOk = !state.settings.enforcePhases || phaseId === 'melee';
+  const missileOk = !state.settings.enforcePhases || phaseId === 'missile';
+  $('#btn-melee').disabled   = !(canAct && meleeOk && inMeleeContact(a, d));
+  $('#btn-missile').disabled = !(canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -1905,6 +2005,8 @@ function onUnitMouseDown(evt, unitId) {
   if (state.targetId === unitId) state.targetId = null;
   // A fully paralyzed unit can be selected (to free it) but cannot be moved.
   if (isFullyParalyzed(u)) { renderBoard(); return; }
+  // Slice 8D: when phases are enforced, only the active mover's side may move now.
+  if (!canSideMoveNow(u.side)) { renderBoard(); return; }
   // Begin drag
   const pt = svgPoint(evt);
   state.dragging = {
@@ -1936,8 +2038,14 @@ function onBoardMouseMove(evt) {
   // the allowance still remaining for the unit this turn (advisory mode never
   // clamps — it only warns via the ruler/pane colour).
   if (state.settings.enforceMovement) {
+    let vx = nx - state.dragging.originX, vy = ny - state.dragging.originY;
+    // Slice 8C: a cavalry charge is held to ≤45° of the unit's facing.
+    if (isCavalryCharge(u)) {
+      const h = clampHeadingToward(vx, vy, facingHeadingRad(u.facing), CHARGE_CURVE_RAD);
+      vx = h.dx; vy = h.dy;
+    }
     const remBefore = Math.max(0, moveAllowanceOf(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
-    const c = clampMoveVector(nx - state.dragging.originX, ny - state.dragging.originY, remBefore);
+    const c = clampMoveVector(vx, vy, remBefore);
     nx = state.dragging.originX + c.dx;
     ny = state.dragging.originY + c.dy;
   }
@@ -1972,6 +2080,7 @@ function onBoardClick(evt) {
 // hard-enforce mode a nudge that would exceed the remaining allowance is blocked
 // (returns false); otherwise the step distance is added to movedThisTurn.
 function nudgeUnit(u, dxPx, dyPx) {
+  if (!canSideMoveNow(u.side)) return false;   // Slice 8D phase gate
   const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
   if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
@@ -1984,6 +2093,7 @@ function nudgeUnit(u, dxPx, dyPx) {
 // cost against the move budget. In hard-enforce mode a rotation whose resulting
 // tier would push the total budget past the allowance is blocked (returns false).
 function rotateUnit(u, deltaDeg) {
+  if (!canSideMoveNow(u.side)) return false;   // Slice 8D: facing change is part of the move phase
   const newFacing = (u.facing + deltaDeg + 360) % 360;
   if (state.settings.enforceMovement) {
     if (u.turnStartFacing == null) u.turnStartFacing = u.facing;
@@ -3143,6 +3253,7 @@ function spawnUnit() {
     fatigued: false,
     moveStreak: 0,
     charged: false,
+    chargedLastTurn: false,   // Slice 8C: charged on the previous turn → normal speed this turn
     prisoners: 0,
     indirect: false,
     cover: 'none',
@@ -3202,7 +3313,8 @@ function onUnitContextMenu(evt, unitId) {
   // Charge entries — only for impetus-capable classes (p.16); only the direction
   // that makes sense given the current charged state.
   const canCharge = IMPETUS_CLASSES.has(u.type) || u.kind === 'individual';
-  document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged;
+  // Slice 8C: a unit that charged last turn must move at normal speed (p.16) — no fresh charge.
+  document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged || !!u.chargedLastTurn;
   document.querySelector('#ctx-menu [data-act="cancel-charge"]').hidden = !canCharge || !u.charged;
   // Indirect fire — bows/longbows only (not crossbows, p.12). Label reflects state.
   const indirectBtn = document.querySelector('#ctx-menu [data-act="toggle-indirect"]');
@@ -3348,6 +3460,7 @@ function resetBoard() {
   state.turn = 1;
   state.activeSide = 'A';
   state.engagements = [];
+  startTurnInitiative();   // Slice 8D: fresh initiative for turn 1
   $('#log').innerHTML = '';
   renderTurnUI();
   renderBoard();
@@ -3376,6 +3489,7 @@ function onSettingChange(evt) {
   if (!key) return;
   state.settings[key] = evt.target.checked;
   renderBoard();
+  renderTurnUI();   // Slice 8D: refresh phase tag/gating when enforcePhases toggles
   if (key === 'gridOnByDefault') {
     // Apply immediately for the current session so users can preview.
     state.showGrid = state.settings.gridOnByDefault;
@@ -3398,19 +3512,63 @@ function onSettingRange(evt) {
 }
 
 function renderTurnUI() {
-  const sideC = state.activeSide === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
-  $('#phase').innerHTML = `Turn ${state.turn} · Side <b style="color:${sideC}">${state.activeSide}</b>`;
-  $('#btn-end-side').textContent = `End ${state.activeSide}'s turn`;
+  const ph = PHASES[state.phaseIdx];
+  const mover = moverForPhase(ph.id, state.firstMover);
+  const enf = state.settings.enforcePhases;
+  const sideTag = (s) => {
+    const c = s === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+    return `<b style="color:${c}">${s}</b>`;
+  };
+  let body;
+  if (ph.id === 'initiative') {
+    const r = state.initiativeRoll;
+    const elected = state.firstMover !== (r ? r.winner : 'A') ? ' (elects to move last)' : '';
+    body = r
+      ? `Initiative — ${sideTag('A')} ${r.a} vs ${sideTag('B')} ${r.b}: ${sideTag(r.winner)} wins${elected} → ${sideTag(state.firstMover)} moves first`
+      : `Initiative`;
+  } else if (mover) {
+    body = `${ph.label} · ${sideTag(mover)}`;
+  } else {
+    body = ph.label;
+  }
+  $('#phase').innerHTML = `Turn ${state.turn} · ${body}${enf ? ' · <span style="color:var(--rear)">enforced</span>' : ''}`;
+  // Advance button: shows where the next press lands.
+  const atMelee = state.phaseIdx >= PHASES.length - 1;
+  $('#btn-end-side').textContent = atMelee ? 'Next turn ▸' : `Next: ${PHASES[state.phaseIdx + 1].label} ▸`;
+  // Election button only during initiative.
+  const electBtn = $('#btn-elect-order');
+  electBtn.hidden = ph.id !== 'initiative';
+  if (!electBtn.hidden) {
+    const winner = state.initiativeRoll ? state.initiativeRoll.winner : 'A';
+    electBtn.textContent = state.firstMover === winner ? `${winner} moves last` : `${winner} moves first`;
+  }
+  updateButtons();
 }
 
-function endSideTurn() {
-  state.activeSide = state.activeSide === 'A' ? 'B' : 'A';
+// Roll initiative for the start of a turn; the winner moves first by default
+// (the player may then elect to move last via the election button).
+function startTurnInitiative() {
+  state.initiativeRoll = rollInitiative(state.rng);
+  state.firstMover = state.initiativeRoll.winner;
+  state.phaseIdx = 0;
+}
+// "Next phase ▸" — step the sequence; advancing past melee ends the round.
+function advancePhase() {
+  if (state.phaseIdx >= PHASES.length - 1) { endRound(); return; }
+  state.phaseIdx += 1;
   renderTurnUI();
+  renderBoard();
+}
+// Initiative election (p.9 §1): the winner may choose to move first or last.
+function toggleInitiativeOrder() {
+  if (PHASES[state.phaseIdx].id !== 'initiative') return;
+  state.firstMover = state.firstMover === 'A' ? 'B' : 'A';
+  renderTurnUI();
+  renderBoard();
 }
 
 function endRound() {
   state.turn += 1;
-  state.activeSide = 'A';
   for (const u of state.units) {
     releaseExpiredParalysis(u, state.turn);
     if (state.settings.applyFatigue) {
@@ -3423,6 +3581,7 @@ function endRound() {
         if (u.fatigued) u.fatigued = false;
       }
     }
+    u.chargedLastTurn = !!u.charged;   // Slice 8C: this turn's charge bars a fresh charge next turn
     u.charged = false;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
@@ -3430,11 +3589,13 @@ function endRound() {
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
     clearActed(u);
   }
+  startTurnInitiative();   // Slice 8D: new turn begins at initiative
   renderTurnUI();
   renderBoard();
 }
 
-$('#btn-end-side').addEventListener('click', endSideTurn);
+$('#btn-end-side').addEventListener('click', advancePhase);
+$('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', onResolveMelee);
@@ -3465,6 +3626,7 @@ document.addEventListener('keydown', onKeyDown);
 
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
+startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
 
@@ -3699,6 +3861,34 @@ renderBoard();
   console.assert(facingCostIn(pivotU)===4.5, 'facing cost derives from net change vs turnStartFacing');
   console.assert(remainingMoveIn(pivotU)===1.5, 'shared budget: 9 − 3 moved − 4.5 pivot = 1.5″ left');
   console.assert(facingCostIn({type:'HF'})===0, 'no facing baseline (test stub) → zero pivot cost (no 8A regression)');
+
+  // Charge movement (Slice 8C — movement pillar #3, p.16).
+  console.assert(chargeAllowanceOf({type:'HF'})===12 && chargeAllowanceOf({type:'AF'})===9, 'foot charge = move+3 (HF 12, AF 9)');
+  console.assert(chargeAllowanceOf({type:'HH'})===18 && chargeAllowanceOf({type:'MH'})===24 && chargeAllowanceOf({type:'LH'})===30, 'horse charge = move+6 (HH 18, MH 24, LH 30)');
+  console.assert(chargeAllowanceOf({type:'GIANT'})===18 && chargeAllowanceOf({type:'ENT'})===6, 'fantasy charge per Appendix D (giant 18, ent 6 = no bonus)');
+  console.assert(moveAllowanceOf({type:'HH'})===12 && moveAllowanceOf({type:'HH', charged:true})===18, 'declaring a charge swaps in the charge allowance');
+  console.assert(facingCostInches({type:'HH', charged:true},90)===3, 'pivot cost uses the normal move (HH ½×½×12=3), never the charge distance');
+  const chU = {type:'HH', charged:true, movedThisTurn:12, facing:90, turnStartFacing:90};
+  console.assert(remainingMoveIn(chU)===6, 'charging HH: 18 − 12 moved = 6″ left (would be 0 on a normal move)');
+  console.assert(Math.abs(facingHeadingRad(90)) < 1e-9, 'facing 90° → movement heading +x (0 rad)');
+  const onLine = clampHeadingToward(24, 0, 0, CHARGE_CURVE_RAD);
+  console.assert(!onLine.clamped, 'a charge along the facing line is not clamped');
+  const offLine = clampHeadingToward(0, 24, 0, CHARGE_CURVE_RAD);  // 90° off → clamps to 45°
+  console.assert(offLine.clamped && Math.abs(Math.atan2(offLine.dy, offLine.dx) - CHARGE_CURVE_RAD) < 1e-6, 'a 90°-off charge clamps onto the 45° boundary');
+  console.assert(Math.abs(Math.hypot(offLine.dx, offLine.dy) - 24) < 1e-6, 'heading clamp preserves the charge distance');
+  console.assert(isCavalryCharge({type:'HH', charged:true}) && !isCavalryCharge({type:'HF', charged:true}) && !isCavalryCharge({type:'HH'}), 'straight-line rule is cavalry-charge only');
+
+  // Move/counter-move phase sequence (Slice 8D — movement pillar #4, p.9).
+  console.assert(PHASES.length === 6 && PHASES[0].id === 'initiative' && PHASES[5].id === 'melee', 'six-phase move/counter-move sequence');
+  console.assert(moverForPhase('move1','A')==='A' && moverForPhase('move2','A')==='B', 'first mover moves in move1, the other in move2');
+  console.assert(moverForPhase('missile','A')===null && moverForPhase('melee','B')===null, 'fire/melee phases have no single mover');
+  const ini8d = rollInitiative(seq([forDie(5),forDie(3)]));
+  console.assert(ini8d.a===5 && ini8d.b===3 && ini8d.winner==='A', 'initiative: higher d6 wins');
+  const iniTie = rollInitiative(seq([forDie(4),forDie(4),forDie(2),forDie(6)]));
+  console.assert(iniTie.winner==='B' && iniTie.a!==iniTie.b, 'initiative re-rolls ties before deciding');
+  console.assert(phaseAllowsMove('move1','A','A',true) && !phaseAllowsMove('move1','A','B',true), 'enforced: only the first mover moves in move1');
+  console.assert(!phaseAllowsMove('missile','A','A',true), 'enforced: no movement during a fire phase');
+  console.assert(phaseAllowsMove('missile','A','A',false) && phaseAllowsMove('move2','A','A',false), 'advisory: movement always allowed');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
