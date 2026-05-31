@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.39 · Slice 7G: figure-level paralysis (conditions layer) — Wight melee-touch (1 turn, auto), Wraith touch (until freed, manual), per-figure freeze reduces offense dice while bodies stay killable, free via friendly Elf/Hero/Wizard <=1in; immolation (7H) next -->
+<!-- chainmail-board.html · v0.9.40 · Slice 7H: Balrog immolation keyed off footprint — burns the normal mass figures geometrically within the Balrog footprint (no arbitrary count), manual touch action for move/melee; hero/fantastic flame saves deferred -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.39</title>
+<title>Chainmail — Battlefield · v0.9.40</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7G · figure-level paralysis</div>
-    <span class="version-tag">v0.9.39</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7H · Balrog immolation</div>
+    <span class="version-tag">v0.9.40</span>
   </div>
 
   <div class="toolbar">
@@ -244,6 +244,7 @@
   <button data-act="breathe">Breathe fire (9″ cone)</button>
   <button data-act="paralyze-touch">Paralyzing touch (freeze enemy figures)</button>
   <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
+  <button data-act="immolate">Immolate (burn figures in footprint)</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -312,7 +313,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.39';
+const SIM_VERSION = '0.9.40';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1221,6 +1222,28 @@ function edgeGapInches(a, b) {
   const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
   const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
   return pxToInches(Math.max(0, dist(a, b) - aMax - bMax));
+}
+// Count how many of target's figures fall within source's footprint (Slice 7H,
+// Balrog immolation). The footprint is a circle of source's half-extent; a
+// target figure counts if its cell centre is within that circle plus half a
+// cell, so flames engulf the figures the source is physically standing on. The
+// grid layout mirrors renderUnit exactly (row-major, last row partial).
+function figuresWithinFootprint(source, target) {
+  const R = Math.max(unitBounds(source).w, unitBounds(source).h) / 2;
+  if (target.kind === 'individual') return dist(source, target) <= R ? 1 : 0;
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  const cols = target.cols, f = (target.facing || 0) * Math.PI / 180;
+  const cos = Math.cos(f), sin = Math.sin(f), reach = R + pip / 2;
+  let n = 0;
+  for (let i = 0; i < target.count; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+    const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+    const wx = target.x + lx * cos - ly * sin;
+    const wy = target.y + lx * sin + ly * cos;
+    if (Math.hypot(wx - source.x, wy - source.y) <= reach) n++;
+  }
+  return Math.min(n, target.count);
 }
 
 function inMissileRange(firer, target) {
@@ -3068,6 +3091,7 @@ function onUnitContextMenu(evt, unitId) {
   // any unit currently holding paralyzed figures.
   document.querySelector('#ctx-menu [data-act="paralyze-touch"]').hidden = !PARALYZER_TYPES.has(u.type);
   document.querySelector('#ctx-menu [data-act="free-paralysis"]').hidden = !isParalyzed(u);
+  document.querySelector('#ctx-menu [data-act="immolate"]').hidden = u.type !== 'BALROG';
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -3119,6 +3143,31 @@ function onContextMenuAction(evt) {
       appendTurn(`Paralyzing touch · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`,
         n > 0 ? `<div class="step">${n} figure${n>1?'s':''} paralyzed ${when}.</div>`
               : `<div class="step">No free figures left to paralyze.</div>`);
+    }
+  } else if (act === 'immolate') {
+    const tgt = state.units.find(x => x.id === state.targetId);
+    if (!tgt || tgt.destroyed || tgt.side === u.side) {
+      appendTurn(`Immolation — no target`, `<div class="step">Shift-click an enemy unit, move the Balrog into contact, then immolate.</div>`);
+    } else if (tgt.kind === 'individual') {
+      appendTurn(`Immolation — n/a`, `<div class="step">${typeById(tgt.type).name} isn't a normal rank-and-file unit — hero/fantastic flame saves aren't modeled yet.</div>`);
+    } else {
+      const n = figuresWithinFootprint(u, tgt);
+      if (n <= 0) {
+        appendTurn(`Immolation — out of reach`, `<div class="step">No ${typeById(tgt.type).name} figures fall within the Balrog's flames — move it onto the formation first.</div>`);
+      } else {
+        applyCasualties(tgt, n);
+        capParalysisToCount(tgt);
+        let body = `<div class="step">The Balrog bursts into flame — <b>${n}</b> ${typeById(tgt.type).name} figure${n>1?'s':''} within its footprint immolated.</div>`;
+        if (tgt.destroyed) {
+          body += `<div class="verdict v-rout">${typeById(tgt.type).name} (${tgt.side}) consumed entirely</div>`;
+          cleanupEngagementsForUnit(tgt.id);
+          if (tgt.id === state.selectedId) state.selectedId = null;
+          if (tgt.id === state.targetId) state.targetId = null;
+        } else {
+          body += `<div class="step">${typeById(tgt.type).name} now ${tgt.count}/${tgt.startCount}</div>`;
+        }
+        appendTurn(`Immolation · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`, body);
+      }
     }
   } else if (act === 'free-paralysis') {
     if (canFreeParalysis(u)) {
@@ -3470,6 +3519,15 @@ renderBoard();
   console.assert(!isParalyzed(par), 'a friendly touch frees all paralysis');
   const frozenMelee = resolveMassMelee({ attacker:{ type:'HF', count:10, activeCount:6 }, defender:{ type:'HF', count:10 }, rng: always(6) });
   console.assert(frozenMelee.attacker.totalDice === 6 && frozenMelee.attacker.startCount === 10, 'activeCount drives offense dice; count stays the body pool');
+
+  // Balrog immolation — footprint figure count (Slice 7H).
+  const balrog = { kind:'individual', type:'BALROG', x:100, y:100 };
+  console.assert(figuresWithinFootprint(balrog, { kind:'individual', type:'HF', x:100, y:100 }) === 1, 'immolation: catches an individual underfoot');
+  console.assert(figuresWithinFootprint(balrog, { kind:'individual', type:'HF', x:1000, y:1000 }) === 0, 'immolation: nothing caught at range');
+  const immMass = { kind:'mass', type:'HF', count:9, cols:3, rows:3, spacing:'close', x:100, y:100, facing:0 };
+  console.assert(figuresWithinFootprint(balrog, immMass) === 1, 'immolation: dead-centre on a close 3×3 burns the figure underfoot');
+  console.assert(figuresWithinFootprint({ kind:'individual', type:'BALROG', x:112, y:112 }, immMass) === 4, 'immolation: offset over a cluster burns those 4 figures (footprint, not a fixed number)');
+  console.assert(figuresWithinFootprint(balrog, { ...immMass, x:1000, y:1000 }) === 0, 'immolation: distant mass burns nothing');
 
   // Fantasy races core roster (Slice 7D).
   console.assert(typeById('ORC').cls === 'HF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, hobbit as LF');
