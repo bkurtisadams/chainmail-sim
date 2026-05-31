@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.40 · Slice 7H: Balrog immolation keyed off footprint — burns the normal mass figures geometrically within the Balrog footprint (no arbitrary count), manual touch action for move/melee; hero/fantastic flame saves deferred -->
+<!-- chainmail-board.html · v0.10.1 · Slice 8B (Movement pillar #2): facing-change costs (p.11) — rotating a unit now spends part of its move allowance: oblique (≤45°) ¼ move, left/right face (≤90°) ½ move, about-face (≤180°) 1 move; ×2 for poorly-trained (peasants/levies), ×½ for Swiss/Landsknechte & horse/mounted. Cost is derived from net facing change vs turn-start, shares the movedThisTurn budget, shown in the pane, and (hard-enforce) blocks rotations past the allowance. turnStartFacing reset in endRound. Charge movement / phases follow. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.40</title>
+<title>Chainmail — Battlefield · v0.10.1</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7H · Balrog immolation</div>
-    <span class="version-tag">v0.9.40</span>
+    <div class="sub">Chainmail HTML Sim · Slice 8B · Movement: facing costs</div>
+    <span class="version-tag">v0.10.1</span>
   </div>
 
   <div class="toolbar">
@@ -262,10 +262,10 @@
     <table class="help-table">
       <tr><td>click</td><td>Select unit</td></tr>
       <tr><td>shift + click</td><td>Set unit as target</td></tr>
-      <tr><td>drag</td><td>Move unit (ruler shows distance vs allowance)</td></tr>
+      <tr><td>drag</td><td>Move unit — ruler shows this drag &amp; the running turn total vs the type's move allowance (Settings → Movement to hard-enforce)</td></tr>
       <tr><td>arrows</td><td>Nudge selected unit by ¼″</td></tr>
-      <tr><td>[ &nbsp; ]</td><td>Rotate selected unit ±15°</td></tr>
-      <tr><td>ctrl + wheel</td><td>Rotate selected unit ±15°</td></tr>
+      <tr><td>[ &nbsp; ]</td><td>Rotate selected unit ±15° (a facing change spends ¼–1 move; see pane "Turned")</td></tr>
+      <tr><td>ctrl + wheel</td><td>Rotate selected unit ±15° (costs move allowance — p.11)</td></tr>
       <tr><td>wheel</td><td>Zoom board at cursor</td></tr>
       <tr><td>+ &nbsp; –</td><td>Zoom in / zoom out</td></tr>
       <tr><td>0</td><td>Reset zoom &amp; pan</td></tr>
@@ -306,6 +306,16 @@
          will appear here as their slices land. Chainmail p.16–18.</p>
     </section>
 
+    <section>
+      <h3>Movement (p.9–11)</h3>
+      <label><input type="checkbox" data-setting="enforceMovement"> Hard-enforce move allowance — clamp drags &amp; nudges at the remaining limit</label>
+      <p>Each unit's distance moved this turn is tracked against its type's
+         allowance (the drag ruler and the unit pane show it). Off (default) is
+         <b>advisory</b>: you can move freely and the sim only warns when a unit
+         exceeds its allowance, so freeform placement still works. On caps each
+         unit's movement at the rulebook limit. Resets every round.</p>
+    </section>
+
     <div class="modal-foot">
       <button class="secondary" data-act="close">Close</button>
     </div>
@@ -313,7 +323,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.40';
+const SIM_VERSION = '0.10.1';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1144,6 +1154,7 @@ const state = {
     applyFatigue: false,
     applyCavalryChargeMorale: false,
     applyPrisoners: false,
+    enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rng: mulberry32(Date.now() & 0xffff),
@@ -1152,6 +1163,60 @@ const state = {
 /* === E. GEOMETRY ======================================================= */
 const inchesToPx = (i) => i * PX_PER_INCH;
 const pxToInches = (p) => p / PX_PER_INCH;
+
+/* --- Movement accounting (Slice 8A) -----------------------------------
+   Pure helpers so the per-turn move-allowance logic is testable without the
+   DOM. A unit's allowance comes from MOVE_ALLOWANCE (default 12″); movedThisTurn
+   accumulates straight-line drag/nudge distance and resets each round. */
+const moveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
+
+/* --- Facing-change costs (Slice 8B, p.11) ------------------------------
+   A facing change spends part of the move allowance, tiered by how far the
+   unit turns (shortest angular distance from where it was facing at the start
+   of the turn):
+       ≤45°  oblique        → ¼ move
+       ≤90°  left/right face → ½ move
+       ≤180° about face      → 1 move
+   Discipline modifier (p.11): ×2 for poorly-trained troops (peasants/levies),
+   ×½ for Swiss/Landsknechte and horse/mounted. The cost is *derived* from the
+   net change vs turnStartFacing, so wiggling back and forth only ever costs the
+   net tier, and it draws from the same per-turn budget as translation. */
+const angDist = (a, b) => { const d = Math.abs((((a - b) % 360) + 360) % 360); return d > 180 ? 360 - d : d; };
+function facingTier(netDeg) {
+  if (netDeg <= 1e-6) return 0;
+  if (netDeg <= 45) return 0.25;   // oblique
+  if (netDeg <= 90) return 0.5;    // left/right face
+  return 1;                        // about face (up to 180°)
+}
+function facingDiscipline(u) {
+  if (u.type === 'PE' || u.type === 'LV') return 2;                       // poorly trained → double
+  if (u.type === 'SP' || isMountedType(u.type) || u.mounted) return 0.5;  // Swiss/Landsknechte & horse → half
+  return 1;
+}
+const facingCostInches = (u, netDeg) => facingTier(netDeg) * facingDiscipline(u) * moveAllowanceOf(u);
+function facingCostIn(u) {
+  if (u.facing == null || u.turnStartFacing == null) return 0;  // no baseline → no cost (e.g. test stubs)
+  return facingCostInches(u, angDist(u.facing, u.turnStartFacing));
+}
+function facingTierLabel(u) {
+  if (u.facing == null || u.turnStartFacing == null) return '';
+  const d = angDist(u.facing, u.turnStartFacing);
+  return d <= 1e-6 ? '' : d <= 45 ? 'oblique' : d <= 90 ? 'face' : 'about-face';
+}
+
+// Total move budget spent this turn = translation distance + facing-change cost.
+const budgetSpentIn = (u) => (u.movedThisTurn || 0) + facingCostIn(u);
+const remainingMoveIn = (u) => Math.max(0, moveAllowanceOf(u) - budgetSpentIn(u));
+// Clamp a drag/nudge vector (px) so its length never exceeds the remaining
+// allowance (inches). Returns the (possibly scaled) vector and whether it hit
+// the cap. Used only when hard-enforce is on; advisory mode never clamps.
+function clampMoveVector(dxPx, dyPx, remainingIn) {
+  const lenPx = Math.hypot(dxPx, dyPx);
+  const maxPx = inchesToPx(remainingIn);
+  if (lenPx <= maxPx || lenPx === 0) return { dx: dxPx, dy: dyPx, clamped: false };
+  const s = maxPx / lenPx;
+  return { dx: dxPx * s, dy: dyPx * s, clamped: true };
+}
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
@@ -1670,11 +1735,20 @@ function renderDragRuler() {
   if (!state.dragging) return '';
   const u = state.units.find(u => u.id === state.dragging.unitId);
   if (!u) return '';
-  const distIn = pxToInches(Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY));
-  const allow = MOVE_ALLOWANCE[u.type] || 12;
-  const over = distIn > allow;
-  const accent = over ? 'var(--rear)' : 'var(--ink)';
-  const txt = `${distIn.toFixed(1)}″ / ${allow}″${over?' · OVER':''}`;
+  const thisDragIn = pxToInches(Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY));
+  const before = (state.dragging.movedBefore || 0) + facingCostIn(u);  // translation already spent + pivot cost
+  const totalIn = before + thisDragIn;          // cumulative budget used this turn
+  const allow = moveAllowanceOf(u);
+  const over = totalIn > allow + 1e-9;
+  const atCap = state.settings.enforceMovement && (allow - totalIn) <= 0.05;
+  const accent = over ? 'var(--rear)' : (atCap ? 'var(--flank)' : 'var(--ink)');
+  // Show this drag's length, and (if the unit already moved this turn) the
+  // running turn total vs allowance. atCap means the hard-enforce clamp is biting.
+  let txt = before > 0.05
+    ? `${thisDragIn.toFixed(1)}″ · turn ${totalIn.toFixed(1)}/${allow}″`
+    : `${thisDragIn.toFixed(1)}″ / ${allow}″`;
+  if (over) txt += ' · OVER';
+  else if (atCap) txt += ' · MAX';
   const fontPx = 18;
   const tw = Math.max(96, txt.length * (fontPx * 0.55));
   const pillW = tw + 18, pillH = 28;
@@ -1701,6 +1775,14 @@ function updateSidebar() {
     const T = typeById(u.type);
     const isIndiv = u.kind === 'individual';
     const pct = u.startCount ? (100 * (u.startCount - u.count) / u.startCount).toFixed(0) : 0;
+    // Slice 8A/8B: per-turn move budget = translation + facing-change cost.
+    const movedIn = u.movedThisTurn || 0;
+    const faceCostIn = facingCostIn(u);
+    const spentIn = movedIn + faceCostIn;
+    const moveAllow = moveAllowanceOf(u);
+    const moveLeft = Math.max(0, moveAllow - spentIn);
+    const overMove = spentIn > moveAllow + 1e-9;
+    const turnedDeg = (u.turnStartFacing != null) ? angDist(u.facing, u.turnStartFacing) : 0;
     el.innerHTML =
       `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
       `<div class="stat"><span class="k">Kind</span><span class="v">${isIndiv ? 'individual' : 'mass'}</span></div>` +
@@ -1721,6 +1803,8 @@ function updateSidebar() {
         : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
+      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
+      (turnedDeg > 0.5 ? `<div class="stat"><span class="k">Turned</span><span class="v">${turnedDeg.toFixed(0)}° · ${facingTierLabel(u)} · ${faceCostIn.toFixed(1)}″</span></div>` : '') +
       (isIndiv
         ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
           `<div class="stat"><span class="k">Size</span><span class="v">${sizeOf(u.type)}</span></div>` +
@@ -1778,7 +1862,7 @@ function onWheel(evt) {
   if (evt.ctrlKey) {
     const u = state.units.find(u => u.id === state.selectedId);
     if (u && !u.destroyed) {
-      u.facing = (u.facing + (evt.deltaY > 0 ? 15 : -15) + 360) % 360;
+      rotateUnit(u, evt.deltaY > 0 ? 15 : -15);
       renderBoard();
       return;
     }
@@ -1826,6 +1910,7 @@ function onUnitMouseDown(evt, unitId) {
   state.dragging = {
     unitId, originX: u.x, originY: u.y,
     grabOffsetX: pt.x - u.x, grabOffsetY: pt.y - u.y,
+    movedBefore: u.movedThisTurn || 0,   // Slice 8A: distance already spent this turn before this drag
   };
   renderBoard();
 }
@@ -1845,16 +1930,32 @@ function onBoardMouseMove(evt) {
   const u = state.units.find(u => u.id === state.dragging.unitId);
   if (!u) return;
   const pt = svgPoint(evt);
-  u.x = Math.max(20, Math.min(BOARD_W - 20, pt.x - state.dragging.grabOffsetX));
-  u.y = Math.max(20, Math.min(BOARD_H - 20, pt.y - state.dragging.grabOffsetY));
+  let nx = pt.x - state.dragging.grabOffsetX;
+  let ny = pt.y - state.dragging.grabOffsetY;
+  // Slice 8A: in hard-enforce mode, cap this drag's straight-line distance at
+  // the allowance still remaining for the unit this turn (advisory mode never
+  // clamps — it only warns via the ruler/pane colour).
+  if (state.settings.enforceMovement) {
+    const remBefore = Math.max(0, moveAllowanceOf(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
+    const c = clampMoveVector(nx - state.dragging.originX, ny - state.dragging.originY, remBefore);
+    nx = state.dragging.originX + c.dx;
+    ny = state.dragging.originY + c.dy;
+  }
+  u.x = Math.max(20, Math.min(BOARD_W - 20, nx));
+  u.y = Math.max(20, Math.min(BOARD_H - 20, ny));
   renderBoard();
 }
 function onBoardMouseUp() {
   if (state.panning) { state.panning = null; $('#board').classList.remove('panning'); }
   if (state.dragging) {
     const u = state.units.find(x => x.id === state.dragging.unitId);
-    if (u && Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY) > 0.5) {
-      u.acted.moved = true;
+    if (u) {
+      const distPx = Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY);
+      if (distPx > 0.5) {
+        // Slice 8A: add this drag's straight-line distance to the turn total.
+        u.movedThisTurn = (state.dragging.movedBefore || 0) + pxToInches(distPx);
+        u.acted.moved = true;
+      }
     }
     state.dragging = null;
   }
@@ -1866,6 +1967,34 @@ function onBoardClick(evt) {
     if (!evt.shiftKey) { state.selectedId = null; state.targetId = null; }
     renderBoard();
   }
+}
+// Slice 8A: arrow-key nudge that respects the move-allowance accounting. In
+// hard-enforce mode a nudge that would exceed the remaining allowance is blocked
+// (returns false); otherwise the step distance is added to movedThisTurn.
+function nudgeUnit(u, dxPx, dyPx) {
+  const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
+  if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
+  u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
+  u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
+  u.movedThisTurn = (u.movedThisTurn || 0) + stepIn;
+  u.acted.moved = true;
+  return true;
+}
+// Slice 8B: rotate the selected unit by deltaDeg, charging the facing-change
+// cost against the move budget. In hard-enforce mode a rotation whose resulting
+// tier would push the total budget past the allowance is blocked (returns false).
+function rotateUnit(u, deltaDeg) {
+  const newFacing = (u.facing + deltaDeg + 360) % 360;
+  if (state.settings.enforceMovement) {
+    if (u.turnStartFacing == null) u.turnStartFacing = u.facing;
+    const projFacingCost = facingCostInches(u, angDist(newFacing, u.turnStartFacing));
+    if ((u.movedThisTurn || 0) + projFacingCost > moveAllowanceOf(u) + 1e-9) return false;
+  }
+  u.facing = newFacing;
+  // A costed pivot counts as a move-phase action (shares the move budget, so it
+  // feeds fatigue / dragon-rekindle the same way translation does).
+  if (facingCostIn(u) > 0) u.acted.moved = true;
+  return true;
 }
 function onKeyDown(evt) {
   // Zoom hotkeys are global (selection-independent)
@@ -1889,12 +2018,12 @@ function onKeyDown(evt) {
   const u = state.units.find(u => u.id === state.selectedId);
   if (!u || u.destroyed) return;
   let handled = true;
-  if (evt.key === '[') u.facing = (u.facing - 15 + 360) % 360;
-  else if (evt.key === ']') u.facing = (u.facing + 15) % 360;
-  else if (evt.key === 'ArrowLeft')  { u.x = Math.max(20, u.x - PX_PER_INCH/4); u.acted.moved = true; }
-  else if (evt.key === 'ArrowRight') { u.x = Math.min(BOARD_W-20, u.x + PX_PER_INCH/4); u.acted.moved = true; }
-  else if (evt.key === 'ArrowUp')    { u.y = Math.max(20, u.y - PX_PER_INCH/4); u.acted.moved = true; }
-  else if (evt.key === 'ArrowDown')  { u.y = Math.min(BOARD_H-20, u.y + PX_PER_INCH/4); u.acted.moved = true; }
+  if (evt.key === '[') rotateUnit(u, -15);
+  else if (evt.key === ']') rotateUnit(u, 15);
+  else if (evt.key === 'ArrowLeft')  nudgeUnit(u, -PX_PER_INCH/4, 0);
+  else if (evt.key === 'ArrowRight') nudgeUnit(u,  PX_PER_INCH/4, 0);
+  else if (evt.key === 'ArrowUp')    nudgeUnit(u, 0, -PX_PER_INCH/4);
+  else if (evt.key === 'ArrowDown')  nudgeUnit(u, 0,  PX_PER_INCH/4);
   else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
   else if (evt.key === 'Delete' || evt.key === 'Backspace') {
     state.units = state.units.filter(x => x.id !== u.id);
@@ -3008,6 +3137,7 @@ function spawnUnit() {
     side, kind, type,
     weapon,
     acted: { moved: false, fired: false, fought: false },
+    movedThisTurn: 0,   // Slice 8A: inches moved this turn (accumulated on drag/nudge; reset in endRound)
     shotsThisTurn: 0, lastFiredTurn: null,
     status: 'ready',
     fatigued: false,
@@ -3020,6 +3150,7 @@ function spawnUnit() {
     x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
     y: BOARD_H/2 + (Math.random()-0.5)*60,
     facing: side === 'A' ? 90 : 270,
+    turnStartFacing: side === 'A' ? 90 : 270,   // Slice 8B: facing baseline for this turn's pivot cost
   };
   let u;
   if (kind === 'individual') {
@@ -3197,7 +3328,7 @@ function onContextMenuAction(evt) {
     const target = act.replace('reshape-', '');
     reshapeUnit(u, target);
   } else if (act === 'rotate-90') {
-    u.facing = (u.facing + 90) % 360;
+    rotateUnit(u, 90);
   } else if (act === 'delete') {
     state.units = state.units.filter(x => x.id !== u.id);
     cleanupEngagementsForUnit(u.id);
@@ -3293,6 +3424,8 @@ function endRound() {
       }
     }
     u.charged = false;
+    u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
+    u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
     clearActed(u);
@@ -3539,6 +3672,33 @@ renderBoard();
   // whereas vs an HF defender 5s would miss — confirms the defend class applies.
   const hfVsGoblinLF = resolveMassMelee({ attacker:{ type:'HF', count:10 }, defender:{ type:'GOBLIN', count:20, defendType: defendTypeForMass('GOBLIN') }, rng: always(5) });
   console.assert(hfVsGoblinLF.attacker.killsDealt === 10, 'goblin defends as LF → HF kills on 5-6 (all-5 → 10)');
+
+  // Movement accounting (Slice 8A — movement pillar #1).
+  console.assert(moveAllowanceOf({type:'HF'}) === 9 && moveAllowanceOf({type:'LH'}) === 24, 'move allowance reads MOVE_ALLOWANCE by type');
+  console.assert(moveAllowanceOf({type:'NOPE'}) === 12, 'unknown type falls back to 12″');
+  console.assert(remainingMoveIn({type:'HF', movedThisTurn:0}) === 9, 'fresh HF has its full 9″');
+  console.assert(remainingMoveIn({type:'HF', movedThisTurn:6}) === 3, 'HF that moved 6″ has 3″ left');
+  console.assert(remainingMoveIn({type:'HF', movedThisTurn:20}) === 0, 'over-moved unit never reports negative remaining');
+  const clampHF = clampMoveVector(inchesToPx(20), 0, 9);
+  console.assert(clampHF.clamped && Math.abs(pxToInches(clampHF.dx) - 9) < 1e-6, 'hard-enforce clamps a 20″ drag down to the 9″ remaining');
+  const clampOk = clampMoveVector(inchesToPx(5), 0, 9);
+  console.assert(!clampOk.clamped && Math.abs(pxToInches(clampOk.dx) - 5) < 1e-6, 'a 5″ drag inside 9″ is left unclamped');
+  const clampDiag = clampMoveVector(inchesToPx(6), inchesToPx(8), 5);  // 6-8-10 triangle → 10″ drag
+  console.assert(clampDiag.clamped && Math.abs(pxToInches(Math.hypot(clampDiag.dx, clampDiag.dy)) - 5) < 1e-6, 'diagonal drag clamps on straight-line length, not per-axis');
+  console.assert(clampMoveVector(0, 0, 0).clamped === false, 'zero-length drag is never flagged as clamped');
+
+  // Facing-change costs (Slice 8B — movement pillar #2, p.11).
+  console.assert(angDist(0,0)===0 && angDist(10,350)===20 && angDist(0,180)===180, 'shortest angular distance, wraps at 360');
+  console.assert(facingTier(0)===0 && facingTier(45)===0.25 && facingTier(46)===0.5 && facingTier(90)===0.5 && facingTier(91)===1, 'facing tiers: oblique ≤45, face ≤90, about ≤180');
+  console.assert(facingDiscipline({type:'HF'})===1 && facingDiscipline({type:'PE'})===2 && facingDiscipline({type:'SP'})===0.5 && facingDiscipline({type:'HH'})===0.5, 'discipline mod: foot 1, peasant/levy ×2, swiss/horse ×½');
+  console.assert(facingDiscipline({type:'HERO', mounted:true})===0.5, 'a mounted individual gets the ½ horse modifier');
+  console.assert(facingCostInches({type:'HF'},45)===2.25 && facingCostInches({type:'HF'},90)===4.5 && facingCostInches({type:'HF'},180)===9, 'HF (9″): oblique 2.25″, face 4.5″, about 9″');
+  console.assert(facingCostInches({type:'HH'},180)===6 && facingCostInches({type:'MH'},90)===4.5, 'horse halves: HH about 6″, MH face 4.5″');
+  console.assert(facingCostInches({type:'PE'},45)===4.5, 'peasant doubles: oblique costs ½ its allowance');
+  const pivotU = {type:'HF', movedThisTurn:3, facing:90, turnStartFacing:0};
+  console.assert(facingCostIn(pivotU)===4.5, 'facing cost derives from net change vs turnStartFacing');
+  console.assert(remainingMoveIn(pivotU)===1.5, 'shared budget: 9 − 3 moved − 4.5 pivot = 1.5″ left');
+  console.assert(facingCostIn({type:'HF'})===0, 'no facing baseline (test stub) → zero pivot cost (no 8A regression)');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
