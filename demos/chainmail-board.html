@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.5 · Slice 8F (Movement pillar UI): snap-to-grid — optional setting that snaps a unit's centre to the nearest 1″ grid intersection while dragging, so every cell crossed is exactly 1″ and the ruler / move-budget read in clean increments. Arrow nudges step a full 1″ when snap is on; spawns snap too, and toggling the setting on snaps all existing units. Snap is applied to the desired position before the move-allowance clamp, so hard-enforce still wins at the cap. -->
+<!-- chainmail-board.html · v0.10.7 · Moved-over-½ fire gate (p.11–12): a missile unit (thrown weapons excepted) that moved more than half its NORMAL move this turn — charging excluded — may loose only if it beats the target's opposed d6 (strictly greater; ties fail). overHalfMoveFire() rolls shooter-die then foe-die off movedThisTurn from the movement pillar. Resolved as its own "Move-gate" log card before the shot. Hard under enforceMovement (a fail spends the shot and looses nothing); advisory otherwise so the freeform play-aid still fires. This is the last missing rate-of-fire rule. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.5</title>
+<title>Chainmail — Battlefield · v0.10.7</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -171,8 +171,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 8F · Snap to grid</div>
-    <span class="version-tag">v0.10.5</span>
+    <div class="sub">Chainmail HTML Sim · Moved-over-½ fire gate</div>
+    <span class="version-tag">v0.10.7</span>
   </div>
 
   <div class="toolbar">
@@ -355,7 +355,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.5';
+const SIM_VERSION = '0.10.6';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2962,8 +2962,8 @@ const weaponIndirectAllowed = (id) => !!rangedWeaponById(id)?.indirectAllowed;
 // Rate of fire (p.11). Most weapons fire once per turn. Archers and longbows
 // that hold — neither moving nor meleed — may loose twice. Heavy crossbows and
 // arquebuses fire every other turn (one turn to reload), tracked via the turn
-// they last fired. The "moved over ½ → must beat the foe's die" nuance is
-// deferred (needs per-turn movement distance + an opposed roll).
+// they last fired. The "moved over ½ → must beat the foe's die" clause (p.11–12)
+// is handled by overHalfMoveFire() below, using movedThisTurn from the pillar.
 const TWICE_IF_HELD = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
 function missileShotsAllowed(u) {
   if (!u.weapon) return 0;
@@ -2979,6 +2979,21 @@ function markFired(u) {
   u.acted.fired = true;
   u.shotsThisTurn = (u.shotsThisTurn || 0) + 1;
   u.lastFiredTurn = state.turn;
+}
+
+// Moved-over-½ fire gate (p.11–12). A missile unit (thrown weapons excepted)
+// that moved MORE than half its NORMAL move this turn — charging excluded —
+// may loose only if it beats the target's opposed d6 (strictly greater; a tie
+// fails). Returns null when the gate doesn't apply, else the opposed roll and
+// whether it cleared. Pure: reads movedThisTurn, rolls the supplied rng twice
+// (shooter die first, foe die second). Heavy-crossbow/arquebus reload denial
+// is already covered by the every-other-turn cadence in missileShotsAllowed().
+function overHalfMoveFire(a, d, rng) {
+  if (!a || !a.weapon || isThrown(a.weapon) || a.charged) return null;
+  const half = baseMoveAllowanceOf(a) / 2;
+  if ((a.movedThisTurn || 0) <= half + 1e-9) return null;
+  const fireDie = d6(rng), foeDie = d6(rng);
+  return { moved: a.movedThisTurn || 0, half, fireDie, foeDie, beat: fireDie > foeDie };
 }
 
 function onResolveMissile() {
@@ -3004,6 +3019,28 @@ function onResolveMissile() {
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
       `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">target outside the firing arc (${arcTxt}) — rotate to bear</div>`);
     return;
+  }
+  // Moved-over-½ fire gate (p.11–12). Emitted as its own log card so the
+  // opposed roll reads distinctly from the casualty roll. Hard under
+  // enforceMovement (a failed roll spends the shot and looses nothing);
+  // advisory otherwise (the freeform play-aid still fires).
+  const gate = overHalfMoveFire(a, d, state.rng);
+  if (gate) {
+    const gA = typeById(a.type), gD = typeById(d.type);
+    const roll = `moved ${gate.moved.toFixed(1)}″ > ½ of ${(gate.half * 2).toFixed(0)}″ — opposed d6: shooter ${gate.fireDie} vs foe ${gate.foeDie}`;
+    if (gate.beat) {
+      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+        `<div class="step">${roll}</div><div class="verdict v-stable">beats the foe's die — may loose</div>`);
+    } else if (state.settings.enforceMovement) {
+      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+        `<div class="step">${roll}</div><div class="verdict v-noeffect">fails to beat the foe's die — no shot this turn</div>`);
+      markFired(a);
+      renderBoard();
+      return;
+    } else {
+      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+        `<div class="step">${roll}</div><div class="verdict v-noeffect">would fail the foe's die — advisory only (enforce-movement off), shot allowed</div>`);
+    }
   }
   // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
   // mass shooters use the mass missile table (existing path).
@@ -3877,6 +3914,16 @@ renderBoard();
   console.assert(missileShotsAllowed({ weapon:'light_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0 }) === 1, 'crossbow never doubles');
   console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn:null }) === 1, 'heavy crossbow fires when reloaded');
   console.assert(missileShotsAllowed({ weapon:'heavy_crossbow', acted:{ moved:false, fought:false }, shotsThisTurn:0, lastFiredTurn: state.turn }) === 0, 'heavy crossbow reloading → 0 shots');
+
+  // Moved-over-½ fire gate (p.11–12). LF normal move is 12″ → half 6″.
+  // shooter-die first, foe-die second; strictly-greater beats, ties fail.
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:6 }, {}, always(6)) === null, 'moved exactly ½ → no gate (fires normally)');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:0 }, {}, always(6)) === null, 'stationary → no gate');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'throwing_axe', movedThisTurn:12 }, {}, always(6)) === null, 'thrown weapons are exempt from the move-gate');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:12, charged:true }, {}, always(6)) === null, 'charging move is excluded from the ½ calc');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(5), forDie(3)])).beat === true,  'over ½ and beats the foe die → may loose');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(3), forDie(5)])).beat === false, 'over ½ and loses to the foe die → denied');
+  console.assert(overHalfMoveFire({ type:'LF', weapon:'longbow', movedThisTurn:9 }, {}, seq([forDie(4), forDie(4)])).beat === false, 'tie does not beat — denied');
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
