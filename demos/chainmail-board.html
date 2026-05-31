@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.38 · Slice 7F: race specials — sprite first-round melee immunity, hobbit x1.5 sling accuracy, dwarf/gnome half-kills vs troll/ogre/giant, elf magic-weapon bonus dice (+3 goblin/+2 orc/+1 normal); daylight, invisibility, obedience-die deferred -->
+<!-- chainmail-board.html · v0.9.39 · Slice 7G: figure-level paralysis (conditions layer) — Wight melee-touch (1 turn, auto), Wraith touch (until freed, manual), per-figure freeze reduces offense dice while bodies stay killable, free via friendly Elf/Hero/Wizard <=1in; immolation (7H) next -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.38</title>
+<title>Chainmail — Battlefield · v0.9.39</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7F · race specials</div>
-    <span class="version-tag">v0.9.38</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7G · figure-level paralysis</div>
+    <span class="version-tag">v0.9.39</span>
   </div>
 
   <div class="toolbar">
@@ -242,6 +242,8 @@
   <button data-act="toggle-indirect">Indirect fire</button>
   <button data-act="cycle-cover">Cover</button>
   <button data-act="breathe">Breathe fire (9″ cone)</button>
+  <button data-act="paralyze-touch">Paralyzing touch (freeze enemy figures)</button>
+  <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -310,7 +312,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.38';
+const SIM_VERSION = '0.9.39';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -491,6 +493,61 @@ const SIZE_BY_TYPE = {
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
 
+// ── Conditions: figure-level paralysis (Slice 7G) ───────────────────────────
+// u.conditions.paralyzed is an array of batches { count, source, releaseTurn }.
+// releaseTurn === null → "until freed" (Wraith); a number auto-releases at
+// endRound once state.turn reaches it (Wight applies turn+1 = one full turn).
+const PARALYZER_TYPES = new Set(['WIGHT', 'WRAITH']);
+const FREE_PARALYSIS_TYPES = new Set(['ELF', 'HERO', 'SUPER_HERO', 'WIZARD']);
+function unitFigureCount(u) { return u.kind === 'individual' ? 1 : u.count; }
+function paralyzedFigures(u) {
+  const b = u.conditions && u.conditions.paralyzed;
+  if (!b || !b.length) return 0;
+  return Math.min(unitFigureCount(u), b.reduce((s, x) => s + x.count, 0));
+}
+function activeFigures(u) { return Math.max(0, unitFigureCount(u) - paralyzedFigures(u)); }
+function isParalyzed(u) { return paralyzedFigures(u) > 0; }
+function isFullyParalyzed(u) { return isParalyzed(u) && activeFigures(u) === 0; }
+function addParalysis(u, count, source, releaseTurn) {
+  const room = activeFigures(u);
+  const n = Math.min(count, room);
+  if (n <= 0) return 0;
+  if (!u.conditions) u.conditions = {};
+  if (!u.conditions.paralyzed) u.conditions.paralyzed = [];
+  u.conditions.paralyzed.push({ count: n, source, releaseTurn });
+  return n;
+}
+function clearParalysis(u) { if (u.conditions) delete u.conditions.paralyzed; }
+// A friendly touch frees timed AND until-freed batches alike (p.33).
+function freeParalysis(u) { clearParalysis(u); }
+// Auto-release timed batches once their turn has fully elapsed.
+function releaseExpiredParalysis(u, turn) {
+  if (!u.conditions || !u.conditions.paralyzed) return;
+  u.conditions.paralyzed = u.conditions.paralyzed.filter(b => b.releaseTurn === null || turn < b.releaseTurn);
+  if (!u.conditions.paralyzed.length) delete u.conditions.paralyzed;
+}
+// After casualties, frozen figures can't outnumber the bodies left standing.
+function capParalysisToCount(u) {
+  if (!u.conditions || !u.conditions.paralyzed) return;
+  let cap = unitFigureCount(u);
+  for (const b of u.conditions.paralyzed) { const take = Math.min(b.count, cap); b.count = take; cap -= take; }
+  u.conditions.paralyzed = u.conditions.paralyzed.filter(b => b.count > 0);
+  if (!u.conditions.paralyzed.length) delete u.conditions.paralyzed;
+}
+// Free needs a friendly Elf/Hero-type/Wizard within ~1" edge-to-edge (p.33).
+function canFreeParalysis(u) {
+  return state.units.some(o => o !== u && !o.destroyed && o.side === u.side
+    && FREE_PARALYSIS_TYPES.has(o.type)
+    && edgeGapInches(o, u) <= 1 + 1e-6);
+}
+function paralysisReleaseLabel(u) {
+  const b = u.conditions && u.conditions.paralyzed;
+  if (!b || !b.length) return '';
+  if (b.some(x => x.releaseTurn === null)) return 'until freed';
+  const t = Math.max(...b.map(x => x.releaseTurn));
+  return `until turn ${t}`;
+}
+
 // Missile weapon ranges (p.11)
 const WEAPON_RANGES = {
   short_bow:15, horsebow:18, light_crossbow:18, longbow:21,
@@ -573,7 +630,7 @@ function resolveMassMelee({ attacker, defender, rng }) {
   const aPolearm = POLEARM_CLASSES.has(aT.cls) && attacker.polearm;
   if (aPolearm) aDPM += 1;
   if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
-  const aTotal = Math.floor(attacker.count * aDPM) + (attacker.bonusDice || 0);
+  const aTotal = Math.floor((attacker.activeCount ?? attacker.count) * aDPM) + (attacker.bonusDice || 0);
   const aKills = applyDieBonus(aRow.kills, aBonus ? 1 : 0);
   const aRoll = rollKills(aTotal, aKills, rng);
   result.attacker = {
@@ -594,7 +651,7 @@ function resolveMassMelee({ attacker, defender, rng }) {
     const dPolearm = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
     if (dPolearm) dDPM += 1;
     if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
-    const dTotal = Math.floor(defender.count * dDPM) + (defender.bonusDice || 0);
+    const dTotal = Math.floor((defender.activeCount ?? defender.count) * dDPM) + (defender.bonusDice || 0);
     const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng) : { dice:[], kills:0 };
     result.defender = {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
@@ -1159,6 +1216,12 @@ function inMeleeContact(a, b) {
   const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
   return dist(a, b) <= range + aMax + bMax;
 }
+// Edge-to-edge gap in inches (0 when footprints touch/overlap).
+function edgeGapInches(a, b) {
+  const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
+  const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
+  return pxToInches(Math.max(0, dist(a, b) - aMax - bMax));
+}
 
 function inMissileRange(firer, target) {
   if (!firer.weapon) return { ok:false, reason:'no weapon' };
@@ -1486,6 +1549,21 @@ function renderUnit(u) {
       })()
     : '';
 
+  const paralysisBadgeStr = isParalyzed(u)
+    ? (() => {
+        const n = paralyzedFigures(u);
+        const txt = u.kind === 'individual' ? 'PARALYZED' : `PARALYZED ${n}`;
+        const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#3b6ea8" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
     <g class="unit-group" data-id="${u.id}" style="cursor:grab" opacity="${groupOpacity}">
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
@@ -1503,6 +1581,7 @@ function renderUnit(u) {
       ${chargeBadgeStr}
       ${fatigueBadgeStr}
       ${statusBadgeStr}
+      ${paralysisBadgeStr}
     </g>
   `;
 }
@@ -1607,6 +1686,7 @@ function updateSidebar() {
         ? `<div class="stat"><span class="k">Status</span><span class="v">${u.count === 1 ? 'in play' : 'destroyed'}</span></div>`
         : `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>`) +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
+      (isParalyzed(u) ? `<div class="stat"><span class="k">Paralyzed</span><span class="v">${paralyzedFigures(u)}${isIndiv ? '' : ` / ${u.count}`} figure${paralyzedFigures(u)>1?'s':''} · ${paralysisReleaseLabel(u)}</span></div>` : '') +
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
@@ -1637,8 +1717,9 @@ function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
-  $('#btn-melee').disabled   = !(valid && inMeleeContact(a, d));
-  $('#btn-missile').disabled = !(valid && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
+  const canAct = valid && activeFigures(a) > 0;
+  $('#btn-melee').disabled   = !(canAct && inMeleeContact(a, d));
+  $('#btn-missile').disabled = !(canAct && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -1715,6 +1796,8 @@ function onUnitMouseDown(evt, unitId) {
   }
   state.selectedId = unitId;
   if (state.targetId === unitId) state.targetId = null;
+  // A fully paralyzed unit can be selected (to free it) but cannot be moved.
+  if (isFullyParalyzed(u)) { renderBoard(); return; }
   // Begin drag
   const pt = svgPoint(evt);
   state.dragging = {
@@ -1925,6 +2008,11 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  if (activeFigures(a) === 0) {
+    appendTurn(`Melee resolver — skipped`,
+      `<div class="step">${typeById(a.type).name} (${a.side}) is fully paralyzed — no figures can strike.</div>`);
+    return;
+  }
   // Dispatch by kind:
   //  · both mass → mass melee
   //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
@@ -2011,7 +2099,7 @@ function onResolveMelee() {
 
   // Build attacker/defender param objects for the engine
   const attackerParams = {
-    type: a.type, count: a.count,
+    type: a.type, count: a.count, activeCount: activeFigures(a),
     defendType: defendTypeForMass(a.type),
     polearm: !!a.polearm,
     impetus: !!a.charged,
@@ -2020,7 +2108,7 @@ function onResolveMelee() {
     fatigued: !!a.fatigued && state.settings.applyFatigue,
   };
   const defenderParams = {
-    type: d.type, count: d.count,
+    type: d.type, count: d.count, activeCount: activeFigures(d),
     defendType: defendTypeForMass(d.type),
     polearm: !!d.polearm,
     impetus: !!d.charged,
@@ -2129,6 +2217,8 @@ function onResolveMelee() {
   // Apply casualties
   applyCasualties(a, melee.attacker.casualties);
   applyCasualties(d, melee.defender.casualties);
+  capParalysisToCount(a);
+  capParalysisToCount(d);
 
   // Post-melee verdict → loser unit status. Surrender additionally removes
   // the unit from play (captured, per rules p.16) unless the
@@ -2366,6 +2456,11 @@ function onResolveMixed(a, d) {
     impetus: !!attacker.charged, attackingRear: edge === 'rear', fatigued: !!attacker.fatigued };
   const defenderParams = { type: typeById(defender.type).id, count: defender.count,
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
+  // Frozen figures don't swing: the individual contributes 0 dice if paralyzed;
+  // the mass contributes only its non-frozen figures.
+  const indActive = isParalyzed(ind) ? 0 : effFigures;
+  attackerParams.activeCount = aIsIndiv ? indActive : activeFigures(mass);
+  defenderParams.activeCount = aIsIndiv ? activeFigures(mass) : indActive;
   // The individual (proxy) attacks as `cls` and defends as `defCls`; Giants add
   // a die whenever they swing. Attach those to whichever slot the creature is in.
   const creatureParams = aIsIndiv ? attackerParams : defenderParams;
@@ -2430,6 +2525,13 @@ function onResolveMixed(a, d) {
     // a = mass, d = ind
     applyCasualties(mass, aCas);
     ind.hp = Math.max(0, ind.hp - dCas);
+  }
+  capParalysisToCount(mass);
+  // Wight/Ghoul touch: after this round's blows, it paralyzes figures it
+  // contacted for one complete turn (p.34). The figures already struck once.
+  if (ind.type === 'WIGHT' && ind.hp > 0 && !mass.destroyed) {
+    const n = addParalysis(mass, 2, 'wight', state.turn + 1);
+    if (n > 0) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name}'s touch paralyzes ${n} ${massT.name} figure${n>1?'s':''} for one complete turn (until turn ${state.turn + 1}).</small></div>`;
   }
   // Individual death
   if (ind.hp <= 0) {
@@ -2513,6 +2615,11 @@ function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
+  if (activeFigures(a) === 0) {
+    appendTurn(`Missile — skipped`,
+      `<div class="step">${typeById(a.type).name} (${a.side}) is fully paralyzed — no figures can fire.</div>`);
+    return;
+  }
   if (missileShotsRemaining(a) <= 0) {
     const aT = typeById(a.type), dT = typeById(d.type);
     const w = rangedWeaponById(a.weapon);
@@ -2542,7 +2649,7 @@ function onResolveMissile() {
   const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
-  let firingCount = Math.min(a.count, a.cols * 2);
+  let firingCount = Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = firingCount < a.count;
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
@@ -2726,7 +2833,7 @@ function onMassMissileAtIndiv(a, d) {
   const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
-  let firingCount = Math.min(a.count, a.cols * 2);
+  let firingCount = Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = firingCount < a.count;
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
@@ -2957,6 +3064,10 @@ function onUnitContextMenu(evt, unitId) {
     const left = 3 - (u.breathsUsed || 0);
     breatheBtn.textContent = left > 0 ? `Breathe fire (9″ cone · ${left} left)` : `Breathe fire — must rekindle`;
   }
+  // Paralysis: touch is offered to paralyzers (Wight/Wraith); free is offered to
+  // any unit currently holding paralyzed figures.
+  document.querySelector('#ctx-menu [data-act="paralyze-touch"]').hidden = !PARALYZER_TYPES.has(u.type);
+  document.querySelector('#ctx-menu [data-act="free-paralysis"]').hidden = !isParalyzed(u);
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -2985,6 +3096,7 @@ function onContextMenuAction(evt) {
     u.cover = 'none';
     u.breathsUsed = 0;
     u.lastFiredTurn = null;
+    if (u.conditions) delete u.conditions;
     if (u.maxHp) u.hp = u.maxHp;
     clearActed(u);
     if (u.kind !== 'individual') {
@@ -2995,6 +3107,26 @@ function onContextMenuAction(evt) {
     clearActed(u);
   } else if (act === 'reset-status') {
     u.status = 'ready';
+    clearParalysis(u);
+  } else if (act === 'paralyze-touch') {
+    const tgt = state.units.find(x => x.id === state.targetId);
+    if (!tgt || tgt.destroyed || tgt.side === u.side) {
+      appendTurn(`Paralyzing touch — no target`, `<div class="step">Shift-click an enemy unit first, then use ${typeById(u.type).name}'s touch.</div>`);
+    } else {
+      const releaseTurn = u.type === 'WIGHT' ? state.turn + 1 : null;
+      const n = addParalysis(tgt, 2, u.type.toLowerCase(), releaseTurn);
+      const when = releaseTurn === null ? 'until freed by a friendly Elf/Hero/Wizard' : `for one turn (until turn ${releaseTurn})`;
+      appendTurn(`Paralyzing touch · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`,
+        n > 0 ? `<div class="step">${n} figure${n>1?'s':''} paralyzed ${when}.</div>`
+              : `<div class="step">No free figures left to paralyze.</div>`);
+    }
+  } else if (act === 'free-paralysis') {
+    if (canFreeParalysis(u)) {
+      freeParalysis(u);
+      appendTurn(`Paralysis lifted · ${typeById(u.type).name} (${u.side})`, `<div class="step">A friendly Elf/Hero/Wizard within 1″ frees the paralyzed figures.</div>`);
+    } else {
+      appendTurn(`Cannot free paralysis`, `<div class="step">Need a friendly Elf, Hero-type, or Wizard within 1″ to free ${typeById(u.type).name} (${u.side}).</div>`);
+    }
   } else if (act === 'mark-fatigued') {
     u.fatigued = true;
   } else if (act === 'clear-fatigue') {
@@ -3100,6 +3232,7 @@ function endRound() {
   state.turn += 1;
   state.activeSide = 'A';
   for (const u of state.units) {
+    releaseExpiredParalysis(u, state.turn);
     if (state.settings.applyFatigue) {
       if (u.acted.moved) {
         u.moveStreak = (u.moveStreak || 0) + 1;
@@ -3321,6 +3454,22 @@ renderBoard();
   const elfVsGob = resolveMassMelee({ attacker:{ type:'ELF', count:10, bonusDice: elfMagicBonus('GOBLIN') }, defender:{ type:'GOBLIN', count:20, defendType:'LF' }, rng: always(6) });
   console.assert(elfVsGob.attacker.totalDice === 13, 'elf magic +3 vs goblins adds 3 dice (10 + 3)');
   console.assert(Math.floor(4 * 1.5) === 6 && Math.floor(5 * 1.5) === 7, 'hobbit sling: every two firing count three');
+
+  // Figure-level paralysis (Slice 7G).
+  const par = { kind:'mass', count:20 };
+  console.assert(activeFigures(par) === 20 && !isParalyzed(par), 'no conditions → all figures active');
+  addParalysis(par, 5, 'wight', 3);
+  console.assert(paralyzedFigures(par) === 5 && activeFigures(par) === 15 && !isFullyParalyzed(par), 'freeze 5 of 20 → 15 still fight');
+  addParalysis(par, 100, 'wraith', null);
+  console.assert(paralyzedFigures(par) === 20 && isFullyParalyzed(par), 'over-cap clamps to unit size; fully frozen');
+  par.count = 8; capParalysisToCount(par);
+  console.assert(paralyzedFigures(par) === 8, 'casualties → frozen can\'t exceed surviving bodies');
+  releaseExpiredParalysis(par, 3);
+  console.assert(paralyzedFigures(par) === 3, 'timed batch expires at its turn; until-freed remains');
+  freeParalysis(par);
+  console.assert(!isParalyzed(par), 'a friendly touch frees all paralysis');
+  const frozenMelee = resolveMassMelee({ attacker:{ type:'HF', count:10, activeCount:6 }, defender:{ type:'HF', count:10 }, rng: always(6) });
+  console.assert(frozenMelee.attacker.totalDice === 6 && frozenMelee.attacker.startCount === 10, 'activeCount drives offense dice; count stays the body pool');
 
   // Fantasy races core roster (Slice 7D).
   console.assert(typeById('ORC').cls === 'HF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, hobbit as LF');
