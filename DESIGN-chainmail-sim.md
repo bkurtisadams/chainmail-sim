@@ -191,3 +191,139 @@ Resolution:
 - The board's **inline self-test block** (the `(function tests(){…})()` IIFE at the end of the file) is the canonical test for board behavior. It runs on every page load and now covers the resolvers with a forced-dice RNG (`forDie(n)` makes `d6 → n`), not just geometry. Add a forced-dice assertion here whenever a resolver changes.
 - The `engine/`/`test/` tree is kept as a reference and for potential reuse in other projects, but is **not** required to mirror board-only features. If the engine is ever promoted to a shared library, re-port the board-only logic (fatigue, dragon breath) up into it and add module tests at that time.
 - Not chosen: a runtime ESM refactor (would break `file://`) or a build-time inliner (deferred; revisit only if a single source of truth becomes worth the infrastructure).
+
+---
+
+## Status & roadmap (2026-05-31, rev 2) — movement pillar shipped (8A–8F); fire/terrain next
+
+This section supersedes the forward-looking slice plan in §9 where they differ. The
+original Slice 0–4 (data, man-to-man, mass melee+morale, missile, fantasy) all landed,
+the board (Slice 5) became the product, and development then continued on a long
+combat-content track (slices numbered 6x / 7x, with a running `vMAJOR.MINOR.PATCH`
+stamp). The **movement pillar** then shipped as slices 8A–8F. **Current version: v0.10.5.**
+Jousting / catapult / wizards (old §9 slices 7–9) remain unbuilt.
+
+### What the sim *is* (identity)
+A **combat resolver + play-aid on a freeform SVG battlefield.** The combat math
+(melee, missile, morale, fantasy combat, creature abilities) is the strong, heavily
+tested core. The wargame *structure* around it now exists as the **movement pillar**:
+an optional move/counter-move phase sequence plus move-allowance / facing / charge
+accounting, all defaulting to **advisory** so the freeform play-aid still works.
+**Terrain** is the one structural pillar still deferred. You can still place and drag
+units freely; the sim resolves what happens when they fight — and now also tracks how
+far and when they move.
+
+### Implemented and working (v0.10.5)
+- **Mass melee** (Appendix A): flank/rear, impetus charge, pike/halberd, standing-horse,
+  wrap-around (round 2+), fatigue, cavalry-charge morale. Asymmetric attack/defend
+  classes via `defendType`; Giant bonus die via `bonusDice`.
+- **Mass missile** (p.11–12): front-two-ranks firing, cover, indirect (range −⅓, armor
+  bump), armor groups; rate-of-fire (once/turn, archers-that-held twice, crossbow/arquebus
+  every-other-turn); arc-of-fire (foot 45°, horse Parthian 180°+45°); thrown weapons.
+- **Man-to-man** melee (Appendix B top) with weapon-class blow order + parry; **individual
+  missile** (Appendix B bottom).
+- **Fantasy combat** (Appendix E) under/equal/over; **fantasy individuals** (13 types) with
+  FIGHTING_STRENGTH, attack/defend classes, missile/melee immunity, dragon breath
+  (9″ cone, 3 breaths + rekindle).
+- **Morale**: post-melee reaction bands, loss-morale (with fatigue), charge morale.
+- **Fantasy races** (8 mass types — orc/goblin/kobold/dwarf/gnome/elf/hobbit/sprite) with
+  Appendix-D classes (incl. asymmetric HF-atk/LF-def), move, armor, **size tiers**.
+- **Size model**: individuals' footprint scales with size (tiny→huge); mass figures render
+  scaled but frontage stays fixed (Chainmail ground scale). `sizeOf`/`sizeScale`/`SIZE_BY_TYPE`.
+- **Race specials**: sprite first-round melee immunity, hobbit ×1.5 sling, dwarf/gnome
+  half-kills vs troll/ogre/giant, elf magic-weapon bonus dice (+3 goblin/+2 orc/+1 normal).
+- **Status/touch system**: **figure-level paralysis** (conditions layer; `activeCount` vs
+  body count so frozen figures don't swing but stay killable) — Wight melee-touch (1 turn,
+  auto), Wraith touch (until freed, manual), free via friendly Elf/Hero/Wizard ≤1″, badge +
+  pane + button/resolver/drag guards, endRound auto-release, Restore clears. **Balrog
+  immolation** keyed off footprint geometry (`figuresWithinFootprint`, no arbitrary count),
+  manual touch action.
+- **Movement pillar (8A–8F, p.9–11/16)** — optional structure, advisory by default:
+  - *Per-turn movement accounting* (8A): `movedThisTurn` accumulates drag/nudge distance vs
+    `MOVE_ALLOWANCE`; drag ruler + pane show used/remaining; `enforceMovement` clamps drags.
+  - *Facing-change costs* (8B, p.11): oblique ¼ / face ½ / about-face 1 move, ×2 poorly-trained
+    (PE/LV), ×½ Swiss/horse, derived from net change vs `turnStartFacing`; shares the budget.
+  - *Charge movement* (8C, p.16): `CHARGE_ALLOWANCE` (foot +3, horse +6, fantasy per App. D)
+    becomes the budget while charged; cavalry held to ≤45° of facing; `chargedLastTurn` bars a
+    back-to-back charge. Facing cost stays measured on the *normal* move.
+  - *Move/counter-move phases* (8D, p.9): six-phase tracker (initiative → first move → counter
+    move → artillery → missile → melee) with d6 initiative + winner-elects; `enforcePhases`
+    gates movement/combat to the active phase. `activeSide` now derived (vestigial).
+  - *Unit roster* (8E): per-side list above the log with M/F/X chips + move-left, click-to-
+    select/centre, dim-when-spent, to-move highlight under enforcement.
+  - *Snap-to-grid* (8F): optional 1″-grid snap on drag/nudge/spawn for clean move distances.
+
+### Conventions (keep doing these)
+- Single file `demos/chainmail-board.html`; everything inlined; must run from `file://`.
+- Bump **four** version stamps together every slice: HTML comment (line 2), `<title>`
+  (line ~6), `.version-tag` span, `const SIM_VERSION` — plus the `.sub` subtitle text.
+- Each slice: `str_replace` on targeted strings → re-run the brace-balance + `new Function`
+  syntax check → add forced-dice / pure-helper inline asserts → `present_files`. The inline
+  `tests()` IIFE (forced-dice `always(n)`/`seq([...])`) is the canonical test; add an
+  assertion whenever a resolver changes. (Asserts now ~147.)
+- Do **not** use `sed` to write the line-2 comment if it contains `&` (sed eats it) — use a
+  `python3` line rewrite.
+- The modular `engine/`+`data/`+`test/` tree is a **frozen reference only** (inline-first
+  decision, see prior section). The board is the source of truth.
+
+### Decisions locked recently (so a new chat doesn't relitigate)
+- **Size**: individual footprint = size; mass frontage is fixed (visual-only scaling).
+- **Paralysis**: figure-level (per-figure freeze count), not unit-level.
+- **Immolation**: footprint geometry decides the count (no fixed number); manual action,
+  not auto-in-melee (avoids stacking on the Balrog's normal damage).
+- **Daylight/see-in-dark**: carved OUT of race specials into a future *lighting* mini-system
+  (needs a global day/night state + UI; see-in-dark is moot until normal troops take night
+  penalties).
+- **Elf magic weapons**: all elves assumed magic-armed for now; per-unit toggle waits for the
+  magical-weapons feature. Elf-vs-fantastic Appendix-E scores deferred there too.
+
+### Movement pillar — SHIPPED (8A–8F)
+Built across slices 8A–8F (see *Implemented* above for the per-slice detail). Rulebook
+reference was **p.9–11** (turn sequence, movement, facing) + charge **p.16**. Everything
+defaults to advisory so the freeform play-aid is unchanged; `enforceMovement` and
+`enforcePhases` opt into hard rules.
+
+**Deliberately NOT built within the pillar** (so a new chat doesn't assume these exist):
+- **Half-move pause point** — no mid-move stop. This is the missing prerequisite for
+  split-move-and-fire and pass-through fire; build it before either.
+- **Road bonus / uphill ½ / change-in-command** movement modifiers — only base move and
+  charge allowance are wired.
+- **Auto contact detection** — charge "only when contact expected" and the victorious-charger
+  follow-through stay advisory/deferred; Wraith/Balrog touch is still manual.
+- **Simultaneous-movement system** (p.9 alternative) — only move/counter-move is implemented.
+
+### NEXT (now unblocked by the pillar)
+Roughly smallest-first; the first three are the direct payoff the pillar was meant to enable.
+- **Moved-over-½ → beat-foe's-die RoF clause** — fully unblocked now that `movedThisTurn`
+  exists; the last missing rate-of-fire rule. Smallest tight slice.
+- **Half-move pause point** — the enabling sub-feature for the two below (a mid-move stop in
+  the move phase where fire can resolve).
+- **Split-move-and-fire** (Elf ability C) + **pass-through fire** — once the half-move pause
+  (and, for pass-through, range/contact detection) exist.
+- **Contact detection during movement** → **auto move-touch** for Wraith paralysis and Balrog
+  immolation (currently manual).
+- **Terrain** — the big structural prize; movement costs are its foundation (hill slows ½ +
+  no charge, woods/marsh, rough no-charge, river/stream crossings — p.9, plus the card-draw
+  terrain setup p.10).
+
+### Deferred backlog (after / alongside the NEXT items)
+Lighting (daylight penalty + see-in-dark); magical weapons (elf-vs-fantastic Appendix-E
+scores, the path for normal/Hero figures to hurt immune creatures, hero/fantastic flame
+saves for immolation); Wizard spells (p.30–33); elemental subtypes (Air/Earth/Fire/Water);
+remaining per-race specials (orc/goblin obedience die, dwarf anti-goblin compulsion,
+terrain-based invisibility for hobbits/elves); jousting (Appendix C); catapult/cannon
+geometry (p.12–14); sieges; point-value army builder (p.27).
+
+### Files to include when starting the next chat
+1. **`demos/chainmail-board.html`** — the working product (v0.10.5). THE file to edit.
+   Upload the current local copy (`C:\chainmail-sim\demos\chainmail-board.html`); if unsure
+   it's current, re-export from the running build first so a stale upload isn't clobbered.
+2. **`Chainmail_3rd_Ed.pdf`** — the rulebook, for RAW reference. Terrain + turn sequence are
+   **p.9–10**, rate-of-fire **p.11**. (The assistant extracts text with `pdftotext -layout`.)
+3. **`proj/docs/DESIGN-chainmail-sim.md`** — this design doc (you're reading it).
+4. *(Optional)* the full project zip — only needed if you want the frozen `engine/`/`test/`
+   reference; the board is self-contained, so it's not required to make progress.
+
+Opening ask for the next chat: *"The movement pillar (8A–8F) shipped. Pick up the now-unblocked
+work — start tight with the moved-over-½ rate-of-fire clause, or begin the terrain pillar — per
+the design doc."*
