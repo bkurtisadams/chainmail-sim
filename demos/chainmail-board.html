@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.9.36 · Slice 7D: fantasy races core roster (orc/goblin/kobold/dwarf/gnome/elf/hobbit/sprite) as mass troops with Appendix D attack/defend classes, move, armor, size; specials deferred -->
+<!-- chainmail-board.html · v0.9.38 · Slice 7F: race specials — sprite first-round melee immunity, hobbit x1.5 sling accuracy, dwarf/gnome half-kills vs troll/ogre/giant, elf magic-weapon bonus dice (+3 goblin/+2 orc/+1 normal); daylight, invisibility, obedience-die deferred -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.9.36</title>
+<title>Chainmail — Battlefield · v0.9.38</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -146,8 +146,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Slice 7D · fantasy races</div>
-    <span class="version-tag">v0.9.36</span>
+    <div class="sub">Chainmail HTML Sim · Slice 7F · race specials</div>
+    <span class="version-tag">v0.9.38</span>
   </div>
 
   <div class="toolbar">
@@ -310,7 +310,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.9.36';
+const SIM_VERSION = '0.9.38';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -360,6 +360,21 @@ const TYPES = Object.freeze([
 const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t => t.id === id);
 // Asymmetric defend class for a mass type (Appendix D), if it differs from cls.
 const defendTypeForMass = (id) => typeById(id)?.defendCls;
+
+// Elves with magical weapons add dice in normal combat (Appendix D): +3 vs
+// goblins/kobolds, +2 vs orcs, +1 vs any other normal troops. Their Appendix-E
+// scores vs fantastic individuals are deferred (0 here). For now every Elf unit
+// is treated as magic-armed; a per-unit toggle arrives with the magical-weapons
+// feature.
+function elfMagicBonus(oppType) {
+  if (oppType === 'GOBLIN' || oppType === 'KOBOLD') return 3;
+  if (oppType === 'ORC') return 2;
+  if (FANTASTIC_TYPES.find(t => t.id === oppType)) return 0; // Appendix E scores deferred
+  return 1;
+}
+// Trolls/Ogres/Giants find Dwarves & Gnomes hard to catch — count only half the
+// normal kills in either direction when they fight (Appendix D).
+const DWARF_HALFKILL_VS = new Set(['TROLL', 'OGRE', 'GIANT']);
 
 const COMBAT = Object.freeze({
   LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
@@ -1093,9 +1108,13 @@ function unitBounds(u) {
   const pip = 12;
   const gap = u.spacing === 'close' ? 12 : 36;
   const pad = 4;
+  // Drawn figure size scales with creature size (visual only). The cell/frontage
+  // stays a fixed 1"/2" per figure per Chainmail's ground scale, so formation
+  // footprint, contact, and missile range are unchanged. Min 3px to stay visible.
+  const fig = Math.max(3, Math.round(pip * sizeScale(u.type)));
   const w = u.cols * pip + (u.cols - 1) * gap + 2 * pad;
   const h = u.rows * pip + (u.rows - 1) * gap + 2 * pad;
-  return { w, h, pip, gap, pad };
+  return { w, h, pip, gap, pad, fig };
 }
 
 // Which edge of `defender` is `attacker` hitting, based on geometry.
@@ -1325,7 +1344,7 @@ function statusVisual(status) {
 function renderUnit(u) {
   if (u.destroyed) return '';
   const b = unitBounds(u);
-  const { w, h, pip, gap, pad } = b;
+  const { w, h, pip, gap, pad, fig } = b;
   const sideC  = u.side === 'A' ? 'var(--side-a)'   : 'var(--side-b)';
   const sideD  = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   const sideL  = u.side === 'A' ? 'var(--side-a-l)' : 'var(--side-b-l)';
@@ -1346,12 +1365,14 @@ function renderUnit(u) {
         if (placed >= u.count) break;
         const px = c * (pip + gap) + pad - w/2;
         const py = r * (pip + gap) + pad - h/2;
+        // Center the (possibly smaller) drawn figure within its fixed cell.
+        const off = (pip - fig) / 2;
         // Front rank is the dark anchor (it fires and leads); rear ranks use a
         // light tint so depth reads at a glance. Hedgehog has no single front —
         // every face defends, so all pips stay dark. The dark stroke keeps the
         // side identity legible even on the light rear pips.
         const fill = u.hedgehog ? sideD : (r === 0 ? sideD : sideL);
-        pips += `<rect x="${px}" y="${py}" width="${pip}" height="${pip}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.7"/>`;
+        pips += `<rect x="${px + off}" y="${py + off}" width="${fig}" height="${fig}" rx="1" fill="${fill}" stroke="${sideD}" stroke-width="0.7"/>`;
         placed++;
       }
     }
@@ -2006,6 +2027,11 @@ function onResolveMelee() {
     standingHorseFirstRound: false,
     fatigued: !!d.fatigued && state.settings.applyFatigue,
   };
+  // Magic-armed Elves add dice keyed to the opponent (Appendix D).
+  const aElfBonus = a.type === 'ELF' ? elfMagicBonus(d.type) : 0;
+  const dElfBonus = d.type === 'ELF' ? elfMagicBonus(a.type) : 0;
+  if (aElfBonus) attackerParams.bonusDice = (attackerParams.bonusDice || 0) + aElfBonus;
+  if (dElfBonus) defenderParams.bonusDice = (defenderParams.bonusDice || 0) + dElfBonus;
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   const aT = typeById(a.type), dT = typeById(d.type);
@@ -2016,10 +2042,12 @@ function onResolveMelee() {
   if (melee.attacker.impetusApplied)  aMods.push('impetus +1/man');
   if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
+  if (aElfBonus) aMods.push(`magic weapons +${aElfBonus} dice vs ${dT.name}`);
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
   if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
   if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
+  if (dElfBonus) dMods.push(`magic weapons +${dElfBonus} dice vs ${aT.name}`);
 
   html += `<div class="step"><b style="color:var(--side-a-d)">A · ${aT.name} × ${a.count}</b> attacks ${edge.toUpperCase()} → ` +
           `${melee.attacker.totalDice} dice (${melee.attacker.dicePerMan.toFixed(2)}/man), kills on ${melee.attacker.killScores.join(',')} → ` +
@@ -2058,7 +2086,16 @@ function onResolveMelee() {
     }
   }
 
+  // Sprites attacking suffer no casualties in the first round of melee (surprise
+  // — they're invisible until the defenders spot the air distortions). Applied
+  // after wrap-around so it covers every source of return damage this round.
+  let spriteNote = '';
+  if (a.type === 'SPRITE' && round === 1) {
+    if (melee.attacker.casualties > 0) spriteNote = `Sprites attacking — first-round surprise negates all ${melee.attacker.casualties} return casualties (Appendix D).`;
+    melee.attacker.casualties = 0;
+  }
   html += `<div class="step">casualties — A: <b>${melee.attacker.casualties}</b> · B: <b>${melee.defender.casualties}</b></div>`;
+  if (spriteNote) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${spriteNote}</small></div>`;
 
   // Post-melee morale (fatigued unit drops -1 morale rating and -1 on its d6, p.10)
   const aFatigued = !!a.fatigued && state.settings.applyFatigue;
@@ -2344,6 +2381,14 @@ function onResolveMixed(a, d) {
   let aCas = melee.attacker.casualties;
   let dCas = melee.defender.casualties;
   if (indImmune) { if (aIsIndiv) aCas = 0; else dCas = 0; }
+  // Dwarves & Gnomes are hard for Trolls/Ogres/Giants to catch — half kills both
+  // ways (Appendix D). The dwarf side is always the mass here.
+  let halfKillNote = '';
+  if ((mass.type === 'DWARF' || mass.type === 'GNOME') && DWARF_HALFKILL_VS.has(ind.type)) {
+    aCas = Math.floor(aCas / 2);
+    dCas = Math.floor(dCas / 2);
+    halfKillNote = `${massT.name} are too small for ${indT.name} to catch cleanly — kills halved both ways (Appendix D).`;
+  }
 
   // Labels: each side gets a "name × count" or "name (as Nx{class}, hp X/Y)" prefix
   const attLabel = aIsIndiv
@@ -2373,6 +2418,7 @@ function onResolveMixed(a, d) {
           (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
   html += `<div class="step">casualties — A: <b>${aCas}</b> · B: <b>${dCas}</b></div>`;
   if (indImmune) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name} is impervious to normal weapons — the mass inflicts no casualties on it.</small></div>`;
+  if (halfKillNote) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${halfKillNote}</small></div>`;
 
   // Route casualties: attacker casualties go to a; defender casualties go to d.
   // The individual side uses hp; the mass side uses count (applyCasualties).
@@ -2496,11 +2542,15 @@ function onResolveMissile() {
   const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
-  const firingCount = Math.min(a.count, a.cols * 2);
+  let firingCount = Math.min(a.count, a.cols * 2);
   const rankCapped = firingCount < a.count;
+  const firingFront = firingCount;
+  // Hobbit slingers count three for every two firing (Appendix D accuracy).
+  if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
   const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng });
 
-  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
+  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
+  const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
   const tags = [];
   if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
@@ -2508,7 +2558,7 @@ function onResolveMissile() {
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} (${dT.cls}) · ` +
-             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}${rankNote}${tagNote}</div>`;
+             `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}${rankNote}${hobbitNote}${tagNote}</div>`;
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
@@ -2676,11 +2726,15 @@ function onMassMissileAtIndiv(a, d) {
   const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const cover = indirect ? false : coverHalves(d.cover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
-  const firingCount = Math.min(a.count, a.cols * 2);
+  let firingCount = Math.min(a.count, a.cols * 2);
   const rankCapped = firingCount < a.count;
+  const firingFront = firingCount;
+  // Hobbit slingers count three for every two firing (Appendix D accuracy).
+  if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
   const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng: state.rng });
 
-  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingCount} firing (front 2 ranks of ${a.count})</small>` : '';
+  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
+  const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
   const tags = [];
   if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
@@ -2690,7 +2744,7 @@ function onMassMissileAtIndiv(a, d) {
   const hpBefore = d.hp;
   let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
              `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}` +
-             ` · hp ${hpBefore}/${d.maxHp}${rankNote}${tagNote}</div>`;
+             ` · hp ${hpBefore}/${d.maxHp}${rankNote}${hobbitNote}${tagNote}</div>`;
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
     appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
@@ -3249,6 +3303,24 @@ renderBoard();
   console.assert(unitBounds({ kind:'individual', type:'HERO' }).pip === 20, 'man footprint unchanged (pip 20)');
   console.assert(unitBounds({ kind:'individual', type:'DRAGON' }).pip > unitBounds({ kind:'individual', type:'HERO' }).pip, 'huge footprint larger than man');
   console.assert(unitBounds({ kind:'individual', type:'NOTATYPE' }).pip === 20, 'unknown type defaults to man-size');
+
+  // Mass-size rendering (Slice 7E): drawn figure scales, footprint does not.
+  const mHF = unitBounds({ kind:'mass', type:'HF', cols:2, rows:2, spacing:'close' });
+  const mGob = unitBounds({ kind:'mass', type:'GOBLIN', cols:2, rows:2, spacing:'close' });
+  const mHob = unitBounds({ kind:'mass', type:'HOBBIT', cols:2, rows:2, spacing:'close' });
+  console.assert(mHF.fig === 12, 'man-sized mass figure drawn at full 12');
+  console.assert(mGob.fig < 12 && mHob.fig < mGob.fig, 'goblin smaller than man, hobbit smaller than goblin');
+  console.assert(mGob.w === mHF.w && mGob.h === mHF.h, 'race footprint/frontage unchanged (fixed ground scale)');
+
+  // Race specials (Slice 7F).
+  console.assert(elfMagicBonus('GOBLIN') === 3 && elfMagicBonus('KOBOLD') === 3, 'elf +3 dice vs goblins/kobolds');
+  console.assert(elfMagicBonus('ORC') === 2, 'elf +2 dice vs orcs');
+  console.assert(elfMagicBonus('HF') === 1 && elfMagicBonus('DWARF') === 1, 'elf +1 die vs normal troops/other races');
+  console.assert(elfMagicBonus('GIANT') === 0 && elfMagicBonus('TROLL') === 0, 'elf vs fantastics → Appendix E scores (deferred → 0)');
+  console.assert(DWARF_HALFKILL_VS.has('TROLL') && DWARF_HALFKILL_VS.has('GIANT') && !DWARF_HALFKILL_VS.has('HF'), 'dwarf half-kills vs trolls/giants only');
+  const elfVsGob = resolveMassMelee({ attacker:{ type:'ELF', count:10, bonusDice: elfMagicBonus('GOBLIN') }, defender:{ type:'GOBLIN', count:20, defendType:'LF' }, rng: always(6) });
+  console.assert(elfVsGob.attacker.totalDice === 13, 'elf magic +3 vs goblins adds 3 dice (10 + 3)');
+  console.assert(Math.floor(4 * 1.5) === 6 && Math.floor(5 * 1.5) === 7, 'hobbit sling: every two firing count three');
 
   // Fantasy races core roster (Slice 7D).
   console.assert(typeById('ORC').cls === 'HF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, hobbit as LF');
