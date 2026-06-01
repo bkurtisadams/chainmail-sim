@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.13 · Melee-phase hand-off + activeSide cleanup. Hand-off: in the melee phase the lit primary button tracks what is LEFT to do — meleesPending() (any opposing pair in contact not yet both fought this turn) keeps "Resolve melee" lit and the hint reads "resolve all melees"; once none remain, the gold hands off to "End round" with hint "Melees resolved — end the turn". btn-melee click now refreshes the guidance so the hand-off is live. Cleanup: removed the vestigial state.activeSide (written on init/reset/snapshot, never read) from all four sites. -->
+<!-- chainmail-board.html · v0.10.14 · Half-move pause point (p.9 / p.12): the foundation for split-move-and-fire and pass-through fire. A unit at/within its half-move (½ its NORMAL allowance) with movement remaining can "Pause at half-move" (context menu) — it is then held at the checkpoint (drag and nudge blocked, rotation allowed to aim) and shows a ½ PAUSE badge + a half-move readout in the move pane; "Resume move" takes the second leg. New per-unit halfMovePaused state, canPauseAtHalf() eligibility, atHalfMovePause() predicate for the next slice; pause/resume are undoable via the ctx snapshot; reset on endRound. Firing-from-pause and pass-through fire are the next slice. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.13</title>
+<title>Chainmail — Battlefield · v0.10.14</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -184,8 +184,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Melee hand-off</div>
-    <span class="version-tag">v0.10.13</span>
+    <div class="sub">Chainmail HTML Sim · Half-move pause</div>
+    <span class="version-tag">v0.10.14</span>
   </div>
 
   <div class="toolbar">
@@ -288,6 +288,8 @@
   <button data-act="reset-status">Reset status (set to ready)</button>
   <button data-act="declare-charge">Declare charge (+1 die/man in melee)</button>
   <button data-act="cancel-charge">Cancel charge</button>
+  <button data-act="pause-half">Pause at half-move</button>
+  <button data-act="resume-move">Resume move (take 2nd leg)</button>
   <button data-act="toggle-indirect">Indirect fire</button>
   <button data-act="cycle-cover">Cover</button>
   <button data-act="breathe">Breathe fire (9″ cone)</button>
@@ -377,7 +379,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.13';
+const SIM_VERSION = '0.10.14';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1851,6 +1853,19 @@ function renderUnit(u) {
           </g>`;
       })()
     : '';
+  const halfPauseBadgeStr = u.halfMovePaused
+    ? (() => {
+        const txt = '½ PAUSE';
+        const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#46707d" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${txt}</text>
+          </g>`;
+      })()
+    : '';
   const statusBadgeStr = sv.text
     ? (() => {
         const tw = sv.text.length * 6.5 + 14;
@@ -1895,6 +1910,7 @@ function renderUnit(u) {
       </text>
       ${chargeBadgeStr}
       ${fatigueBadgeStr}
+      ${halfPauseBadgeStr}
       ${statusBadgeStr}
       ${paralysisBadgeStr}
     </g>
@@ -2041,7 +2057,8 @@ function updateSidebar() {
         : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
-      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
+      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″ · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
+      (u.halfMovePaused ? `<div class="stat"><span class="k">Half-move</span><span class="v" style="color:#46707d">PAUSED — resume to take 2nd leg</span></div>` : '') +
       (turnedDeg > 0.5 ? `<div class="stat"><span class="k">Turned</span><span class="v">${turnedDeg.toFixed(0)}° · ${facingTierLabel(u)} · ${faceCostIn.toFixed(1)}″</span></div>` : '') +
       (isIndiv
         ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
@@ -2151,6 +2168,8 @@ function onUnitMouseDown(evt, unitId) {
   if (state.targetId === unitId) state.targetId = null;
   // A fully paralyzed unit can be selected (to free it) but cannot be moved.
   if (isFullyParalyzed(u)) { renderBoard(); return; }
+  // Held at the half-move checkpoint — select (to fire/resume via menu) but don't drag.
+  if (u.halfMovePaused) { renderBoard(); return; }
   // Slice 8D: when phases are enforced, only the active mover's side may move now.
   if (!canSideMoveNow(u.side)) { renderBoard(); return; }
   // Begin drag
@@ -2375,11 +2394,25 @@ function syncUndoButtons() {
   if (rb) rb.disabled = state.redoStack.length === 0;
 }
 
+// Half-move pause point (p.9 / p.12). The half-move line is half the unit's
+// NORMAL allowance. A unit may pause there to fire/pass-through (next slice) and
+// complete its move afterward; while paused it is held at the checkpoint. This
+// slice builds the pause state, eligibility, and the movement hold.
+const halfMoveIn = (u) => baseMoveAllowanceOf(u) / 2;
+const atHalfMovePause = (u) => !!u.halfMovePaused;
+function canPauseAtHalf(u) {
+  if (u.halfMovePaused || u.destroyed) return false;
+  if (!canSideMoveNow(u.side)) return false;            // advisory: always true; enforce: this side's move phase
+  const spent = u.movedThisTurn || 0;
+  return spent <= halfMoveIn(u) + 1e-9 && spent < moveAllowanceOf(u) - 1e-9;
+}
+
 // Slice 8A: arrow-key nudge that respects the move-allowance accounting. In
 // hard-enforce mode a nudge that would exceed the remaining allowance is blocked
 // (returns false); otherwise the step distance is added to movedThisTurn.
 function nudgeUnit(u, dxPx, dyPx) {
   if (!canSideMoveNow(u.side)) return false;   // Slice 8D phase gate
+  if (u.halfMovePaused) return false;          // held at the half-move checkpoint; resume first
   const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
   if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
@@ -3695,6 +3728,10 @@ function onUnitContextMenu(evt, unitId) {
   document.querySelector('#ctx-menu [data-act="paralyze-touch"]').hidden = !PARALYZER_TYPES.has(u.type);
   document.querySelector('#ctx-menu [data-act="free-paralysis"]').hidden = !isParalyzed(u);
   document.querySelector('#ctx-menu [data-act="immolate"]').hidden = u.type !== 'BALROG';
+  // Half-move pause: offer "pause" only at/within the half-move with move left,
+  // "resume" only while paused.
+  document.querySelector('#ctx-menu [data-act="pause-half"]').hidden = !canPauseAtHalf(u);
+  document.querySelector('#ctx-menu [data-act="resume-move"]').hidden = !u.halfMovePaused;
   const m = $('#ctx-menu');
   m.style.left = evt.clientX + 'px';
   m.style.top  = evt.clientY + 'px';
@@ -3789,6 +3826,10 @@ function onContextMenuAction(evt) {
     u.charged = true;
   } else if (act === 'cancel-charge') {
     u.charged = false;
+  } else if (act === 'pause-half') {
+    u.halfMovePaused = true;
+  } else if (act === 'resume-move') {
+    u.halfMovePaused = false;
   } else if (act === 'toggle-indirect') {
     u.indirect = !u.indirect;
   } else if (act === 'cycle-cover') {
@@ -4033,6 +4074,7 @@ function endRound() {
     u.chargedLastTurn = !!u.charged;   // Slice 8C: this turn's charge bars a fresh charge next turn
     u.charged = false;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
+    u.halfMovePaused = false;   // checkpoints reset with the new move
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
@@ -4276,6 +4318,15 @@ renderBoard();
     state.phaseIdx = 1;
     console.assert(primaryActionId() === 'btn-end-side' && /Side A moves/.test(phaseHint()), 'move phase → advance is lit, hint names the mover');
     state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; state.units = _u; }
+
+  // Half-move pause point: half line, eligibility, predicate, and movement hold.
+  console.assert(Math.abs(halfMoveIn({ type:'LF' }) - 6) < 1e-9, 'half-move of LF (12″) is 6″');
+  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:4 }) === true, 'within ½ with move left → may pause');
+  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:9 }) === false, 'past ½ → may not pause');
+  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:12 }) === false, 'no move left → may not pause');
+  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:3, halfMovePaused:true }) === false, 'already paused → not offered again');
+  console.assert(atHalfMovePause({ halfMovePaused:true }) === true && atHalfMovePause({}) === false, 'atHalfMovePause reflects the flag');
+  console.assert(nudgeUnit({ type:'LF', side:'A', halfMovePaused:true, acted:{} }, 24, 0) === false, 'a unit paused at half-move cannot be nudged');
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
