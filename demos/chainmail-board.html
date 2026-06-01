@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.20 · Pass-through fire (p.12). Stationary missile troops may now loose at an enemy caught at its half-move pause — the reciprocal of the split-move firing pause. New canPassThroughFire(firer,target): missile-armed, un-charged, un-moved shooter vs an enemy that is paused at half-move and belongs to the side actually moving this phase. updateButtons enables the missile button during a move phase for that case (range/arc/shots still gate it) and the button title distinguishes pass-through vs split-move-fire. Resolution reuses onResolveMissile unchanged — a stationary shooter trips no move-gate, and markFired leaves a held archer its 2nd shot for the missile phase, so pass-through + missile-phase = the fire-twice-if-it-did-not-move rule for free. Trigger scoped to the modeled half-move pause; charge-triggered pass-through waits for contact detection. -->
+<!-- chainmail-board.html · v0.10.22 · Charge contact detection (p.16). New reusable canReachContact(mover,target,maxIn) — can the mover close to melee contact within maxIn inches (already touching, or edge-gap within reach; enemy, live targets only). chargeContactExpected(mover) builds on it: a charge is permitted only when melee contact with an enemy is expected this turn — some enemy reachable within the charge allowance, and for cavalry within 45° of facing (the straight-line charge). declare-charge now refuses under enforceMovement when no contact is expected, logging the charge allowance and (for cavalry) the 45° line, citing p.16; advisory mode stays freeform. canReachContact is the foundation the auto move-touch slice (Wraith paralysis / Balrog immolation, currently manual) will consume next; victorious-charger follow-through still deferred. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.20</title>
+<title>Chainmail — Battlefield · v0.10.22</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Pass-through fire</div>
-    <span class="version-tag">v0.10.20</span>
+    <div class="sub">Chainmail HTML Sim · Charge contact detection</div>
+    <span class="version-tag">v0.10.22</span>
   </div>
 
   <div class="toolbar">
@@ -389,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.20';
+const SIM_VERSION = '0.10.22';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1453,6 +1453,29 @@ function edgeGapInches(a, b) {
   const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
   const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
   return pxToInches(Math.max(0, dist(a, b) - aMax - bMax));
+}
+// Contact reach (p.16 charge "contact expected"): can `mover` close to melee
+// contact with `target` by advancing up to `maxIn` inches? True if already
+// touching, else if the edge-to-edge gap is within that distance. Direction-
+// agnostic — callers add the facing/arc constraint the rules require (e.g. the
+// cavalry straight-line charge). Reused later for auto move-touch.
+function canReachContact(mover, target, maxIn) {
+  if (!mover || !target || target.destroyed || mover.side === target.side) return false;
+  if (inMeleeContact(mover, target)) return true;
+  return edgeGapInches(mover, target) <= maxIn + 1e-9;
+}
+// A charge is permitted only when melee contact with an enemy is expected during
+// the turn (p.16): some enemy must be reachable into contact within the charge
+// allowance. Cavalry charges run in a relatively straight line (≤45° curve), so
+// a mounted charger's target must also lie within 45° of facing; foot is
+// unconstrained in direction.
+function chargeContactExpected(mover) {
+  const reach = chargeAllowanceOf(mover);
+  const cav = isMountedType(mover.type) || !!mover.mounted;
+  return state.units.some(t =>
+    t.side !== mover.side && !t.destroyed &&
+    canReachContact(mover, t, reach) &&
+    (!cav || Math.abs(bearingTo(mover, t)) <= 45 + 1e-9));
 }
 // Count how many of target's figures fall within source's footprint (Slice 7H,
 // Balrog immolation). The footprint is a circle of source's half-extent; a
@@ -3290,6 +3313,16 @@ function overHalfMoveFire(a, d, rng) {
   return { moved: a.movedThisTurn || 0, half, fireDie, foeDie, beat: fireDie > foeDie };
 }
 
+// Side-accurate missile log title. Earlier cards hardcoded the shooter as "A"
+// and the target as "B" regardless of side; this reads the units' real sides,
+// and a stationary-shooter-at-a-paused-foe shot is titled "Pass-through" (p.12).
+// (Melee / man-to-man / fantasy / charge-morale cards still carry the old A/B
+// role labels — a parallel cleanup for a later slice.)
+function missileTitle(a, d, suffix = '') {
+  const verb = canPassThroughFire(a, d) ? 'Pass-through' : 'Missile';
+  return `${verb} · ${typeById(a.type).name} (${a.side}) → ${typeById(d.type).name} (${d.side})${suffix}`;
+}
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3304,15 +3337,15 @@ function onResolveMissile() {
     const aT = typeById(a.type), dT = typeById(d.type);
     const w = rangedWeaponById(a.weapon);
     const why = (w && w.halfRoF) ? 'reloading — fires every other turn' : 'already fired this turn';
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
-      `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${why}</div>`);
+    appendTurn(missileTitle(a, d),
+      `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${why}</div>`);
     return;
   }
   if (!inFiringArc(a, d)) {
     const aT = typeById(a.type), dT = typeById(d.type);
     const arcTxt = isHorseman(a) ? '180° left / 45° right' : '45° to either side';
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
-      `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">target outside the firing arc (${arcTxt}) — rotate to bear</div>`);
+    appendTurn(missileTitle(a, d),
+      `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">target outside the firing arc (${arcTxt}) — rotate to bear</div>`);
     return;
   }
   // Moved-over-½ fire gate (p.11–12). Emitted as its own log card so the
@@ -3324,16 +3357,16 @@ function onResolveMissile() {
     const gA = typeById(a.type), gD = typeById(d.type);
     const roll = `moved ${gate.moved.toFixed(1)}″ > ½ of ${(gate.half * 2).toFixed(0)}″ — opposed d6: shooter ${gate.fireDie} vs foe ${gate.foeDie}`;
     if (gate.beat) {
-      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+      appendTurn(`Move-gate · ${gA.name} (${a.side}) → ${gD.name} (${d.side})`,
         `<div class="step">${roll}</div><div class="verdict v-stable">beats the foe's die — may loose</div>`);
     } else if (state.settings.enforceMovement) {
-      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+      appendTurn(`Move-gate · ${gA.name} (${a.side}) → ${gD.name} (${d.side})`,
         `<div class="step">${roll}</div><div class="verdict v-noeffect">fails to beat the foe's die — no shot this turn</div>`);
       markFired(a);
       renderBoard();
       return;
     } else {
-      appendTurn(`Move-gate · ${gA.name} (A) → ${gD.name} (B)`,
+      appendTurn(`Move-gate · ${gA.name} (${a.side}) → ${gD.name} (${d.side})`,
         `<div class="step">${roll}</div><div class="verdict v-noeffect">would fail the foe's die — advisory only (enforce-movement off), shot allowed</div>`);
     }
   }
@@ -3345,7 +3378,7 @@ function onResolveMissile() {
   const aT = typeById(a.type), dT = typeById(d.type);
   const baseGroup = MASS_ARMOR_BY_TYPE[d.type] || 'half';
   const reach = inMissileRange(a, d);
-  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
+  if (!reach.ok) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
   // Indirect (p.12): bows/longbows only, range −⅓ (in inMissileRange), target
   // bumped one armor category, and cover is negated.
   const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
@@ -3366,11 +3399,11 @@ function onResolveMissile() {
   if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
-  let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} (${dT.cls}) · ` +
+  let html = `<div class="step">${a.side} · ${aT.name} × ${a.count} fires ${a.weapon} at ${d.side} · ${dT.name} (${dT.cls}) · ` +
              `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}${rankNote}${hobbitNote}${tagNote}</div>`;
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+    appendTurn(missileTitle(a, d), html);
     markFired(a);
     return;
   }
@@ -3399,14 +3432,14 @@ function onResolveMissile() {
       const fatTail = lr.fatiguePenalty
         ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>`
         : '';
-      html += `<div class="step">B · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+      html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
               `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
-      html += `<div class="verdict v-${lr.passed?'stable':lr.action}">B ${lr.passed?'holds':lr.action}</div>`;
+      html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
       if (!lr.passed) d.destroyed = true;
     }
   }
 
-  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  appendTurn(missileTitle(a, d), html);
   markFired(a);
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
@@ -3418,19 +3451,19 @@ function onResolveMissile() {
 function onIndivMissile(a, d) {
   const aT = typeById(a.type), dT = typeById(d.type);
   if (isThrown(a.weapon)) {
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
-      `<div class="step">A · ${aT.name} → B · ${dT.name}</div>` +
+    appendTurn(missileTitle(a, d),
+      `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div>` +
       `<div class="verdict v-noeffect">thrown weapons are a massed-troop weapon here — individual thrown fire isn't on the Appendix B table</div>`);
     return;
   }
   const weapon = rangedWeaponById(a.weapon);
   if (!weapon) {
     appendTurn(`Missile · invalid weapon`,
-      `<div class="step">A · ${aT.name} has no individual missile weapon assigned.</div>`);
+      `<div class="step">${a.side} · ${aT.name} has no individual missile weapon assigned.</div>`);
     return;
   }
   const reach = inMissileRange(a, d);
-  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
+  if (!reach.ok) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
   const armorIdx = targetArmorIdx(d);
   const armorLabel = (d.kind === 'individual')
     ? (ARMOR_MTM[armorIdx] || {label:'?'}).label
@@ -3446,12 +3479,12 @@ function onIndivMissile(a, d) {
   if (coverPenalty) tags.push(`${coverLabel(d.cover)} (−${coverPenalty} dice)`);
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
-  let html = `<div class="step">A · ${aT.name} fires ${weapon.name} (range ${weapon.range}″) at ` +
-             `B · ${dT.name}${d.kind === 'mass' ? ` × ${d.count}` : ''} · ` +
+  let html = `<div class="step">${a.side} · ${aT.name} fires ${weapon.name} (range ${weapon.range}″) at ` +
+             `${d.side} · ${dT.name}${d.kind === 'mass' ? ` × ${d.count}` : ''} · ` +
              `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${armorLabel}${tagNote}</div>`;
   if (!r.ok) {
     html += `<div class="verdict v-noeffect">${r.reason}</div>`;
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
+    appendTurn(missileTitle(a, d, ' · indiv'), html);
     return;
   }
   if (r.arrowProof) {
@@ -3467,13 +3500,13 @@ function onIndivMissile(a, d) {
             (r.kill ? `<b style="color:#a3322a">HIT</b>` : 'miss') + `</div>`;
     if (r.kill) {
       if (d.kind === 'individual') {
-        html += `<div class="verdict v-rout">B · ${dT.name} → killed</div>`;
+        html += `<div class="verdict v-rout">${d.side} · ${dT.name} → killed</div>`;
         d.count = 0; d.destroyed = true;
         cleanupEngagementsForUnit(d.id);
         if (d.id === state.targetId) state.targetId = null;
       } else {
         applyCasualties(d, 1);
-        html += `<div class="verdict v-${d.destroyed?'rout':'killed'}">B · ${dT.name} loses 1 figure → ${d.count} left${d.destroyed?' (destroyed)':''}</div>`;
+        html += `<div class="verdict v-${d.destroyed?'rout':'killed'}">${d.side} · ${dT.name} loses 1 figure → ${d.count} left${d.destroyed?' (destroyed)':''}</div>`;
         if (!d.destroyed) {
           const cas = d.startCount - d.count;
           const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
@@ -3483,9 +3516,9 @@ function onIndivMissile(a, d) {
             const fatTail = lr.fatiguePenalty
               ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>`
               : '';
-            html += `<div class="step">B · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+            html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
                     `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
-            html += `<div class="verdict v-${lr.passed?'stable':lr.action}">B ${lr.passed?'holds':lr.action}</div>`;
+            html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
             if (!lr.passed) d.destroyed = true;
           }
         }
@@ -3494,7 +3527,7 @@ function onIndivMissile(a, d) {
       html += `<div class="verdict v-noeffect">no effect</div>`;
     }
   }
-  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B) · indiv`, html);
+  appendTurn(missileTitle(a, d, ' · indiv'), html);
   markFired(a);
   if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
@@ -3519,11 +3552,11 @@ function indivArmorIdxToMassGroup(idx) {
 function onMassMissileAtIndiv(a, d) {
   const aT = typeById(a.type), dT = typeById(d.type);
   const reach = inMissileRange(a, d);
-  if (!reach.ok) { appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, `<div class="step">A · ${aT.name} → B · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
+  if (!reach.ok) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
 
   if (MISSILE_IMMUNE_INDIV.has(d.type)) {
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`,
-      `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
+    appendTurn(missileTitle(a, d),
+      `<div class="step">${a.side} · ${aT.name} × ${a.count} fires ${a.weapon} at ${d.side} · ${dT.name} · ` +
       `distance ${reach.distanceIn.toFixed(1)}″</div>` +
       `<div class="verdict v-noeffect">${dT.name} is impervious to normal missile fire</div>`);
     markFired(a);
@@ -3551,12 +3584,12 @@ function onMassMissileAtIndiv(a, d) {
   else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   const hpBefore = d.hp;
-  let html = `<div class="step">A · ${aT.name} × ${a.count} fires ${a.weapon} at B · ${dT.name} · ` +
+  let html = `<div class="step">${a.side} · ${aT.name} × ${a.count} fires ${a.weapon} at ${d.side} · ${dT.name} · ` +
              `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}` +
              ` · hp ${hpBefore}/${d.maxHp}${rankNote}${hobbitNote}${tagNote}</div>`;
   if (res.arrowProof) {
     html += `<div class="verdict v-noeffect">indirect fire bumps ${MASS_MISSILE[baseGroup].label} target to arrow-proof — no effect</div>`;
-    appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+    appendTurn(missileTitle(a, d), html);
     markFired(a);
     return;
   }
@@ -3574,17 +3607,17 @@ function onMassMissileAtIndiv(a, d) {
 
   d.hp = Math.max(0, (d.hp || 0) - res.totalKills);
   if (d.hp <= 0) {
-    html += `<div class="verdict v-rout">B · ${dT.name} → killed (${res.totalKills} hits, hp ${hpBefore}/${d.maxHp})</div>`;
+    html += `<div class="verdict v-rout">${d.side} · ${dT.name} → killed (${res.totalKills} hits, hp ${hpBefore}/${d.maxHp})</div>`;
     d.count = 0; d.destroyed = true;
     cleanupEngagementsForUnit(d.id);
     if (d.id === state.targetId) state.targetId = null;
   } else if (res.totalKills > 0) {
-    html += `<div class="verdict v-killed">B · ${dT.name} takes ${res.totalKills} hit${res.totalKills===1?'':'s'} → hp ${d.hp}/${d.maxHp}</div>`;
+    html += `<div class="verdict v-killed">${d.side} · ${dT.name} takes ${res.totalKills} hit${res.totalKills===1?'':'s'} → hp ${d.hp}/${d.maxHp}</div>`;
   } else {
     html += `<div class="verdict v-noeffect">no hits</div>`;
   }
 
-  appendTurn(`Missile · ${aT.name} (A) → ${dT.name} (B)`, html);
+  appendTurn(missileTitle(a, d), html);
   markFired(a);
   renderBoard();
 }
@@ -3872,7 +3905,13 @@ function onContextMenuAction(evt) {
   } else if (act === 'clear-fatigue') {
     u.fatigued = false;
   } else if (act === 'declare-charge') {
-    u.charged = true;
+    if (state.settings.enforceMovement && !chargeContactExpected(u)) {
+      const cav = isMountedType(u.type) || !!u.mounted;
+      appendTurn(`Charge refused`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) has no enemy reachable into melee contact within its ${chargeAllowanceOf(u)}″ charge${cav ? ' (≤45° straight line)' : ''} — a charge is only permitted when contact is expected (p.16).</div>`);
+    } else {
+      u.charged = true;
+    }
   } else if (act === 'cancel-charge') {
     u.charged = false;
   } else if (act === 'pause-half') {
@@ -4442,6 +4481,10 @@ renderBoard();
     console.assert(canPassThroughFire({ side:'A', weapon:'longbow', movedThisTurn:0 }, { side:'B', halfMovePaused:true }) === false, 'pass-through (enforce, A moving): no shot at a B target — B is not the side moving');
     state.settings.enforcePhases = _e; state.phaseIdx = _pi; state.firstMover = _fm; }
 
+  // Missile log title (side-accurate; "Missile" unless a pass-through shot).
+  console.assert(missileTitle({ type:'LF', side:'A' }, { type:'HF', side:'B' }) === `Missile · ${typeById('LF').name} (A) → ${typeById('HF').name} (B)`, 'missile title reads real sides, Missile verb when not pass-through');
+  console.assert(missileTitle({ type:'LF', side:'B' }, { type:'HF', side:'A' }, ' · indiv') === `Missile · ${typeById('LF').name} (B) → ${typeById('HF').name} (A) · indiv`, 'missile title: B-fires-at-A now reads (B) → (A) (was hardcoded A→B) + suffix');
+
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
   console.assert(inFiringArc(footFirer, { x:0, y:-100 }) === true,  'foot: target dead ahead in arc');
@@ -4451,6 +4494,12 @@ renderBoard();
   console.assert(inFiringArc(horseFirer, { x:-100, y:0 })   === true,  'horse: left flank in arc (180° left)');
   console.assert(inFiringArc(horseFirer, { x:-100, y:100 }) === true,  'horse: left-rear in arc');
   console.assert(inFiringArc(horseFirer, { x:100, y:0 })    === false, 'horse: right flank out of arc');
+
+  // Contact reach (Slice: charge contact-expected). Guard clauses are geometry-
+  // independent; the gap/arc logic is exercised by the node harness.
+  console.assert(canReachContact({ side:'A' }, { side:'A' }, 99) === false, 'reach: same-side is never a contact target');
+  console.assert(canReachContact({ side:'A' }, { side:'B', destroyed:true }, 99) === false, 'reach: a destroyed target is not reachable');
+  console.assert(canReachContact({ side:'A' }, null, 99) === false, 'reach: no target → not reachable');
 
   // Asymmetric attack/defend classes + Giant die (Slice 7B).
   console.assert(fightingClassFor('GIANT') === 'HF' && defendClassFor('GIANT') === 'AF', 'Giant attacks HF / defends AF');
