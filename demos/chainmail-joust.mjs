@@ -1,13 +1,16 @@
-// chainmail-joust.mjs · Tournament-joust resolver (Chainmail Appendix C). Portable engine module.
+// chainmail-joust.mjs · Tournament joust (Chainmail Appendix C + jousting procedure, p.26). Portable engine module.
 // Run: node chainmail-joust.mjs
 //
-// Encoded verbatim from the Appendix C "Jousting Matrix" scan. The matrix is deterministic per
-// (aiming point x defensive position); cells listing several outcomes (B/U, B/U/I, U/I) are the
-// only place a die enters - the injected rng picks among them. The exact within-cell selection
-// rule is NOT on the scan (only the matrix + legends are), so multi-outcome cells use a
-// documented uniform pick pending the jousting *procedure* text. The surrounding match loop
-// (simultaneous secret selection, passes, scoring, how PDP/AP is applied) is likewise not on
-// the scan and is left to a thin layer above this resolver.
+// Encoded verbatim from the Appendix C "Jousting Matrix" scan + the jousting rules text.
+// The joust is DETERMINISTIC: each player picks an aiming point (attack) and a saddle position
+// (defense), and each player's aim is matched against the OPPONENT's position. The only place a
+// die enters is the multi-outcome cells (B/U, B/U/I, U/I) - the procedure names no die for them,
+// so the injected rng makes a documented uniform pick (house-rule, configurable).
+//
+// Procedure (p.26): a "ride" resolves both attacks at once. Repeat until one or both knights are
+// unhorsed, or three rides pass. A knight whose lance breaks (B, the attacker) or whose helm is
+// knocked off (H, the defender) must assume position 4 (Steady Seat) the next ride - always legal,
+// since position 4 is permitted under every aiming point.
 
 export const DEFENSIVE_POSITIONS = [
   { n: 1, name: 'Lower Helm' },
@@ -18,8 +21,6 @@ export const DEFENSIVE_POSITIONS = [
   { n: 6, name: 'Shield Low' },
 ];
 
-// Aiming points: the Helm, then the shield divisions (Dexter/Pale/Sinister x Chief/Fess, plus
-// Base). IDs are the matrix's own row labels, kept verbatim.
 export const AIM_POINTS = [
   { id: 'Helm', name: 'Helm' },
   { id: 'DC',   name: 'Dexter Chief' },
@@ -31,16 +32,27 @@ export const AIM_POINTS = [
   { id: 'Base', name: 'Base' },
 ];
 
+// forces: who must take Steady Seat next ride. Breaks Lance -> the attacker (his lance);
+// Helm Knocked Off -> the defender (his helm).
 export const RESULTS = {
-  B: { name: 'Breaks Lance',     forcesSteadyNext: true },   // * next ride: position 4
+  B: { name: 'Breaks Lance',     forces: 'attacker' },
   G: { name: 'Glances Off' },
-  H: { name: 'Helm Knocked Off', forcesSteadyNext: true },   // * next ride: position 4
+  H: { name: 'Helm Knocked Off', forces: 'defender' },
   I: { name: 'Injured' },
   M: { name: 'Miss' },
   U: { name: 'Unhorsed' },
 };
 
-// JOUST_MATRIX[aim][defensivePosition] = result code (or slash-joined multi-outcome cell).
+// Tourney scoring (p.26): points to the attacker / defender of each individual attack.
+export const SCORE = {
+  B: { attacker: -1, defender: 0 },
+  G: { attacker: 0,  defender: 0 },
+  H: { attacker: 3,  defender: 0 },
+  I: { attacker: 0,  defender: -10 },
+  M: { attacker: 0,  defender: 0 },
+  U: { attacker: 20, defender: 0 },
+};
+
 export const JOUST_MATRIX = {
   Helm: { 1: 'M',     2: 'M',   3: 'M',   4: 'H',   5: 'U',     6: 'M'   },
   DC:   { 1: 'U',     2: 'B',   3: 'M',   4: 'B',   5: 'B',     6: 'M'   },
@@ -52,18 +64,11 @@ export const JOUST_MATRIX = {
   Base: { 1: 'B',     2: 'G',   3: 'U',   4: 'B',   5: 'B/U/I', 6: 'B'   },
 };
 
-// "Possible Defensive Positions Considering Aiming Point" (PDP/AP). Stored as data; its
-// procedural role isn't on the scan, so it is exposed (isPositionAllowed) but not enforced
-// inside resolveJoust.
+// "Possible Defensive Positions Considering Aiming Point": a knight choosing this aim may only
+// take these saddle positions ("the aiming point will preclude certain defensive positions").
 export const PDP_AP = {
-  Helm: [4, 5, 6],
-  DC:   [3, 4, 5, 6],
-  CP:   'any',
-  SC:   [2, 4, 5, 6],
-  DF:   [4, 5, 6],
-  FP:   'any',
-  SF:   [4, 5, 6],
-  Base: [1, 4, 5, 6],
+  Helm: [4, 5, 6], DC: [3, 4, 5, 6], CP: 'any',      SC: [2, 4, 5, 6],
+  DF:   [4, 5, 6], FP: 'any',        SF: [4, 5, 6],   Base: [1, 4, 5, 6],
 };
 
 export function isPositionAllowed(aim, position) {
@@ -72,6 +77,7 @@ export function isPositionAllowed(aim, position) {
   return a === 'any' || a.includes(Number(position));
 }
 
+// One attack: an aiming point vs the opponent's saddle position.
 export function resolveJoust({ aim, position, rng }) {
   const row = JOUST_MATRIX[aim];
   if (!row) throw new Error(`unknown aiming point: ${aim}`);
@@ -86,11 +92,56 @@ export function resolveJoust({ aim, position, rng }) {
     rolled = { options, idx, r };
   }
   const res = RESULTS[code];
-  return {
-    aim, position: Number(position), cell, code, result: res.name,
-    multiOutcome: options.length > 1, options, rolled,
-    forcesSteadyNext: !!res.forcesSteadyNext,
+  return { aim, position: Number(position), cell, code, result: res.name,
+    multiOutcome: options.length > 1, options, rolled, forcesSteadyNext: res.forces || null };
+}
+
+// One ride: both knights' aims resolved against the other's position (no legality check here -
+// runJoust does that). aChoice/bChoice = { aim, position }.
+export function resolveRide(aChoice, bChoice, rng) {
+  const aAtk = resolveJoust({ aim: aChoice.aim, position: bChoice.position, rng });
+  const bAtk = resolveJoust({ aim: bChoice.aim, position: aChoice.position, rng });
+  const unhorsed = { A: bAtk.code === 'U', B: aAtk.code === 'U' };
+  const injured  = { A: bAtk.code === 'I', B: aAtk.code === 'I' };
+  const score = {
+    A: SCORE[aAtk.code].attacker + SCORE[bAtk.code].defender,
+    B: SCORE[bAtk.code].attacker + SCORE[aAtk.code].defender,
   };
+  const forcedNext = { A: false, B: false };
+  if (aAtk.forcesSteadyNext === 'attacker') forcedNext.A = true;
+  if (aAtk.forcesSteadyNext === 'defender') forcedNext.B = true;
+  if (bAtk.forcesSteadyNext === 'attacker') forcedNext.B = true;
+  if (bAtk.forcesSteadyNext === 'defender') forcedNext.A = true;
+  return { aAtk, bAtk, unhorsed, injured, score, forcedNext };
+}
+
+// Full joust: up to three rides. a/b = { id, rides:[{aim,position}, ...] }.
+export function runJoust({ a, b, rng }) {
+  const log = [];
+  const total = { A: 0, B: 0 };
+  let forced = { A: false, B: false };
+  let outcome = 'no unhorse - decided on points';
+  let ridesPlayed = 0;
+  for (let r = 0; r < 3; r++) {
+    const aC = { ...(a.rides[r] || a.rides[a.rides.length - 1]) };
+    const bC = { ...(b.rides[r] || b.rides[b.rides.length - 1]) };
+    if (forced.A) aC.position = 4;
+    if (forced.B) bC.position = 4;
+    if (!isPositionAllowed(aC.aim, aC.position)) throw new Error(`illegal pairing A: aim ${aC.aim} precludes position ${aC.position}`);
+    if (!isPositionAllowed(bC.aim, bC.position)) throw new Error(`illegal pairing B: aim ${bC.aim} precludes position ${bC.position}`);
+    const ride = resolveRide(aC, bC, rng);
+    total.A += ride.score.A; total.B += ride.score.B;
+    log.push({ ride: r + 1, aChoice: aC, bChoice: bC, ...ride });
+    ridesPlayed = r + 1;
+    if (ride.unhorsed.A || ride.unhorsed.B) {
+      outcome = ride.unhorsed.A && ride.unhorsed.B ? 'double unhorse'
+        : ride.unhorsed.B ? `${a.id || 'A'} unhorses ${b.id || 'B'}`
+        : `${b.id || 'B'} unhorses ${a.id || 'A'}`;
+      break;
+    }
+    forced = ride.forcedNext;
+  }
+  return { ridesPlayed, log, total, outcome };
 }
 
 function tests() {
@@ -99,28 +150,45 @@ function tests() {
   const ok = (cond, msg) => { total++; if (cond) pass++; else console.log('  XX ' + msg); };
 
   for (const aim of Object.keys(JOUST_MATRIX))
-    for (let p = 1; p <= 6; p++) {
-      const r = resolveJoust({ aim, position: p, rng: forced(0) });
-      ok(RESULTS[r.code] !== undefined, `${aim} x ${p} -> legal code (${r.code})`);
-    }
+    for (let p = 1; p <= 6; p++)
+      ok(RESULTS[resolveJoust({ aim, position: p, rng: forced(0) }).code] !== undefined, `${aim} x ${p} legal code`);
 
   ok(resolveJoust({ aim: 'Helm', position: 4, rng: forced(0) }).code === 'H', 'Helm x4 = H');
-  ok(resolveJoust({ aim: 'Helm', position: 4, rng: forced(0) }).forcesSteadyNext, 'H forces Steady next ride');
-  ok(resolveJoust({ aim: 'DC',   position: 4, rng: forced(0) }).forcesSteadyNext, 'B forces Steady next ride');
-  ok(!resolveJoust({ aim: 'SC',  position: 1, rng: forced(0) }).forcesSteadyNext, 'G does not force Steady next');
-  ok(!resolveJoust({ aim: 'Helm',position: 5, rng: forced(0) }).forcesSteadyNext, 'U does not force Steady next');
-
-  ok(resolveJoust({ aim: 'DC',   position: 1, rng: forced(0) }).code === 'U', 'DC x1 = U');
-  ok(resolveJoust({ aim: 'SC',   position: 6, rng: forced(0) }).code === 'U', 'SC x6 = U');
+  ok(resolveJoust({ aim: 'DC', position: 1, rng: forced(0) }).code === 'U', 'DC x1 = U');
   ok(resolveJoust({ aim: 'Base', position: 3, rng: forced(0) }).code === 'U', 'Base x3 = U');
+  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0) }).code === 'B', 'CP x1 low -> B');
+  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0.5) }).code === 'U', 'CP x1 mid -> U');
+  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0.99) }).code === 'I', 'CP x1 high -> I');
 
-  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0) }).code    === 'B', 'CP x1 low roll -> B');
-  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0.5) }).code  === 'U', 'CP x1 mid roll -> U');
-  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0.99) }).code === 'I', 'CP x1 high roll -> I');
-  ok(resolveJoust({ aim: 'CP', position: 1, rng: forced(0) }).multiOutcome, 'CP x1 flagged multiOutcome');
-
+  ok(SCORE.U.attacker === 20 && SCORE.I.defender === -10 && SCORE.H.attacker === 3 && SCORE.B.attacker === -1, 'score table');
   ok(isPositionAllowed('Helm', 5) && !isPositionAllowed('Helm', 1), 'Helm allows 5, not 1');
-  ok(isPositionAllowed('CP', 1) && isPositionAllowed('FP', 6), 'CP/FP allow any');
+  ok([1,2,3,4,5,6].every(p => isPositionAllowed(p === 0 ? 'Helm' : 'CP', p)), 'CP allows any position');
+  ok(['Helm','DC','CP','SC','DF','FP','SF','Base'].every(a => isPositionAllowed(a, 4)), 'position 4 legal under every aim');
+
+  // one ride: A aims SC@4 (glance), B aims Helm@4 (knocks A helm off) -> B+3, A forced Steady next
+  { const ride = resolveRide({ aim: 'SC', position: 4 }, { aim: 'Helm', position: 4 }, forced(0));
+    ok(ride.aAtk.code === 'G' && ride.bAtk.code === 'H', 'ride codes G / H');
+    ok(ride.score.A === 0 && ride.score.B === 3, 'helm-off scores B+3');
+    ok(ride.forcedNext.A === true && ride.forcedNext.B === false, 'helm-off forces A (defender) to Steady next');
+    ok(!ride.unhorsed.A && !ride.unhorsed.B, 'no unhorse'); }
+
+  // full joust: A Helm@5 unhorses B on ride 1 (Helm x5 = U), B SC@4 glances
+  { const jl = runJoust({ a: { id: 'Lancelot', rides: [{ aim: 'Helm', position: 4 }] },
+                          b: { id: 'Tristan',  rides: [{ aim: 'SC', position: 5 }] }, rng: forced(0) });
+    ok(jl.ridesPlayed === 1, 'ends ride 1 on unhorse');
+    ok(jl.total.A === 20, 'unhorse scores +20');
+    ok(jl.outcome === 'Lancelot unhorses Tristan', 'outcome reads unhorse'); }
+
+  // forced-Steady propagation: ride1 B knocks A helm off -> ride2 A is forced to position 4
+  { const jl = runJoust({ a: { id: 'A', rides: [{ aim: 'SC', position: 4 }, { aim: 'SC', position: 6 }, { aim: 'SC', position: 6 }] },
+                          b: { id: 'B', rides: [{ aim: 'Helm', position: 4 }, { aim: 'Helm', position: 6 }, { aim: 'Helm', position: 6 }] }, rng: forced(0) });
+    ok(jl.log[1].aChoice.position === 4, 'helm-off knight forced to Steady Seat next ride'); }
+
+  // illegal pairing is rejected
+  { let threw = false;
+    try { runJoust({ a: { id: 'A', rides: [{ aim: 'Helm', position: 1 }] }, b: { id: 'B', rides: [{ aim: 'Helm', position: 4 }] }, rng: forced(0) }); }
+    catch (e) { threw = true; }
+    ok(threw, 'illegal aim/position pairing rejected'); }
 
   console.log(`  ${pass}/${total} joust assertions`);
 }
