@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.11 · Phase guidance (enforce-phases only): (1) a "▸ now/next" hint line under the phase tag narrating the current step; (2) a green "ready" halo on the side that may move this phase with the idle side dimmed to 40%, so whose-move reads off the board; (3) exactly ONE lit primary button per phase (gold + 2px ring + slow pulse) = the recommended action — Roll initiative / Fire missiles / Resolve melee / else Next — while the other gold forward buttons (Next, End round, elect) drop to a quiet outline, fixing the two-gold ambiguity. All three are inert in the advisory default (toolbar unchanged). Highlights the active side, not a single unit (holding is legal). -->
+<!-- chainmail-board.html · v0.10.12 · Header phase tracker: a phase-rail showing the full p.9 turn sequence — Init › First › Counter › Artillery › Missile › Melee — with the current step lit gold, prior steps marked done, upcoming faint. Always shown (a richer view of the phase the tag already names), driven by state.phaseIdx via the index-aligned PHASE_RAIL constant. Completes the header guidance set (tracker = where you are; hint line = what to do; lit button = what to press). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.11</title>
+<title>Chainmail — Battlefield · v0.10.12</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -49,6 +49,13 @@
   button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--ink-soft); }
   @keyframes litpulse { 0%, 100% { border-color: #b8923a; } 50% { border-color: #e7ca7e; } }
   .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
+  .toolbar .phase-rail { flex-basis: 100%; display: flex; align-items: center; gap: 3px; margin-top: 2px; }
+  .phase-rail .step { font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase; font-weight: 700;
+    padding: 2px 7px; border-radius: 3px; color: var(--ink-soft); background: rgba(255,250,230,0.5);
+    border: 0.5px solid rgba(0,0,0,0.16); }
+  .phase-rail .step.done { color: var(--ink); background: rgba(216,178,90,0.12); }
+  .phase-rail .step.now { color: var(--ink); background: var(--gold); border-color: #b8923a; }
+  .phase-rail .sep { color: var(--rule); font-size: 11px; }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
   aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0;
@@ -177,8 +184,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Phase guidance</div>
-    <span class="version-tag">v0.10.11</span>
+    <div class="sub">Chainmail HTML Sim · Phase tracker</div>
+    <span class="version-tag">v0.10.12</span>
   </div>
 
   <div class="toolbar">
@@ -198,6 +205,7 @@
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
     <button id="btn-reset" class="danger">Reset board</button>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
+    <span class="phase-rail" id="phase-rail"></span>
     <span class="phase-hint" id="phase-hint" hidden></span>
     <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
   </div>
@@ -369,7 +377,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.11';
+const SIM_VERSION = '0.10.12';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -544,6 +552,8 @@ const PHASES = Object.freeze([
   { id:'missile',    label:'Missile fire', rule:'p.9 §5', side:null },
   { id:'melee',      label:'Melee',        rule:'p.9 §6', side:null },
 ]);
+// Compact labels for the header phase-rail tracker, index-aligned to PHASES.
+const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Missile', 'Melee']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -3943,6 +3953,13 @@ function renderTurnUI() {
     const winner = state.initiativeRoll.winner;
     electBtn.textContent = state.firstMover === winner ? `${winner} moves last` : `${winner} moves first`;
   }
+  // Phase rail: the full p.9 sequence with the current step lit, prior steps
+  // marked done. Always shown — a richer view of the phase the tag names.
+  $('#phase-rail').innerHTML = PHASE_RAIL.map((lbl, k) => {
+    const cls = k === state.phaseIdx ? 'step now' : (k < state.phaseIdx ? 'step done' : 'step');
+    const sep = k < PHASE_RAIL.length - 1 ? '<span class="sep">›</span>' : '';
+    return `<span class="${cls}">${lbl}</span>${sep}`;
+  }).join('');
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
   const hintEl = $('#phase-hint');
   const hint = state.settings.enforcePhases ? phaseHint() : '';
@@ -4385,6 +4402,7 @@ renderBoard();
 
   // Move/counter-move phase sequence (Slice 8D — movement pillar #4, p.9).
   console.assert(PHASES.length === 6 && PHASES[0].id === 'initiative' && PHASES[5].id === 'melee', 'six-phase move/counter-move sequence');
+  console.assert(PHASE_RAIL.length === PHASES.length, 'phase-rail labels stay index-aligned with PHASES');
   console.assert(moverForPhase('move1','A')==='A' && moverForPhase('move2','A')==='B', 'first mover moves in move1, the other in move2');
   console.assert(moverForPhase('missile','A')===null && moverForPhase('melee','B')===null, 'fire/melee phases have no single mover');
   const ini8d = rollInitiative(seq([forDie(5),forDie(3)]));
