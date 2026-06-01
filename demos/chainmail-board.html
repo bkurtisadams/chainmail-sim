@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.14 · Half-move pause point (p.9 / p.12): the foundation for split-move-and-fire and pass-through fire. A unit at/within its half-move (½ its NORMAL allowance) with movement remaining can "Pause at half-move" (context menu) — it is then held at the checkpoint (drag and nudge blocked, rotation allowed to aim) and shows a ½ PAUSE badge + a half-move readout in the move pane; "Resume move" takes the second leg. New per-unit halfMovePaused state, canPauseAtHalf() eligibility, atHalfMovePause() predicate for the next slice; pause/resume are undoable via the ctx snapshot; reset on endRound. Firing-from-pause and pass-through fire are the next slice. -->
+<!-- chainmail-board.html · v0.10.15 · Split-move-and-fire (p.12): horsemen armed with bows (short_bow/horsebow/longbow/composite — not crossbows) may fire during their own move phase while paused at the half-move, then complete the balance ≤½. The missile button is enabled mid-move for a paused horse-archer in its move phase; a resolved shot from the pause records leg 1 (splitFired/splitLeg1) and effectiveMoveAllowance caps the remainder so leg 2 ≤ ½ (drag, nudge, pane all honor it). Reset on endRound. Builds on the v0.10.14 half-move pause point. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.14</title>
+<title>Chainmail — Battlefield · v0.10.15</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -184,8 +184,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Half-move pause</div>
-    <span class="version-tag">v0.10.14</span>
+    <div class="sub">Chainmail HTML Sim · Split-move &amp; fire</div>
+    <span class="version-tag">v0.10.15</span>
   </div>
 
   <div class="toolbar">
@@ -379,7 +379,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.14';
+const SIM_VERSION = '0.10.15';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1336,7 +1336,7 @@ function facingTierLabel(u) {
 
 // Total move budget spent this turn = translation distance + facing-change cost.
 const budgetSpentIn = (u) => (u.movedThisTurn || 0) + facingCostIn(u);
-const remainingMoveIn = (u) => Math.max(0, moveAllowanceOf(u) - budgetSpentIn(u));
+const remainingMoveIn = (u) => Math.max(0, effectiveMoveAllowance(u) - budgetSpentIn(u));
 // Clamp a drag/nudge vector (px) so its length never exceeds the remaining
 // allowance (inches). Returns the (possibly scaled) vector and whether it hit
 // the cap. Used only when hard-enforce is on; advisory mode never clamps.
@@ -2033,7 +2033,7 @@ function updateSidebar() {
     const faceCostIn = facingCostIn(u);
     const spentIn = movedIn + faceCostIn;
     const moveAllow = moveAllowanceOf(u);
-    const moveLeft = Math.max(0, moveAllow - spentIn);
+    const moveLeft = Math.max(0, effectiveMoveAllowance(u) - spentIn);
     const overMove = spentIn > moveAllow + 1e-9;
     const turnedDeg = (u.turnStartFacing != null) ? angDist(u.facing, u.turnStartFacing) : 0;
     el.innerHTML =
@@ -2059,6 +2059,7 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″ · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
       (u.halfMovePaused ? `<div class="stat"><span class="k">Half-move</span><span class="v" style="color:#46707d">PAUSED — resume to take 2nd leg</span></div>` : '') +
+      (u.splitFired ? `<div class="stat"><span class="k">Split-fire</span><span class="v" style="color:#46707d">fired mid-move · 2nd leg ≤ ½ (cap ${effectiveMoveAllowance(u).toFixed(1)}″)</span></div>` : '') +
       (turnedDeg > 0.5 ? `<div class="stat"><span class="k">Turned</span><span class="v">${turnedDeg.toFixed(0)}° · ${facingTierLabel(u)} · ${faceCostIn.toFixed(1)}″</span></div>` : '') +
       (isIndiv
         ? `<div class="stat"><span class="k">Point</span><span class="v">${T.point}</span></div>` +
@@ -2085,7 +2086,10 @@ function updateButtons() {
   // during the move phases is a later slice).
   const phaseId = PHASES[state.phaseIdx].id;
   const meleeOk = !state.settings.enforcePhases || phaseId === 'melee';
-  const missileOk = !state.settings.enforcePhases || phaseId === 'missile';
+  // Missile fire: the dedicated missile phase, or — for a horse-archer paused at
+  // its half-move during its own move phase — a split-move-and-fire (p.12).
+  const missileOk = !state.settings.enforcePhases || phaseId === 'missile'
+    || (a && atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
   $('#btn-melee').disabled   = !(canAct && meleeOk && inMeleeContact(a, d));
   $('#btn-missile').disabled = !(canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d));
 }
@@ -2221,7 +2225,7 @@ function onBoardMouseMove(evt) {
       const h = clampHeadingToward(vx, vy, facingHeadingRad(u.facing), CHARGE_CURVE_RAD);
       vx = h.dx; vy = h.dy;
     }
-    const remBefore = Math.max(0, moveAllowanceOf(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
+    const remBefore = Math.max(0, effectiveMoveAllowance(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
     const c = clampMoveVector(vx, vy, remBefore);
     nx = state.dragging.originX + c.dx;
     ny = state.dragging.originY + c.dy;
@@ -2405,6 +2409,18 @@ function canPauseAtHalf(u) {
   if (!canSideMoveNow(u.side)) return false;            // advisory: always true; enforce: this side's move phase
   const spent = u.movedThisTurn || 0;
   return spent <= halfMoveIn(u) + 1e-9 && spent < moveAllowanceOf(u) - 1e-9;
+}
+// Split-move-and-fire (p.12): horsemen armed with BOWS (not crossbows) may move
+// ≤½, fire at the half-move pause, then move the balance — leg 2 also ≤½. The
+// firing eligibility is by troop type + weapon; the leg-2 cap is enforced via
+// effectiveMoveAllowance once the unit has fired from its pause (u.splitFired).
+const BOW_WEAPONS = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
+const isBowArmed = (u) => BOW_WEAPONS.has(u.weapon);
+const canSplitMoveFire = (u) => isHorseman(u) && isBowArmed(u);
+function effectiveMoveAllowance(u) {
+  const base = moveAllowanceOf(u);
+  if (u.splitFired) return Math.min(base, (u.splitLeg1 || 0) + halfMoveIn(u));  // leg 1 (at fire) + ≤½ for leg 2
+  return base;
 }
 
 // Slice 8A: arrow-key nudge that respects the move-allowance accounting. In
@@ -4075,6 +4091,7 @@ function endRound() {
     u.charged = false;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
     u.halfMovePaused = false;   // checkpoints reset with the new move
+    u.splitFired = false; u.splitLeg1 = 0;
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
@@ -4091,7 +4108,17 @@ $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
-$('#btn-missile').addEventListener('click', onResolveMissile);
+$('#btn-missile').addEventListener('click', () => {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const split = !!a && atHalfMovePause(a) && canSplitMoveFire(a);
+  const firedBefore = !!(a && a.acted && a.acted.fired);
+  const leg1 = a ? (a.movedThisTurn || 0) : 0;
+  onResolveMissile();
+  // A shot that actually resolved from the half-move pause is a split-move-fire:
+  // record leg 1 so the balance is capped at ≤½ (effectiveMoveAllowance).
+  if (split && !firedBefore && a.acted && a.acted.fired) { a.splitFired = true; a.splitLeg1 = leg1; }
+  renderTurnUI();
+});
 $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; state.targetId = null; renderBoard(); });
 $('#btn-reset-view').addEventListener('click', resetView);
 $('#btn-grid').addEventListener('click', toggleGrid);
@@ -4327,6 +4354,14 @@ renderBoard();
   console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:3, halfMovePaused:true }) === false, 'already paused → not offered again');
   console.assert(atHalfMovePause({ halfMovePaused:true }) === true && atHalfMovePause({}) === false, 'atHalfMovePause reflects the flag');
   console.assert(nudgeUnit({ type:'LF', side:'A', halfMovePaused:true, acted:{} }, 24, 0) === false, 'a unit paused at half-move cannot be nudged');
+
+  // Split-move-and-fire (p.12): eligibility by troop type + bow; leg-2 cap ≤ ½.
+  console.assert(canSplitMoveFire({ type:'LH', weapon:'longbow' }) === true, 'longbow Light Horse may split-move-fire');
+  console.assert(canSplitMoveFire({ type:'LH', weapon:'heavy_crossbow' }) === false, 'crossbow horse may not split-move-fire (bows only)');
+  console.assert(canSplitMoveFire({ type:'LF', weapon:'longbow' }) === false, 'foot may not split-move-fire');
+  console.assert(effectiveMoveAllowance({ type:'LH' }) === moveAllowanceOf({ type:'LH' }), 'no split-fire → full allowance');
+  console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', splitFired:true, splitLeg1:4 }) - 10) < 1e-9, 'split-fired LF (12, ½=6) capped at leg1 4 + 6 = 10');
+  console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', splitFired:true, splitLeg1:0 }) - 6) < 1e-9, 'split-fire from a standstill caps total at ½ (6″)');
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
