@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.10 · Manual initiative: a new turn (and a reset/empty board) now begins at the initiative phase UNROLLED instead of auto-rolling. A gold "Roll initiative" button (shown only in the initiative phase, pre-roll) casts the dice via rollInitiativeAction (undoable); the "Winner moves last" election button appears only after the roll. startTurnInitiative no longer rolls — it just sets phaseIdx 0, initiativeRoll null, firstMover A as a neutral default. Fixes the bogus Turn 1 roll on reset with no units. -->
+<!-- chainmail-board.html · v0.10.11 · Phase guidance (enforce-phases only): (1) a "▸ now/next" hint line under the phase tag narrating the current step; (2) a green "ready" halo on the side that may move this phase with the idle side dimmed to 40%, so whose-move reads off the board; (3) exactly ONE lit primary button per phase (gold + 2px ring + slow pulse) = the recommended action — Roll initiative / Fire missiles / Resolve melee / else Next — while the other gold forward buttons (Next, End round, elect) drop to a quiet outline, fixing the two-gold ambiguity. All three are inert in the advisory default (toolbar unchanged). Highlights the active side, not a single unit (holding is legal). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.10</title>
+<title>Chainmail — Battlefield · v0.10.11</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -44,6 +44,11 @@
   button.secondary.active { background: var(--ink); color: #f3ead4; }
   button.gold { background: var(--gold); color: var(--ink); }
   button.danger { background: var(--rear); }
+  button.lit { background: var(--gold); color: var(--ink); border: 2px solid #b8923a; animation: litpulse 1.6s ease-in-out infinite; }
+  button.lit:disabled { animation: none; }
+  button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--ink-soft); }
+  @keyframes litpulse { 0%, 100% { border-color: #b8923a; } 50% { border-color: #e7ca7e; } }
+  .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
   aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0;
@@ -172,8 +177,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Manual initiative</div>
-    <span class="version-tag">v0.10.10</span>
+    <div class="sub">Chainmail HTML Sim · Phase guidance</div>
+    <span class="version-tag">v0.10.11</span>
   </div>
 
   <div class="toolbar">
@@ -193,6 +198,7 @@
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
     <button id="btn-reset" class="danger">Reset board</button>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
+    <span class="phase-hint" id="phase-hint" hidden></span>
     <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
   </div>
 
@@ -363,7 +369,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.10';
+const SIM_VERSION = '0.10.11';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1796,11 +1802,18 @@ function renderUnit(u) {
   let outline = '';
   if (sel) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
   else if (tgt) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+  // Phase guidance (enforce only): ring the side that may move this phase (green,
+  // outer) and dim the side that may not, so "whose move" reads off the board.
+  const guideP = PHASES[state.phaseIdx];
+  const moverNow = (guideP.id === 'move1' || guideP.id === 'move2') ? moverForPhase(guideP.id, state.firstMover) : null;
+  const activeNow = state.settings.enforcePhases && moverNow === u.side;
+  const idleNow   = state.settings.enforcePhases && moverNow && moverNow !== u.side;
+  if (activeNow) outline += `<rect x="${xL-7}" y="${yT-7}" width="${w+14}" height="${h+14}" rx="4" fill="none" stroke="var(--front)" stroke-width="2.4"/>`;
 
   const T = typeById(u.type);
   const sv = statusVisual(u.status || 'ready');
   const fatigueOpacity = u.fatigued ? 0.85 : 1;
-  const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity;
+  const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity * (idleNow ? 0.4 : 1);
   const labelY = u.y + Math.max(b.w, b.h)/2 + 14;
   let badgeRow = 0;
   const chargeBadgeStr = u.charged
@@ -3864,6 +3877,39 @@ function onSettingRange(evt) {
   }
 }
 
+// One-line "what to do now" for the current phase (enforce-phases guidance).
+function phaseHint() {
+  const id = PHASES[state.phaseIdx].id;
+  const side = (s) => s === 'A' ? 'Side A' : 'Side B';
+  if (id === 'initiative') return state.initiativeRoll
+    ? `${side(state.firstMover)} moves first — advance to begin the move phase`
+    : 'Roll for first move, then choose to move first or last';
+  if (id === 'move1' || id === 'move2') return `${side(moverForPhase(id, state.firstMover))} moves the highlighted units, then advance`;
+  if (id === 'artillery') return 'Artillery fire (none in play yet) — advance';
+  if (id === 'missile') return 'Resolve missile fire for both sides, then advance';
+  if (id === 'melee') return 'Resolve all melees, then end the turn';
+  return '';
+}
+// The single recommended action button for the current phase (the one that lights up).
+function primaryActionId() {
+  const id = PHASES[state.phaseIdx].id;
+  if (id === 'initiative') return state.initiativeRoll ? 'btn-end-side' : 'btn-roll-init';
+  if (id === 'missile') return 'btn-missile';
+  if (id === 'melee') return 'btn-melee';
+  return 'btn-end-side';   // move/artillery → advancing is the forward action
+}
+// Light exactly one primary button per phase and dampen the other gold forward
+// buttons, so the sequence reads at a glance. Advisory mode leaves the toolbar as-is.
+function applyPhaseEmphasis() {
+  const ids = ['btn-melee','btn-missile','btn-roll-init','btn-elect-order','btn-end-side','btn-end-round'];
+  ids.forEach(id => $('#'+id).classList.remove('lit','quiet'));
+  if (!state.settings.enforcePhases) return;
+  const primary = primaryActionId();
+  $('#'+primary).classList.add('lit');
+  ['btn-end-side','btn-end-round','btn-elect-order'].forEach(id => {
+    if (id !== primary) $('#'+id).classList.add('quiet');
+  });
+}
 function renderTurnUI() {
   const ph = PHASES[state.phaseIdx];
   const mover = moverForPhase(ph.id, state.firstMover);
@@ -3897,6 +3943,12 @@ function renderTurnUI() {
     const winner = state.initiativeRoll.winner;
     electBtn.textContent = state.firstMover === winner ? `${winner} moves last` : `${winner} moves first`;
   }
+  // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
+  const hintEl = $('#phase-hint');
+  const hint = state.settings.enforcePhases ? phaseHint() : '';
+  hintEl.textContent = hint ? `▸ ${hint}` : '';
+  hintEl.hidden = !hint;
+  applyPhaseEmphasis();
   updateButtons();
 }
 
@@ -4182,6 +4234,21 @@ renderBoard();
     console.assert(state.initiativeRoll === null && PHASES[state.phaseIdx].id === 'initiative',
       'a new turn begins at the initiative phase, unrolled');
     state.initiativeRoll = _ir; state.firstMover = _fm; state.phaseIdx = _pi; }
+
+  // Phase guidance: the hint text and the single lit button track the phase.
+  { const _pi = state.phaseIdx, _ir = state.initiativeRoll, _fm = state.firstMover;
+    state.firstMover = 'A';
+    state.phaseIdx = 0; state.initiativeRoll = null;
+    console.assert(primaryActionId() === 'btn-roll-init' && /Roll for first move/.test(phaseHint()), 'initiative unrolled → Roll is the lit button');
+    state.initiativeRoll = { a:5, b:3, winner:'A' };
+    console.assert(primaryActionId() === 'btn-end-side', 'initiative rolled → advance is the lit button');
+    state.phaseIdx = 4;
+    console.assert(primaryActionId() === 'btn-missile' && /missile fire/i.test(phaseHint()), 'missile phase → Fire missiles is lit');
+    state.phaseIdx = 5;
+    console.assert(primaryActionId() === 'btn-melee' && /melee/i.test(phaseHint()), 'melee phase → Resolve melee is lit');
+    state.phaseIdx = 1;
+    console.assert(primaryActionId() === 'btn-end-side' && /Side A moves/.test(phaseHint()), 'move phase → advance is lit, hint names the mover');
+    state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; }
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
