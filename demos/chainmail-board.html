@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.8 · Measure tool (free-standing ruler): toggle (Measure button / `m`) a pre-decision range check. Click to anchor — snaps to a unit's centre if you click a unit, else to the 1″ grid when snap is on — the gold ruler then follows the cursor live with an inch readout (1″ = 10 yds); a second click locks the far end, a third starts over, esc clears. Mutually exclusive with dragging (anchors instead of moving) and never touches the move budget. Built on v0.10.7 (= the v0.10.6 fire-gate content, re-stamped). -->
+<!-- chainmail-board.html · v0.10.10 · Manual initiative: a new turn (and a reset/empty board) now begins at the initiative phase UNROLLED instead of auto-rolling. A gold "Roll initiative" button (shown only in the initiative phase, pre-roll) casts the dice via rollInitiativeAction (undoable); the "Winner moves last" election button appears only after the roll. startTurnInitiative no longer rolls — it just sets phaseIdx 0, initiativeRoll null, firstMover A as a neutral default. Fixes the bogus Turn 1 roll on reset with no units. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.8</title>
+<title>Chainmail — Battlefield · v0.10.10</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -172,17 +172,20 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Measure tool</div>
-    <span class="version-tag">v0.10.8</span>
+    <div class="sub">Chainmail HTML Sim · Manual initiative</div>
+    <span class="version-tag">v0.10.10</span>
   </div>
 
   <div class="toolbar">
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-end-side" class="gold">Next phase ▸</button>
+    <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
     <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
     <button id="btn-end-round" class="gold">End round</button>
     <button id="btn-clear-sel" class="secondary">Clear selection</button>
+    <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
+    <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
     <button id="btn-reset-view" class="secondary">Reset view</button>
     <button id="btn-grid" class="secondary">Grid: off</button>
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
@@ -306,6 +309,8 @@
       <tr><td>m</td><td>Measure tool — click to anchor (snaps to a unit's centre, or the grid when snap is on), the ruler follows the cursor, click again to lock; reads inches. esc clears the line</td></tr>
       <tr><td>delete</td><td>Remove selected unit</td></tr>
       <tr><td>esc</td><td>Clear selection / close menus</td></tr>
+      <tr><td>ctrl + z</td><td>Undo last action (drag, fire, melee, spawn, delete, phase…); runs of nudges/rotations undo as one step</td></tr>
+      <tr><td>ctrl + shift + z &nbsp; / &nbsp; ctrl + y</td><td>Redo</td></tr>
       <tr><td>?</td><td>Open this reference</td></tr>
       <tr><td>right-click</td><td>Per-unit context menu (restore, reshape, etc.)</td></tr>
     </table>
@@ -358,7 +363,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.8';
+const SIM_VERSION = '0.10.10';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -377,6 +382,18 @@ function mulberry32(seed) {
 }
 const d6      = (rng) => 1 + Math.floor(rng() * 6);
 const roll2d6 = (rng) => { const a = d6(rng), b = d6(rng); return { a, b, sum: a + b }; };
+
+// State-backed mulberry32: the dice counter lives in state.rngSeed (plain data),
+// so an undo snapshot captures the exact stream position and a restored turn
+// re-rolls identically. state.rng points at this; mulberry32() is kept for
+// callers that want a self-contained generator (e.g. tests).
+function nextRandom() {
+  state.rngSeed = (state.rngSeed + 0x6D2B79F5) >>> 0;
+  let t = state.rngSeed;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
 
 /* === B. DATA =========================================================== */
 const TYPES = Object.freeze([
@@ -1244,7 +1261,8 @@ const state = {
     snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
   },
   engagements: [],   // { aId, dId, round, startTurn }
-  rng: mulberry32(Date.now() & 0xffff),
+  rngSeed: ((Date.now() & 0xffffffff) >>> 0) || 1,   // mulberry32 counter; plain data so undo can restore the dice stream
+  rng: nextRandom,
 };
 
 /* === E. GEOMETRY ======================================================= */
@@ -2115,10 +2133,13 @@ function onUnitMouseDown(evt, unitId) {
   if (!canSideMoveNow(u.side)) { renderBoard(); return; }
   // Begin drag
   const pt = svgPoint(evt);
+  const dragTag = 'drag:' + u.id + ':' + Date.now();
+  pushUndo(dragTag);
   state.dragging = {
     unitId, originX: u.x, originY: u.y,
     grabOffsetX: pt.x - u.x, grabOffsetY: pt.y - u.y,
     movedBefore: u.movedThisTurn || 0,   // Slice 8A: distance already spent this turn before this drag
+    undoTag: dragTag,                    // dropped on mouseup if the unit never actually moved
   };
   renderBoard();
 }
@@ -2178,6 +2199,8 @@ function onBoardMouseUp() {
         // Slice 8A: add this drag's straight-line distance to the turn total.
         u.movedThisTurn = (state.dragging.movedBefore || 0) + pxToInches(distPx);
         u.acted.moved = true;
+      } else {
+        discardUndo(state.dragging.undoTag);   // a click, not a move — no undo step
       }
     }
     state.dragging = null;
@@ -2249,6 +2272,87 @@ function renderMeasure() {
     </g>
   `;
 }
+/* === Undo / redo (action-level snapshots) ============================= */
+// Each user action snapshots the prior game state before mutating; undo swaps
+// the live state with the top of the stack, redo reverses it. The snapshot is
+// deep game state only (units, selection, turn/phase, engagements) plus the RNG
+// seed and the combat-log HTML, so a restored turn re-rolls identically and the
+// log rolls back too. View prefs, settings, and transient interaction (drag /
+// pan / measure) are deliberately NOT snapshotted. Runs of same-target nudges or
+// rotations coalesce into a single step via the tag, so one undo reverses the run.
+const UNDO_CAP = 40;
+const UNDO_COALESCE = /^(nudge|rotate):/;
+state.undoStack = [];
+state.redoStack = [];
+state._lastUndoTag = null;
+state._suppressUndo = false;   // set while a command runs nested mutators (e.g. ctx → rotateUnit) so only the outer snapshot is taken
+
+function captureSnapshot() {
+  return {
+    units: structuredClone(state.units),
+    engagements: structuredClone(state.engagements),
+    selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
+    nextId: state.nextId, turn: state.turn, activeSide: state.activeSide,
+    phaseIdx: state.phaseIdx, firstMover: state.firstMover,
+    initiativeRoll: state.initiativeRoll ? { ...state.initiativeRoll } : null,
+    rngSeed: state.rngSeed,
+    logHtml: $('#log').innerHTML,
+  };
+}
+function applySnapshot(s) {
+  state.units = structuredClone(s.units);
+  state.engagements = structuredClone(s.engagements);
+  state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
+  state.nextId = s.nextId; state.turn = s.turn; state.activeSide = s.activeSide;
+  state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
+  state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
+  state.rngSeed = s.rngSeed;
+  $('#log').innerHTML = s.logHtml;
+  state.dragging = null; state.panning = null;   // drop any in-flight interaction
+}
+// Snapshot the pre-action state. Consecutive same-target nudge/rotate runs
+// collapse (one undo reverses the whole run). Any push clears the redo stack.
+function pushUndo(tag) {
+  if (state._suppressUndo) return;
+  if (tag && UNDO_COALESCE.test(tag) && tag === state._lastUndoTag && state.undoStack.length) return;
+  const snap = captureSnapshot();
+  snap._tag = tag || null;
+  state.undoStack.push(snap);
+  if (state.undoStack.length > UNDO_CAP) state.undoStack.shift();
+  state.redoStack.length = 0;
+  state._lastUndoTag = snap._tag;
+  syncUndoButtons();
+}
+// Drop the most recent snapshot if it carries this tag — used when a drag began
+// but the unit never actually moved, so no undo step should remain.
+function discardUndo(tag) {
+  const st = state.undoStack;
+  if (st.length && st[st.length - 1]._tag === tag) {
+    st.pop();
+    state._lastUndoTag = st.length ? st[st.length - 1]._tag : null;
+    syncUndoButtons();
+  }
+}
+function undo() {
+  if (!state.undoStack.length) return;
+  state.redoStack.push(captureSnapshot());
+  applySnapshot(state.undoStack.pop());
+  state._lastUndoTag = null;                 // a new run starts fresh after an undo
+  renderTurnUI(); renderBoard(); syncUndoButtons();
+}
+function redo() {
+  if (!state.redoStack.length) return;
+  state.undoStack.push(captureSnapshot());
+  applySnapshot(state.redoStack.pop());
+  state._lastUndoTag = null;
+  renderTurnUI(); renderBoard(); syncUndoButtons();
+}
+function syncUndoButtons() {
+  const ub = $('#btn-undo'), rb = $('#btn-redo');
+  if (ub) ub.disabled = state.undoStack.length === 0;
+  if (rb) rb.disabled = state.redoStack.length === 0;
+}
+
 // Slice 8A: arrow-key nudge that respects the move-allowance accounting. In
 // hard-enforce mode a nudge that would exceed the remaining allowance is blocked
 // (returns false); otherwise the step distance is added to movedThisTurn.
@@ -2256,6 +2360,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   if (!canSideMoveNow(u.side)) return false;   // Slice 8D phase gate
   const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
   if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
+  pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
   u.movedThisTurn = (u.movedThisTurn || 0) + stepIn;
@@ -2273,6 +2378,7 @@ function rotateUnit(u, deltaDeg) {
     const projFacingCost = facingCostInches(u, angDist(newFacing, u.turnStartFacing));
     if ((u.movedThisTurn || 0) + projFacingCost > moveAllowanceOf(u) + 1e-9) return false;
   }
+  pushUndo('rotate:' + u.id);   // a run of rotations coalesces into one undo step
   u.facing = newFacing;
   // A costed pivot counts as a move-phase action (shares the move budget, so it
   // feeds fatigue / dragon-rekindle the same way translation does).
@@ -2280,6 +2386,15 @@ function rotateUnit(u, deltaDeg) {
   return true;
 }
 function onKeyDown(evt) {
+  // Undo / redo (global). Let native text-undo win inside form fields.
+  const typingField = /^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName);
+  if (!typingField && (evt.ctrlKey || evt.metaKey) && (evt.key === 'z' || evt.key === 'Z')) {
+    evt.shiftKey ? redo() : undo();
+    evt.preventDefault(); return;
+  }
+  if (!typingField && (evt.ctrlKey || evt.metaKey) && (evt.key === 'y' || evt.key === 'Y')) {
+    redo(); evt.preventDefault(); return;
+  }
   // Zoom hotkeys are global (selection-independent)
   if (evt.key === '+' || evt.key === '=') {
     const rect = $('#board').getBoundingClientRect();
@@ -2317,6 +2432,7 @@ function onKeyDown(evt) {
   }
   else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
   else if (evt.key === 'Delete' || evt.key === 'Backspace') {
+    pushUndo('delete');
     state.units = state.units.filter(x => x.id !== u.id);
     state.selectedId = null;
   }
@@ -2451,6 +2567,7 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  pushUndo('melee');
   if (activeFigures(a) === 0) {
     appendTurn(`Melee resolver — skipped`,
       `<div class="step">${typeById(a.type).name} (${a.side}) is fully paralyzed — no figures can strike.</div>`);
@@ -3073,6 +3190,7 @@ function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
+  pushUndo('fire');
   if (activeFigures(a) === 0) {
     appendTurn(`Missile — skipped`,
       `<div class="step">${typeById(a.type).name} (${a.side}) is fully paralyzed — no figures can fire.</div>`);
@@ -3456,6 +3574,7 @@ function onResolveDragonBreath(dragon) {
 }
 
 function spawnUnit() {
+  pushUndo('spawn');
   const side = $('#f-side').value;
   const kind = $('#f-kind').value;
   const type = $('#f-type').value;
@@ -3570,6 +3689,8 @@ function onContextMenuAction(evt) {
   if (!act) return;
   const u = state.units.find(x => x.id === state.ctxUnitId);
   if (!u) { closeContextMenu(); return; }
+  pushUndo('ctx');
+  state._suppressUndo = true;   // the single 'ctx' snapshot covers nested calls (e.g. rotate-90 → rotateUnit)
   if (act === 'restore') {
     u.count = u.startCount;
     u.destroyed = false;
@@ -3666,6 +3787,7 @@ function onContextMenuAction(evt) {
     if (state.selectedId === u.id) state.selectedId = null;
     if (state.targetId === u.id) state.targetId = null;
   }
+  state._suppressUndo = false;
   closeContextMenu();
   renderBoard();
 }
@@ -3681,6 +3803,9 @@ function resetBoard() {
   state.turn = 1;
   state.activeSide = 'A';
   state.engagements = [];
+  state.undoStack = []; state.redoStack = []; state._lastUndoTag = null; state._suppressUndo = false;
+  state.rngSeed = ((Date.now() & 0xffffffff) >>> 0) || 1;   // fresh dice stream for a new game
+  syncUndoButtons();
   startTurnInitiative();   // Slice 8D: fresh initiative for turn 1
   $('#log').innerHTML = '';
   renderTurnUI();
@@ -3750,10 +3875,10 @@ function renderTurnUI() {
   let body;
   if (ph.id === 'initiative') {
     const r = state.initiativeRoll;
-    const elected = state.firstMover !== (r ? r.winner : 'A') ? ' (elects to move last)' : '';
+    const elected = r && state.firstMover !== r.winner ? ' (elects to move last)' : '';
     body = r
       ? `Initiative — ${sideTag('A')} ${r.a} vs ${sideTag('B')} ${r.b}: ${sideTag(r.winner)} wins${elected} → ${sideTag(state.firstMover)} moves first`
-      : `Initiative`;
+      : `Initiative — roll for first move`;
   } else if (mover) {
     body = `${ph.label} · ${sideTag(mover)}`;
   } else {
@@ -3763,39 +3888,56 @@ function renderTurnUI() {
   // Advance button: shows where the next press lands.
   const atMelee = state.phaseIdx >= PHASES.length - 1;
   $('#btn-end-side').textContent = atMelee ? 'Next turn ▸' : `Next: ${PHASES[state.phaseIdx + 1].label} ▸`;
-  // Election button only during initiative.
+  // Initiative phase: Roll button before the dice are cast, election after.
+  const inInit = ph.id === 'initiative';
+  $('#btn-roll-init').hidden = !inInit || !!state.initiativeRoll;
   const electBtn = $('#btn-elect-order');
-  electBtn.hidden = ph.id !== 'initiative';
+  electBtn.hidden = !inInit || !state.initiativeRoll;
   if (!electBtn.hidden) {
-    const winner = state.initiativeRoll ? state.initiativeRoll.winner : 'A';
+    const winner = state.initiativeRoll.winner;
     electBtn.textContent = state.firstMover === winner ? `${winner} moves last` : `${winner} moves first`;
   }
   updateButtons();
 }
 
-// Roll initiative for the start of a turn; the winner moves first by default
-// (the player may then elect to move last via the election button).
+// Begin a turn at the initiative phase, UNROLLED. The player rolls on demand
+// via the Roll-initiative button (rollInitiativeAction) — so a freshly reset or
+// empty board no longer shows a meaningless auto-roll. 'A' is a neutral default
+// until the dice are cast (matters only if phases are advanced without rolling).
 function startTurnInitiative() {
+  state.initiativeRoll = null;
+  state.firstMover = 'A';
+  state.phaseIdx = 0;
+}
+// Roll initiative for the current turn (manual — Turn sequence p.9 §1). The
+// winner moves first by default; they may then elect to move last. Undoable.
+function rollInitiativeAction() {
+  if (PHASES[state.phaseIdx].id !== 'initiative' || state.initiativeRoll) return;
+  pushUndo('initiative');
   state.initiativeRoll = rollInitiative(state.rng);
   state.firstMover = state.initiativeRoll.winner;
-  state.phaseIdx = 0;
+  renderTurnUI();
+  renderBoard();
 }
 // "Next phase ▸" — step the sequence; advancing past melee ends the round.
 function advancePhase() {
   if (state.phaseIdx >= PHASES.length - 1) { endRound(); return; }
+  pushUndo('phase');
   state.phaseIdx += 1;
   renderTurnUI();
   renderBoard();
 }
 // Initiative election (p.9 §1): the winner may choose to move first or last.
 function toggleInitiativeOrder() {
-  if (PHASES[state.phaseIdx].id !== 'initiative') return;
+  if (PHASES[state.phaseIdx].id !== 'initiative' || !state.initiativeRoll) return;
+  pushUndo('initiative');
   state.firstMover = state.firstMover === 'A' ? 'B' : 'A';
   renderTurnUI();
   renderBoard();
 }
 
 function endRound() {
+  pushUndo('endRound');
   state.turn += 1;
   for (const u of state.units) {
     releaseExpiredParalysis(u, state.turn);
@@ -3824,6 +3966,7 @@ function endRound() {
 
 $('#btn-end-side').addEventListener('click', advancePhase);
 $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
+$('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', onResolveMelee);
@@ -3832,6 +3975,8 @@ $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; s
 $('#btn-reset-view').addEventListener('click', resetView);
 $('#btn-grid').addEventListener('click', toggleGrid);
 $('#btn-measure').addEventListener('click', toggleMeasure);
+$('#btn-undo').addEventListener('click', undo);
+$('#btn-redo').addEventListener('click', redo);
 $('#btn-settings').addEventListener('click', openSettings);
 $('#btn-help').addEventListener('click', openHelp);
 $('#new-unit-toggle').addEventListener('click', toggleNewUnit);
@@ -3873,6 +4018,7 @@ document.addEventListener('keydown', onKeyDown);
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 syncMeasureButton();
+syncUndoButtons();
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
@@ -4005,6 +4151,37 @@ renderBoard();
   // Measure tool: the readout is the true inch distance between the two points
   // (3-4-5 in px → 5″), independent of pan/zoom (svgPoint already de-projects).
   console.assert(Math.abs(pxToInches(Math.hypot(inchesToPx(3), inchesToPx(4))) - 5) < 1e-9, 'measure reads true inch distance (3-4-5 → 5″)');
+
+  // Undo/redo core guarantee: the RNG counter lives in state.rngSeed, so
+  // restoring it replays the exact dice stream (reproducible undo→redo).
+  const _seed0 = state.rngSeed;
+  const stream1 = [d6(state.rng), d6(state.rng), d6(state.rng), d6(state.rng)];
+  state.rngSeed = _seed0;
+  const stream2 = [d6(state.rng), d6(state.rng), d6(state.rng), d6(state.rng)];
+  console.assert(stream1.join() === stream2.join(), 'restoring rngSeed replays the exact dice stream');
+  const _mb = mulberry32(0x1234abcd); state.rngSeed = 0x1234abcd;
+  console.assert(Math.abs(nextRandom() - _mb()) < 1e-12 && Math.abs(nextRandom() - _mb()) < 1e-12,
+    'state-backed nextRandom matches the mulberry32 stream');
+  state.rngSeed = _seed0;   // leave the live RNG exactly where the tests found it
+  // Coalescing: same-target nudge/rotate runs collapse, discrete actions never do.
+  // Run on throwaway stacks so startup undo history stays empty.
+  const _us = state.undoStack, _rs = state.redoStack, _lt = state._lastUndoTag;
+  state.undoStack = []; state.redoStack = []; state._lastUndoTag = null;
+  pushUndo('nudge:1'); pushUndo('nudge:1'); pushUndo('nudge:1');
+  console.assert(state.undoStack.length === 1, 'a run of same-unit nudges is one undo step');
+  pushUndo('nudge:2');
+  console.assert(state.undoStack.length === 2, 'a different unit starts a new undo step');
+  pushUndo('fire'); pushUndo('fire');
+  console.assert(state.undoStack.length === 4, 'discrete actions never coalesce');
+  state.undoStack = _us; state.redoStack = _rs; state._lastUndoTag = _lt; syncUndoButtons();
+
+  // Initiative is manual now: starting a turn leaves it unrolled (no auto-roll
+  // onto an empty/reset board). Self-restoring so it doesn't disturb live state.
+  { const _ir = state.initiativeRoll, _fm = state.firstMover, _pi = state.phaseIdx;
+    startTurnInitiative();
+    console.assert(state.initiativeRoll === null && PHASES[state.phaseIdx].id === 'initiative',
+      'a new turn begins at the initiative phase, unrolled');
+    state.initiativeRoll = _ir; state.firstMover = _fm; state.phaseIdx = _pi; }
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
