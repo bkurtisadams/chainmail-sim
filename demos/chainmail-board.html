@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.17 · Phase-nav arrows: the phase rail is now bracketed by ◀/▶ buttons. ▶ (btn-phase-fwd) advances within the turn and is disabled at Melee (the last phase) — End turn still crosses the turn boundary. ◀ (btn-phase-back, new phaseBack()) steps back one phase within the turn, disabled at Init; it is navigation, not undo, so it re-opens an earlier phase without reverting actions or dice (still undoable via the stack). The standalone "Next phase ▸" button (btn-end-side) is removed; its role folds into ▶. Lit emphasis retargets to ▶ for the move/artillery phases and initiative-after-roll. Net -1 button. -->
+<!-- chainmail-board.html · v0.10.18 · Fix initiative election button wording. It was the only turn-flow button phrased as a statement ("B moves last"), which read as a contradictory status right after B won — every sibling is an imperative ("Roll initiative", "Resolve melee", "End turn"). Now imperative and toggle-true: with the winner moving first by default it reads "Move B last" (the alternative the click performs), flipping to "Move B first" once elected last. Added a hover title naming the winner and current order. Behavior unchanged — firstMover still = winner on roll, and the phase tag still reports the true order. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.17</title>
+<title>Chainmail — Battlefield · v0.10.18</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,13 +187,13 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Phase-nav arrows</div>
-    <span class="version-tag">v0.10.17</span>
+    <div class="sub">Chainmail HTML Sim · Election label fix</div>
+    <span class="version-tag">v0.10.18</span>
   </div>
 
   <div class="toolbar">
     <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
-    <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
+    <button id="btn-elect-order" class="gold" hidden>Move winner last</button>
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-end-round" class="gold">End turn</button>
@@ -389,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.17';
+const SIM_VERSION = '0.10.18';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -4032,7 +4032,9 @@ function renderTurnUI() {
   electBtn.hidden = !inInit || !state.initiativeRoll;
   if (!electBtn.hidden) {
     const winner = state.initiativeRoll.winner;
-    electBtn.textContent = state.firstMover === winner ? `${winner} moves last` : `${winner} moves first`;
+    const winnerFirst = state.firstMover === winner;
+    electBtn.textContent = winnerFirst ? `Move ${winner} last` : `Move ${winner} first`;
+    electBtn.title = `${winner} won initiative — currently moves ${winnerFirst ? 'first' : 'last'}; click to switch`;
   }
   // Phase rail: the full p.9 sequence with the current step lit, prior steps
   // marked done. Always shown — a richer view of the phase the tag names.
