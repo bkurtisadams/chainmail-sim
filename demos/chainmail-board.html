@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.12 · Header phase tracker: a phase-rail showing the full p.9 turn sequence — Init › First › Counter › Artillery › Missile › Melee — with the current step lit gold, prior steps marked done, upcoming faint. Always shown (a richer view of the phase the tag already names), driven by state.phaseIdx via the index-aligned PHASE_RAIL constant. Completes the header guidance set (tracker = where you are; hint line = what to do; lit button = what to press). -->
+<!-- chainmail-board.html · v0.10.13 · Melee-phase hand-off + activeSide cleanup. Hand-off: in the melee phase the lit primary button tracks what is LEFT to do — meleesPending() (any opposing pair in contact not yet both fought this turn) keeps "Resolve melee" lit and the hint reads "resolve all melees"; once none remain, the gold hands off to "End round" with hint "Melees resolved — end the turn". btn-melee click now refreshes the guidance so the hand-off is live. Cleanup: removed the vestigial state.activeSide (written on init/reset/snapshot, never read) from all four sites. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.12</title>
+<title>Chainmail — Battlefield · v0.10.13</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -184,8 +184,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Phase tracker</div>
-    <span class="version-tag">v0.10.12</span>
+    <div class="sub">Chainmail HTML Sim · Melee hand-off</div>
+    <span class="version-tag">v0.10.13</span>
   </div>
 
   <div class="toolbar">
@@ -377,7 +377,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.12';
+const SIM_VERSION = '0.10.13';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1259,7 +1259,6 @@ const state = {
   showGrid: false,
   ctxUnitId: null,
   turn: 1,
-  activeSide: 'A',
   phaseIdx: 0,          // Slice 8D: index into PHASES
   firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
   initiativeRoll: null, // { a, b, winner } for display
@@ -2315,7 +2314,7 @@ function captureSnapshot() {
     units: structuredClone(state.units),
     engagements: structuredClone(state.engagements),
     selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
-    nextId: state.nextId, turn: state.turn, activeSide: state.activeSide,
+    nextId: state.nextId, turn: state.turn,
     phaseIdx: state.phaseIdx, firstMover: state.firstMover,
     initiativeRoll: state.initiativeRoll ? { ...state.initiativeRoll } : null,
     rngSeed: state.rngSeed,
@@ -2326,7 +2325,7 @@ function applySnapshot(s) {
   state.units = structuredClone(s.units);
   state.engagements = structuredClone(s.engagements);
   state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
-  state.nextId = s.nextId; state.turn = s.turn; state.activeSide = s.activeSide;
+  state.nextId = s.nextId; state.turn = s.turn;
   state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
   state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
   state.rngSeed = s.rngSeed;
@@ -3824,7 +3823,6 @@ function resetBoard() {
   syncMeasureButton();
   state.nextId = 1;
   state.turn = 1;
-  state.activeSide = 'A';
   state.engagements = [];
   state.undoStack = []; state.redoStack = []; state._lastUndoTag = null; state._suppressUndo = false;
   state.rngSeed = ((Date.now() & 0xffffffff) >>> 0) || 1;   // fresh dice stream for a new game
@@ -3897,15 +3895,27 @@ function phaseHint() {
   if (id === 'move1' || id === 'move2') return `${side(moverForPhase(id, state.firstMover))} moves the highlighted units, then advance`;
   if (id === 'artillery') return 'Artillery fire (none in play yet) — advance';
   if (id === 'missile') return 'Resolve missile fire for both sides, then advance';
-  if (id === 'melee') return 'Resolve all melees, then end the turn';
+  if (id === 'melee') return meleesPending() ? 'Resolve all melees, then end the turn' : 'Melees resolved — end the turn';
   return '';
+}
+// True while at least one opposing pair is in melee contact and hasn't both
+// resolved its melee this turn — i.e. melees remain to be fought.
+function meleesPending() {
+  const live = state.units.filter(u => !u.destroyed);
+  for (let i = 0; i < live.length; i++)
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i], b = live[j];
+      if (a.side !== b.side && inMeleeContact(a, b) && !(a.acted?.fought && b.acted?.fought)) return true;
+    }
+  return false;
 }
 // The single recommended action button for the current phase (the one that lights up).
 function primaryActionId() {
   const id = PHASES[state.phaseIdx].id;
   if (id === 'initiative') return state.initiativeRoll ? 'btn-end-side' : 'btn-roll-init';
   if (id === 'missile') return 'btn-missile';
-  if (id === 'melee') return 'btn-melee';
+  // Melee hands off: resolve while melees remain, then End round becomes the action.
+  if (id === 'melee') return meleesPending() ? 'btn-melee' : 'btn-end-round';
   return 'btn-end-side';   // move/artillery → advancing is the forward action
 }
 // Light exactly one primary button per phase and dampen the other gold forward
@@ -4038,7 +4048,7 @@ $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
-$('#btn-melee').addEventListener('click', onResolveMelee);
+$('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', onResolveMissile);
 $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; state.targetId = null; renderBoard(); });
 $('#btn-reset-view').addEventListener('click', resetView);
@@ -4253,8 +4263,8 @@ renderBoard();
     state.initiativeRoll = _ir; state.firstMover = _fm; state.phaseIdx = _pi; }
 
   // Phase guidance: the hint text and the single lit button track the phase.
-  { const _pi = state.phaseIdx, _ir = state.initiativeRoll, _fm = state.firstMover;
-    state.firstMover = 'A';
+  { const _pi = state.phaseIdx, _ir = state.initiativeRoll, _fm = state.firstMover, _u = state.units;
+    state.firstMover = 'A'; state.units = [];
     state.phaseIdx = 0; state.initiativeRoll = null;
     console.assert(primaryActionId() === 'btn-roll-init' && /Roll for first move/.test(phaseHint()), 'initiative unrolled → Roll is the lit button');
     state.initiativeRoll = { a:5, b:3, winner:'A' };
@@ -4262,10 +4272,10 @@ renderBoard();
     state.phaseIdx = 4;
     console.assert(primaryActionId() === 'btn-missile' && /missile fire/i.test(phaseHint()), 'missile phase → Fire missiles is lit');
     state.phaseIdx = 5;
-    console.assert(primaryActionId() === 'btn-melee' && /melee/i.test(phaseHint()), 'melee phase → Resolve melee is lit');
+    console.assert(primaryActionId() === 'btn-end-round' && /end the turn/i.test(phaseHint()), 'melee with no contacts → hands off to End round');
     state.phaseIdx = 1;
     console.assert(primaryActionId() === 'btn-end-side' && /Side A moves/.test(phaseHint()), 'move phase → advance is lit, hint names the mover');
-    state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; }
+    state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; state.units = _u; }
 
   // Arc of fire (Slice 7A): foot 45° each side; horse 180° left + 45° right.
   const footFirer = { kind:'individual', mounted:false, x:0, y:0, facing:0 };
