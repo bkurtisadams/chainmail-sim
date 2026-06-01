@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.16 · Header tidy: toolbar grouped into four clusters (turn flow · edit · view · app) with thin separators, leading with turn flow; "End round" relabeled "End turn" to match the Turn N counter and the melee hand-off hint (endRound fn unchanged); "Reset view" relabeled "Recenter" to kill the Reset/Reset-board collision; "Clear selection" moved into the edit cluster beside Undo/Redo. Labels/order/grouping only — no id or logic changes, so all listeners and the lit/quiet emphasis still bind. -->
+<!-- chainmail-board.html · v0.10.17 · Phase-nav arrows: the phase rail is now bracketed by ◀/▶ buttons. ▶ (btn-phase-fwd) advances within the turn and is disabled at Melee (the last phase) — End turn still crosses the turn boundary. ◀ (btn-phase-back, new phaseBack()) steps back one phase within the turn, disabled at Init; it is navigation, not undo, so it re-opens an earlier phase without reverting actions or dice (still undoable via the stack). The standalone "Next phase ▸" button (btn-end-side) is removed; its role folds into ▶. Lit emphasis retargets to ▶ for the move/artillery phases and initiative-after-roll. Net -1 button. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.16</title>
+<title>Chainmail — Battlefield · v0.10.17</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -50,7 +50,9 @@
   button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--ink-soft); }
   @keyframes litpulse { 0%, 100% { border-color: #b8923a; } 50% { border-color: #e7ca7e; } }
   .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
-  .toolbar .phase-rail { flex-basis: 100%; display: flex; align-items: center; gap: 3px; margin-top: 2px; }
+  .toolbar .phase-rail { display: flex; align-items: center; gap: 3px; }
+  .toolbar .phase-nav { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .toolbar .phase-arrow { font-size: 13px; letter-spacing: 0; padding: 3px 9px; line-height: 1; }
   .phase-rail .step { font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase; font-weight: 700;
     padding: 2px 7px; border-radius: 3px; color: var(--ink-soft); background: rgba(255,250,230,0.5);
     border: 0.5px solid rgba(0,0,0,0.16); }
@@ -185,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Header tidy</div>
-    <span class="version-tag">v0.10.16</span>
+    <div class="sub">Chainmail HTML Sim · Phase-nav arrows</div>
+    <span class="version-tag">v0.10.17</span>
   </div>
 
   <div class="toolbar">
@@ -194,7 +196,6 @@
     <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
-    <button id="btn-end-side" class="gold">Next phase ▸</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -210,7 +211,11 @@
     <button id="btn-reset" class="danger">Reset board</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
-    <span class="phase-rail" id="phase-rail"></span>
+    <span class="phase-nav">
+      <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
+      <span class="phase-rail" id="phase-rail"></span>
+      <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
+    </span>
     <span class="phase-hint" id="phase-hint" hidden></span>
     <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
   </div>
@@ -384,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.16';
+const SIM_VERSION = '0.10.17';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -3952,11 +3957,11 @@ function phaseHint() {
   const id = PHASES[state.phaseIdx].id;
   const side = (s) => s === 'A' ? 'Side A' : 'Side B';
   if (id === 'initiative') return state.initiativeRoll
-    ? `${side(state.firstMover)} moves first — advance to begin the move phase`
+    ? `${side(state.firstMover)} moves first — advance ▶ to begin the move phase`
     : 'Roll for first move, then choose to move first or last';
-  if (id === 'move1' || id === 'move2') return `${side(moverForPhase(id, state.firstMover))} moves the highlighted units, then advance`;
-  if (id === 'artillery') return 'Artillery fire (none in play yet) — advance';
-  if (id === 'missile') return 'Resolve missile fire for both sides, then advance';
+  if (id === 'move1' || id === 'move2') return `${side(moverForPhase(id, state.firstMover))} moves the highlighted units, then advance ▶`;
+  if (id === 'artillery') return 'Artillery fire (none in play yet) — advance ▶';
+  if (id === 'missile') return 'Resolve missile fire for both sides, then advance ▶';
   if (id === 'melee') return meleesPending() ? 'Resolve all melees, then end the turn' : 'Melees resolved — end the turn';
   return '';
 }
@@ -3974,21 +3979,21 @@ function meleesPending() {
 // The single recommended action button for the current phase (the one that lights up).
 function primaryActionId() {
   const id = PHASES[state.phaseIdx].id;
-  if (id === 'initiative') return state.initiativeRoll ? 'btn-end-side' : 'btn-roll-init';
+  if (id === 'initiative') return state.initiativeRoll ? 'btn-phase-fwd' : 'btn-roll-init';
   if (id === 'missile') return 'btn-missile';
-  // Melee hands off: resolve while melees remain, then End round becomes the action.
+  // Melee hands off: resolve while melees remain, then End turn becomes the action.
   if (id === 'melee') return meleesPending() ? 'btn-melee' : 'btn-end-round';
-  return 'btn-end-side';   // move/artillery → advancing is the forward action
+  return 'btn-phase-fwd';   // move/artillery → the forward arrow advances
 }
 // Light exactly one primary button per phase and dampen the other gold forward
 // buttons, so the sequence reads at a glance. Advisory mode leaves the toolbar as-is.
 function applyPhaseEmphasis() {
-  const ids = ['btn-melee','btn-missile','btn-roll-init','btn-elect-order','btn-end-side','btn-end-round'];
+  const ids = ['btn-melee','btn-missile','btn-roll-init','btn-elect-order','btn-phase-fwd','btn-end-round'];
   ids.forEach(id => $('#'+id).classList.remove('lit','quiet'));
   if (!state.settings.enforcePhases) return;
   const primary = primaryActionId();
   $('#'+primary).classList.add('lit');
-  ['btn-end-side','btn-end-round','btn-elect-order'].forEach(id => {
+  ['btn-end-round','btn-elect-order'].forEach(id => {
     if (id !== primary) $('#'+id).classList.add('quiet');
   });
 }
@@ -4013,9 +4018,13 @@ function renderTurnUI() {
     body = ph.label;
   }
   $('#phase').innerHTML = `Turn ${state.turn} · ${body}${enf ? ' · <span style="color:var(--rear)">enforced</span>' : ''}`;
-  // Advance button: shows where the next press lands.
+  // Phase arrows: forward advances within the turn (off at Melee — End turn crosses
+  // the boundary); back steps within the turn (off at Init). Titles name the target.
   const atMelee = state.phaseIdx >= PHASES.length - 1;
-  $('#btn-end-side').textContent = atMelee ? 'Next turn ▸' : `Next: ${PHASES[state.phaseIdx + 1].label} ▸`;
+  $('#btn-phase-back').disabled = state.phaseIdx === 0;
+  $('#btn-phase-fwd').disabled = atMelee;
+  $('#btn-phase-back').title = state.phaseIdx === 0 ? 'Start of turn' : `Back to ${PHASES[state.phaseIdx - 1].label}`;
+  $('#btn-phase-fwd').title = atMelee ? 'Last phase — use End turn' : `Advance to ${PHASES[state.phaseIdx + 1].label}`;
   // Initiative phase: Roll button before the dice are cast, election after.
   const inInit = ph.id === 'initiative';
   $('#btn-roll-init').hidden = !inInit || !!state.initiativeRoll;
@@ -4068,6 +4077,16 @@ function advancePhase() {
   renderTurnUI();
   renderBoard();
 }
+// Step back one phase within the turn (navigation, not undo: re-opens an earlier
+// phase without reverting actions or dice). Stops at Init — the turn boundary is
+// undo's job, not the back arrow's.
+function phaseBack() {
+  if (state.phaseIdx <= 0) return;
+  pushUndo('phase-back');
+  state.phaseIdx -= 1;
+  renderTurnUI();
+  renderBoard();
+}
 // Initiative election (p.9 §1): the winner may choose to move first or last.
 function toggleInitiativeOrder() {
   if (PHASES[state.phaseIdx].id !== 'initiative' || !state.initiativeRoll) return;
@@ -4107,7 +4126,8 @@ function endRound() {
   renderBoard();
 }
 
-$('#btn-end-side').addEventListener('click', advancePhase);
+$('#btn-phase-fwd').addEventListener('click', advancePhase);
+$('#btn-phase-back').addEventListener('click', phaseBack);
 $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
@@ -4342,14 +4362,25 @@ renderBoard();
     state.phaseIdx = 0; state.initiativeRoll = null;
     console.assert(primaryActionId() === 'btn-roll-init' && /Roll for first move/.test(phaseHint()), 'initiative unrolled → Roll is the lit button');
     state.initiativeRoll = { a:5, b:3, winner:'A' };
-    console.assert(primaryActionId() === 'btn-end-side', 'initiative rolled → advance is the lit button');
+    console.assert(primaryActionId() === 'btn-phase-fwd', 'initiative rolled → the forward arrow is the lit button');
     state.phaseIdx = 4;
     console.assert(primaryActionId() === 'btn-missile' && /missile fire/i.test(phaseHint()), 'missile phase → Fire missiles is lit');
     state.phaseIdx = 5;
     console.assert(primaryActionId() === 'btn-end-round' && /end the turn/i.test(phaseHint()), 'melee with no contacts → hands off to End round');
     state.phaseIdx = 1;
-    console.assert(primaryActionId() === 'btn-end-side' && /Side A moves/.test(phaseHint()), 'move phase → advance is lit, hint names the mover');
+    console.assert(primaryActionId() === 'btn-phase-fwd' && /Side A moves/.test(phaseHint()), 'move phase → the forward arrow is lit, hint names the mover');
     state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; state.units = _u; }
+
+  // Phase arrows: the forward arrow is the lit primary only mid-turn — never at
+  // Melee, where it is disabled (End turn crosses the boundary instead). Guards
+  // against ever lighting a disabled control.
+  { const _pi = state.phaseIdx, _ir = state.initiativeRoll, _u = state.units;
+    state.units = []; state.initiativeRoll = { a:5, b:3, winner:'A' };
+    state.phaseIdx = PHASES.length - 1;
+    console.assert(primaryActionId() !== 'btn-phase-fwd', 'melee → forward arrow is never the lit primary (it is disabled there)');
+    state.phaseIdx = 0; state.initiativeRoll = null;
+    console.assert(primaryActionId() !== 'btn-phase-fwd', 'initiative unrolled → forward arrow not lit (Roll comes first)');
+    state.phaseIdx = _pi; state.initiativeRoll = _ir; state.units = _u; }
 
   // Half-move pause point: half line, eligibility, predicate, and movement hold.
   console.assert(Math.abs(halfMoveIn({ type:'LF' }) - 6) < 1e-9, 'half-move of LF (12″) is 6″');
