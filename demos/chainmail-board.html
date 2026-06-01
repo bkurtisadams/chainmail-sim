@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.31 · Terrain resize handles. A selected region now shows 8 grips (4 corners + 4 edge mids) that drag to resize, rotation-aware. New pure helpers: terrainHandles(r) (grip world positions, respecting rot), terrainHandleAt(p,r,radPx) (hit-test), and resizeRect(rs,px,py,snap) — pins the edge/corner opposite the grip, projects the pointer into the rect's local frame, clamps to a ½″ minimum, and (with snap) rounds the dimension to whole inches while keeping the pinned edge fixed; edge grips resize one axis, corners both. Handles take priority over move/place on mousedown; resize drags drop their undo if size is unchanged; terrainResize clears on mode-off, reset, and snapshot restore. Hint updated. Resize is the last terrain authoring piece (place/move/rotate/delete shipped in v0.10.30). -->
+<!-- chainmail-board.html · v0.10.32 · One melee per turn (p.8). The Resolve-melee button previously only checked contact, so it could be clicked repeatedly to run unlimited rounds in a single turn. RAW resolves melee once per turn (step 6 of the move/counter-move sequence); a "melee continues" result carries the fight into the NEXT turn = next round. New canMeleeThisTurn(u) predicate (false once u.acted.fought is set) now gates the Resolve-melee button and guards onResolveMelee, which refuses a same-turn repeat with an explanatory log and takes no undo step. clearActed() on endRound re-arms it each turn, and the engagement round counter still increments across turns. The lone RAW same-turn repeat — a victorious charger following through into fresh contact (p.16) — remains deferred, so there is currently no path to a legitimate second melee in one turn. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.31</title>
+<title>Chainmail — Battlefield · v0.10.32</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain editing — resize handles</div>
-    <span class="version-tag">v0.10.31</span>
+    <div class="sub">Chainmail HTML Sim · One melee per turn</div>
+    <span class="version-tag">v0.10.32</span>
   </div>
 
   <div class="toolbar">
@@ -392,7 +392,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.31';
+const SIM_VERSION = '0.10.32';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1474,6 +1474,12 @@ function inMeleeContact(a, b) {
   const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
   return dist(a, b) <= range + aMax + bMax;
 }
+// One melee per turn (p.8 turn sequence — "Melees are resolved" is a single
+// step). A unit that has meleed this turn may not melee again until next turn;
+// the post-melee "melee continues" result carries the fight into the NEXT round =
+// next turn. The lone same-turn exception is a victorious charger following
+// through into fresh contact (p.16), which isn't automated yet.
+const canMeleeThisTurn = (u) => !(u && u.acted && u.acted.fought);
 // Edge-to-edge gap in inches (0 when footprints touch/overlap).
 function edgeGapInches(a, b) {
   const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
@@ -2391,7 +2397,7 @@ function updateButtons() {
   const splitFireCase   = !!(a && atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
   const passThroughCase = !!(a && d && canPassThroughFire(a, d));
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
-  $('#btn-melee').disabled = !(canAct && meleeOk && inMeleeContact(a, d));
+  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d));
   const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d);
   $('#btn-missile').disabled = !missileEnabled;
   $('#btn-missile').title =
@@ -3100,6 +3106,11 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  if (!canMeleeThisTurn(a)) {
+    appendTurn(`Melee — already fought`,
+      `<div class="step">${typeById(a.type).name} (${a.side}) has already meleed this turn. A melee is resolved once per turn (p.8) — the next round is next turn, so advance the turn to continue the fight. The only same-turn repeat is a victorious charger following through into fresh contact (p.16), which isn't automated yet.</div>`);
+    return;
+  }
   pushUndo('melee');
   if (activeFigures(a) === 0) {
     appendTurn(`Melee resolver — skipped`,
@@ -5302,6 +5313,11 @@ renderBoard();
     // snap rounds the dimension to whole inches while keeping the fixed edge pinned.
     const osnap = resizeRect(rsX, 503, 300, true);
     console.assert(osnap.w % PX_PER_INCH === 0 && osnap.x - osnap.w/2 === 200, 'resize: snap rounds width to whole inches, fixed edge still pinned'); }
+
+  // Melee is resolved once per turn (p.8) — the fought flag bars a same-turn repeat.
+  console.assert(canMeleeThisTurn({ acted:{ fought:false } }) === true, 'melee gate: a unit that has not fought may melee');
+  console.assert(canMeleeThisTurn({ acted:{ fought:true } }) === false, 'melee gate: a unit that already meleed this turn may not melee again (next round = next turn)');
+  console.assert(canMeleeThisTurn({}) === true && canMeleeThisTurn(null) === false, 'melee gate: missing acted reads as not-yet-fought; null is not meleeable');
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
