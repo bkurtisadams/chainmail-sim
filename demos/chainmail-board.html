@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.18 · Fix initiative election button wording. It was the only turn-flow button phrased as a statement ("B moves last"), which read as a contradictory status right after B won — every sibling is an imperative ("Roll initiative", "Resolve melee", "End turn"). Now imperative and toggle-true: with the winner moving first by default it reads "Move B last" (the alternative the click performs), flipping to "Move B first" once elected last. Added a hover title naming the winner and current order. Behavior unchanged — firstMover still = winner on roll, and the phase tag still reports the true order. -->
+<!-- chainmail-board.html · v0.10.19 · Fix Selected/Target swatches. The two panel headers carried hardcoded side colors (Selected = side-a blue, Target = side-b red) in static markup that never updated — implying selected is always A and target always B, which is wrong: either slot can hold either side. Each swatch now takes an id, starts hidden, and the selected/target render loop drives its colour from the slotted unit's actual side and hides it when the slot is empty. Markup + render only; no logic/state change. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.18</title>
+<title>Chainmail — Battlefield · v0.10.19</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Election label fix</div>
-    <span class="version-tag">v0.10.18</span>
+    <div class="sub">Chainmail HTML Sim · Selected/Target swatch fix</div>
+    <span class="version-tag">v0.10.19</span>
   </div>
 
   <div class="toolbar">
@@ -224,11 +224,11 @@
     <svg id="board" viewBox="0 0 960 540"></svg>
     <aside class="side-panel">
       <div class="panel">
-        <h2>Selected <span class="swatch" style="background:var(--side-a)"></span></h2>
+        <h2>Selected <span class="swatch" id="selected-swatch" style="display:none"></span></h2>
         <div id="selected-pane" class="empty">none</div>
       </div>
       <div class="panel">
-        <h2>Target <span class="swatch" style="background:var(--side-b)"></span></h2>
+        <h2>Target <span class="swatch" id="target-swatch" style="display:none"></span></h2>
         <div id="target-pane" class="empty">none</div>
       </div>
       <div class="panel" id="new-unit-panel">
@@ -389,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.18';
+const SIM_VERSION = '0.10.19';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2029,12 +2029,15 @@ function renderDragRuler() {
 }
 
 function updateSidebar() {
-  for (const [pane, id] of [['#selected-pane', state.selectedId], ['#target-pane', state.targetId]]) {
+  for (const [pane, id, swSel] of [['#selected-pane', state.selectedId, '#selected-swatch'], ['#target-pane', state.targetId, '#target-swatch']]) {
     const el = $(pane);
-    if (!id) { el.className = 'empty'; el.textContent = 'none'; continue; }
+    const sw = $(swSel);
+    if (!id) { el.className = 'empty'; el.textContent = 'none'; sw.style.display = 'none'; continue; }
     const u = state.units.find(u => u.id === id);
-    if (!u || u.destroyed) { el.className = 'empty'; el.textContent = 'none'; continue; }
+    if (!u || u.destroyed) { el.className = 'empty'; el.textContent = 'none'; sw.style.display = 'none'; continue; }
     el.className = '';
+    sw.style.display = 'inline-block';
+    sw.style.background = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
     const T = typeById(u.type);
     const isIndiv = u.kind === 'individual';
     const pct = u.startCount ? (100 * (u.startCount - u.count) / u.startCount).toFixed(0) : 0;
