@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.29 · Terrain Slice T3 (woods soft cover + indirect blocking, p.12). A target standing in woods now automatically gets soft cover (missile casualties halved, fractions dropped) via terrainCoverAt + effectiveCover (stronger of manual cover and terrain). Woods/overhead cover blocks indirect fire against a target under it: new terrainBlocksIndirectAt + effectiveIndirect (elected && weapon allows && target not under canopy), used by inMissileRange (so a blocked shot reverts to direct, full range) and all three missile resolvers (mass→mass, individual, mass→indiv) for cover negation and the arrow-proof bump. Pane shows effective cover with an "in woods" note; logs tag "indirect blocked by woods canopy". TERRAIN_TYPES.wooded gains softCover + blocksIndirect flags. Uphill melee / true line-of-sight blocking by intervening terrain are deferred — the terrain model has no elevation vector or LOS path test yet. -->
+<!-- chainmail-board.html · v0.10.30 · Terrain editing — move / rotate / delete placed regions. Terrain rects gain a `rot` (degrees); inTerrainRect un-rotates the point into the rect's local frame (axis-aligned fast path kept identical when rot is 0, so all geometry — moveMult, crossings, woods cover/block, path cost — becomes rotation-aware for free and existing tests are unchanged). A stream/river can now run vertical or diagonal. Authoring is now select-based: in terrain mode, click empty board to place the current type, click a placed region to select it (highlighted), then drag to move, [ / ] or Ctrl+wheel to rotate ±15°, arrow keys to nudge, Delete/Backspace to remove, Escape to deselect. Drags drop their undo step if nothing moved; terrainSelId/terrainDrag clear on mode-off, reset, and snapshot restore. Label drawn upright outside the rotation with the angle shown. A one-line hint appears beside the type select. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.29</title>
+<title>Chainmail — Battlefield · v0.10.30</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain T3 — woods cover</div>
-    <span class="version-tag">v0.10.29</span>
+    <div class="sub">Chainmail HTML Sim · Terrain editing — move/rotate/delete</div>
+    <span class="version-tag">v0.10.30</span>
   </div>
 
   <div class="toolbar">
@@ -206,6 +206,7 @@
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
     <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
     <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
+    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>click to place · drag to move · [ ] or ⌃wheel rotate · Del remove</span>
     <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
@@ -391,7 +392,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.29';
+const SIM_VERSION = '0.10.30';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1291,6 +1292,8 @@ const state = {
   terrain: [],            // T1: placed terrain regions { id, type, x, y, w, h } (centre + size, px)
   terrainMode: false,     // T1: terrain placement mode (parity with the measure tool)
   terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
+  terrainSelId: null,     // T4-edit: id of the selected placed region (move/rotate/delete target)
+  terrainDrag: null,      // T4-edit: in-flight terrain reposition drag
   ctxUnitId: null,
   turn: 1,
   phaseIdx: 0,          // Slice 8D: index into PHASES
@@ -1500,7 +1503,13 @@ function chargeContactExpected(mover) {
     (!cav || Math.abs(bearingTo(mover, t)) <= 45 + 1e-9));
 }
 // Terrain geometry (T1). Regions are axis-aligned rects (centre + size, px).
-const inTerrainRect = (x, y, r) => Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2;
+const inTerrainRect = (x, y, r) => {
+  const rot = r.rot || 0;
+  if (!rot) return Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2;   // fast path: axis-aligned
+  const a = -rot * Math.PI / 180, dx = x - r.x, dy = y - r.y;   // un-rotate the point into the rect's local frame
+  const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+  return Math.abs(lx) <= r.w / 2 && Math.abs(ly) <= r.h / 2;
+};
 // Topmost (last-drawn) region containing a point — so a click removes what sits
 // visually on top.
 function terrainRegionAt(x, y) {
@@ -1904,10 +1913,17 @@ function renderTerrain() {
   const rects = state.terrain.map(r => {
     const t = TERRAIN_TYPES[r.type] || { label: r.type, fill: '#999' };
     const x = r.x - r.w / 2, y = r.y - r.h / 2;
-    return `<g><rect x="${x}" y="${y}" width="${r.w}" height="${r.h}" rx="6" ` +
-      `fill="${t.fill}" fill-opacity="0.30" stroke="${t.fill}" stroke-opacity="0.75" stroke-width="2"/>` +
-      `<text x="${r.x}" y="${y + 15}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
-      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}</text></g>`;
+    const rot = r.rot || 0;
+    const sel = r.id === state.terrainSelId;
+    const xf = rot ? ` transform="rotate(${rot} ${r.x} ${r.y})"` : '';
+    const strokeAttrs = sel
+      ? `stroke-opacity="1" stroke-width="3" stroke-dasharray="7 4"`
+      : `stroke-opacity="0.75" stroke-width="2"`;
+    return `<g${xf}><rect x="${x}" y="${y}" width="${r.w}" height="${r.h}" rx="6" ` +
+      `fill="${t.fill}" fill-opacity="${sel ? 0.42 : 0.30}" stroke="${t.fill}" ${strokeAttrs}/></g>` +
+      // label drawn outside the rotation so it stays upright and readable at any angle
+      `<text x="${r.x}" y="${r.y + 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
+      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${rot ? ` ${rot}°` : ''}</text>`;
   }).join('');
   return `<g id="terrain" pointer-events="none">${rects}</g>`;
 }
@@ -2363,6 +2379,10 @@ function onWheel(evt) {
   // Ctrl + wheel rotates the selected unit by ±15° — a smoother alternative to
   // the [ ] keys. Falls through to zoom when nothing is selected.
   if (evt.ctrlKey) {
+    if (state.terrainMode && state.terrainSelId != null) {
+      const r = state.terrain.find(t => t.id === state.terrainSelId);
+      if (r) { pushUndo('terrain-rotate:' + r.id); r.rot = (((r.rot || 0) + (evt.deltaY > 0 ? 15 : -15)) % 360 + 360) % 360; renderBoard(); return; }
+    }
     const u = state.units.find(u => u.id === state.selectedId);
     if (u && !u.destroyed) {
       rotateUnit(u, evt.deltaY > 0 ? 15 : -15);
@@ -2386,7 +2406,7 @@ function toggleGrid() {
 }
 
 function onBoardMouseDown(evt) {
-  if (state.terrainMode && evt.button === 0) { terrainClick(svgPoint(evt)); return; }
+  if (state.terrainMode && evt.button === 0) { onTerrainMouseDown(svgPoint(evt)); return; }
   if (state.measure.active && evt.button === 0) { measureClick(svgPoint(evt), null); return; }
   // Middle-click → pan; ignore on units (their handlers stopPropagation)
   if (evt.button === 1) {
@@ -2398,7 +2418,7 @@ function onBoardMouseDown(evt) {
 
 function onUnitMouseDown(evt, unitId) {
   evt.stopPropagation();
-  if (state.terrainMode) { terrainClick(svgPoint(evt)); return; }
+  if (state.terrainMode) { onTerrainMouseDown(svgPoint(evt)); return; }
   const u = state.units.find(u => u.id === unitId);
   if (!u || u.destroyed) return;
   if (state.measure.active) { measureClick(svgPoint(evt), unitId); return; }
@@ -2430,6 +2450,18 @@ function onUnitMouseDown(evt, unitId) {
 }
 
 function onBoardMouseMove(evt) {
+  if (state.terrainDrag) {
+    const r = state.terrain.find(t => t.id === state.terrainDrag.id);
+    if (r) {
+      const pt = svgPoint(evt);
+      let nx = pt.x - state.terrainDrag.grabX, ny = pt.y - state.terrainDrag.grabY;
+      if (state.settings.snapToGrid) { nx = snapToGridPx(nx); ny = snapToGridPx(ny); }
+      r.x = Math.max(0, Math.min(BOARD_W, nx));
+      r.y = Math.max(0, Math.min(BOARD_H, ny));
+      renderBoard();
+    }
+    return;
+  }
   if (state.panning) {
     const svg = $('#board');
     const rect = svg.getBoundingClientRect();
@@ -2476,6 +2508,14 @@ function onBoardMouseMove(evt) {
   renderBoard();
 }
 function onBoardMouseUp() {
+  if (state.terrainDrag) {
+    const r = state.terrain.find(t => t.id === state.terrainDrag.id);
+    const moved = r && (Math.abs(r.x - state.terrainDrag.originX) > 0.5 || Math.abs(r.y - state.terrainDrag.originY) > 0.5);
+    if (!moved) discardUndo(state.terrainDrag.undoTag);   // a select-click, not a move — no undo step
+    state.terrainDrag = null;
+    renderBoard();
+    return;
+  }
   if (state.panning) { state.panning = null; $('#board').classList.remove('panning'); }
   if (state.dragging) {
     const u = state.units.find(x => x.id === state.dragging.unitId);
@@ -2533,24 +2573,35 @@ function toggleTerrain() {
   if (state.terrainMode) {
     state.dragging = null;
     if (state.measure.active) { state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton(); }
+  } else {
+    state.terrainSelId = null; state.terrainDrag = null;   // leaving the mode drops the editing selection
   }
   syncTerrainButton();
   renderBoard();
 }
 function syncTerrainButton() {
-  const btn = $('#btn-terrain'), sel = $('#terrain-type');
+  const btn = $('#btn-terrain'), sel = $('#terrain-type'), hint = $('#terrain-hint');
   if (btn) { btn.textContent = state.terrainMode ? 'Terrain: on' : 'Terrain'; btn.classList.toggle('active', state.terrainMode); }
   if (sel) sel.hidden = !state.terrainMode;
+  if (hint) hint.hidden = !state.terrainMode;
 }
-function terrainClick(p) {
+// Terrain authoring (T1 place + T4-edit move/rotate/delete). Click empty board to
+// drop the current type; click a placed region to select it, then drag to move,
+// [ / ] to rotate ±15° (or Ctrl+wheel), arrows to nudge, Delete to remove.
+function onTerrainMouseDown(p) {
   const hit = terrainRegionAt(p.x, p.y);
   if (hit) {
-    pushUndo('terrain-remove');
-    state.terrain = state.terrain.filter(r => r !== hit);
+    state.terrainSelId = hit.id;
+    const tag = 'terrain-move:' + hit.id + ':' + Date.now();   // unique per drag, like a unit drag
+    pushUndo(tag);
+    state.terrainDrag = { id: hit.id, originX: hit.x, originY: hit.y, grabX: p.x - hit.x, grabY: p.y - hit.y, undoTag: tag };
   } else {
     const t = TERRAIN_TYPES[state.terrainType] || TERRAIN_TYPES.hill;
     pushUndo('terrain-add');
-    state.terrain.push({ id: 'tr' + (state.nextId++), type: state.terrainType, x: p.x, y: p.y, w: inchesToPx(t.wIn), h: inchesToPx(t.hIn) });
+    const np = state.settings.snapToGrid ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) } : p;
+    const id = 'tr' + (state.nextId++);
+    state.terrain.push({ id, type: state.terrainType, x: np.x, y: np.y, w: inchesToPx(t.wIn), h: inchesToPx(t.hIn), rot: 0 });
+    state.terrainSelId = id;
   }
   renderBoard();
 }
@@ -2628,7 +2679,7 @@ function applySnapshot(s) {
   state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
   state.rngSeed = s.rngSeed;
   $('#log').innerHTML = s.logHtml;
-  state.dragging = null; state.panning = null;   // drop any in-flight interaction
+  state.dragging = null; state.panning = null; state.terrainDrag = null;   // drop any in-flight interaction
 }
 // Snapshot the pre-action state. Consecutive same-target nudge/rotate runs
 // collapse (one undo reverses the whole run). Any push clears the redo stack.
@@ -2776,6 +2827,34 @@ function onKeyDown(evt) {
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
   if ((evt.key === 'm' || evt.key === 'M') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleMeasure(); evt.preventDefault(); return; }
   if ((evt.key === 't' || evt.key === 'T') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleTerrain(); evt.preventDefault(); return; }
+  // Terrain editing: a selected region claims [ ] (rotate), arrows (nudge),
+  // Delete (remove), Escape (deselect) before the unit handlers see them.
+  if (state.terrainMode && state.terrainSelId != null && !typingField) {
+    const tr = state.terrain.find(t => t.id === state.terrainSelId);
+    if (tr) {
+      const rotKey = { '[': -15, ']': 15 }[evt.key];
+      if (rotKey !== undefined) {
+        pushUndo('terrain-rotate:' + tr.id);   // a run of rotations coalesces into one undo
+        tr.rot = (((tr.rot || 0) + rotKey) % 360 + 360) % 360;
+        renderBoard(); evt.preventDefault(); return;
+      }
+      if (evt.key === 'Delete' || evt.key === 'Backspace') {
+        pushUndo('terrain-delete');
+        state.terrain = state.terrain.filter(t => t.id !== tr.id);
+        state.terrainSelId = null; renderBoard(); evt.preventDefault(); return;
+      }
+      if (evt.key === 'Escape') { state.terrainSelId = null; renderBoard(); evt.preventDefault(); return; }
+      if (evt.key.startsWith('Arrow')) {
+        const step = state.settings.snapToGrid ? PX_PER_INCH : PX_PER_INCH / 4;
+        pushUndo('terrain-nudge:' + tr.id);
+        if (evt.key === 'ArrowLeft')       tr.x = Math.max(0, tr.x - step);
+        else if (evt.key === 'ArrowRight') tr.x = Math.min(BOARD_W, tr.x + step);
+        else if (evt.key === 'ArrowUp')    tr.y = Math.max(0, tr.y - step);
+        else if (evt.key === 'ArrowDown')  tr.y = Math.min(BOARD_H, tr.y + step);
+        renderBoard(); evt.preventDefault(); return;
+      }
+    }
+  }
   if (evt.key === '?') { openHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#help-modal').hidden) { closeHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); return; }
@@ -4282,6 +4361,7 @@ function onContextMenuAction(evt) {
 function resetBoard() {
   state.units = [];
   state.terrain = [];
+  state.terrainSelId = null; state.terrainDrag = null;
   state.terrainMode = false; syncTerrainButton();
   state.selectedId = null;
   state.targetId = null;
@@ -5098,6 +5178,17 @@ renderBoard();
     console.assert(effectiveIndirect(lb, inWoods) === false, 'T3: woods blocks indirect against a target under canopy');
     console.assert(effectiveIndirect({ indirect:false, weapon:'longbow' }, clear) === false, 'T3: indirect not elected → direct fire');
     state.terrain = _t; }
+
+  // Terrain editing — rotation-aware hit test (T4-edit).
+  { const horiz = { x:300, y:300, w:384, h:48, rot:0 };   // 16″×2″ stream, horizontal
+    console.assert(inTerrainRect(450, 300, horiz) === true && inTerrainRect(300, 450, horiz) === false, 'terrain rot: horizontal rect is wide along x, thin along y');
+    const vert = { x:300, y:300, w:384, h:48, rot:90 };
+    console.assert(inTerrainRect(300, 450, vert) === true && inTerrainRect(450, 300, vert) === false, 'terrain rot: rotated 90° the long axis runs along y');
+    const diag = { x:300, y:300, w:384, h:48, rot:45 };
+    const d = 150 / Math.SQRT2;
+    console.assert(inTerrainRect(300 + d, 300 + d, diag) === true, 'terrain rot: 45° rect admits points along its diagonal long axis');
+    console.assert(inTerrainRect(300 + d, 300 - d, diag) === false, 'terrain rot: 45° rect rejects points across its short axis');
+    console.assert(inTerrainRect(300, 300, { x:300, y:300, w:10, h:10 }) === true, 'terrain rot: missing rot is treated as 0 (fast path unchanged)'); }
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
