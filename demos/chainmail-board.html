@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.22 · Charge contact detection (p.16). New reusable canReachContact(mover,target,maxIn) — can the mover close to melee contact within maxIn inches (already touching, or edge-gap within reach; enemy, live targets only). chargeContactExpected(mover) builds on it: a charge is permitted only when melee contact with an enemy is expected this turn — some enemy reachable within the charge allowance, and for cavalry within 45° of facing (the straight-line charge). declare-charge now refuses under enforceMovement when no contact is expected, logging the charge allowance and (for cavalry) the 45° line, citing p.16; advisory mode stays freeform. canReachContact is the foundation the auto move-touch slice (Wraith paralysis / Balrog immolation, currently manual) will consume next; victorious-charger follow-through still deferred. -->
+<!-- chainmail-board.html · v0.10.23 · Settings now persist (localStorage). Previously there was no persistence layer at all: state.settings always came from the hardcoded defaults at boot, so every setting reverted on reload — and the browser restoring a few checkbox DOM states made it look like "some" stuck while their behaviour silently reset. New saveSettings()/loadSettings() round-trip state.settings through localStorage, wrapped in try/catch so a sandboxed preview or storage-disabled browser degrades to in-memory only. load merges only keys already in defaults (stale/unknown keys ignored; a setting added in a later version keeps its default until touched) and coerces number vs boolean. saveSettings runs on every onSettingChange / onSettingRange; loadSettings runs at boot before showGrid is derived from gridOnByDefault, then syncSettingsCheckboxes() makes the dialog reflect the restored state instead of browser form-restore. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.22</title>
+<title>Chainmail — Battlefield · v0.10.23</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Charge contact detection</div>
-    <span class="version-tag">v0.10.22</span>
+    <div class="sub">Chainmail HTML Sim · Persistent settings</div>
+    <span class="version-tag">v0.10.23</span>
   </div>
 
   <div class="toolbar">
@@ -389,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.22';
+const SIM_VERSION = '0.10.23';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -3972,6 +3972,29 @@ function syncSettingsCheckboxes() {
     el.value = state.settings[el.dataset.settingRange] ?? el.value;
   });
 }
+// Settings persistence (localStorage). Wrapped in try/catch so a sandboxed
+// preview or a storage-disabled browser degrades cleanly to in-memory only. The
+// load merges only keys already in the defaults, so stale/unknown keys are
+// ignored and any setting added in a later version keeps its default until the
+// user touches it; types are coerced from the default (number vs boolean).
+const SETTINGS_KEY = 'chainmail.settings.v1';
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings)); } catch (e) {}
+}
+function loadSettings() {
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null'); } catch (e) { stored = null; }
+  if (!stored || typeof stored !== 'object') return;
+  for (const k of Object.keys(state.settings)) {
+    if (!(k in stored)) continue;
+    if (typeof state.settings[k] === 'number') {
+      const n = Number(stored[k]);
+      if (!Number.isNaN(n)) state.settings[k] = n;
+    } else {
+      state.settings[k] = !!stored[k];
+    }
+  }
+}
 function openSettings() {
   syncSettingsCheckboxes();
   $('#settings-modal').hidden = false;
@@ -3984,6 +4007,7 @@ function onSettingChange(evt) {
   const key = evt.target.dataset.setting;
   if (!key) return;
   state.settings[key] = evt.target.checked;
+  saveSettings();
   renderBoard();
   renderTurnUI();   // Slice 8D: refresh phase tag/gating when enforcePhases toggles
   if (key === 'snapToGrid' && state.settings.snapToGrid) {
@@ -4005,6 +4029,7 @@ function onSettingRange(evt) {
   if (!key) return;
   const val = parseFloat(evt.target.value);
   state.settings[key] = val;
+  saveSettings();
   // Live-update the grid group opacity without a full board re-render (smooth
   // while dragging). Falls back to render if the grid layer isn't present.
   if (key === 'gridOpacity') {
@@ -4252,6 +4277,8 @@ document.addEventListener('mousedown', e => {
 });
 document.addEventListener('keydown', onKeyDown);
 
+loadSettings();              // restore persisted settings before first paint
+syncSettingsCheckboxes();    // dialog controls reflect the restored state (not browser form-restore)
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 syncMeasureButton();
