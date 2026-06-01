@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.15 · Split-move-and-fire (p.12): horsemen armed with bows (short_bow/horsebow/longbow/composite — not crossbows) may fire during their own move phase while paused at the half-move, then complete the balance ≤½. The missile button is enabled mid-move for a paused horse-archer in its move phase; a resolved shot from the pause records leg 1 (splitFired/splitLeg1) and effectiveMoveAllowance caps the remainder so leg 2 ≤ ½ (drag, nudge, pane all honor it). Reset on endRound. Builds on the v0.10.14 half-move pause point. -->
+<!-- chainmail-board.html · v0.10.16 · Header tidy: toolbar grouped into four clusters (turn flow · edit · view · app) with thin separators, leading with turn flow; "End round" relabeled "End turn" to match the Turn N counter and the melee hand-off hint (endRound fn unchanged); "Reset view" relabeled "Recenter" to kill the Reset/Reset-board collision; "Clear selection" moved into the edit cluster beside Undo/Redo. Labels/order/grouping only — no id or logic changes, so all listeners and the lit/quiet emphasis still bind. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.15</title>
+<title>Chainmail — Battlefield · v0.10.16</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -35,6 +35,7 @@
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
   .toolbar .hint { display: none; }
+  .toolbar .tb-sep { width: 1px; height: 20px; align-self: center; background: var(--rule); opacity: 0.6; margin: 0 3px; }
   button { font-family: var(--sans); font-size: 11.5px; letter-spacing: 1.8px; text-transform: uppercase;
     font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 8px 12px;
     border-radius: 3px; cursor: pointer; }
@@ -184,26 +185,30 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Split-move &amp; fire</div>
-    <span class="version-tag">v0.10.15</span>
+    <div class="sub">Chainmail HTML Sim · Header tidy</div>
+    <span class="version-tag">v0.10.16</span>
   </div>
 
   <div class="toolbar">
+    <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
+    <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-end-side" class="gold">Next phase ▸</button>
-    <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
-    <button id="btn-elect-order" class="gold" hidden>Winner moves last</button>
-    <button id="btn-end-round" class="gold">End round</button>
-    <button id="btn-clear-sel" class="secondary">Clear selection</button>
+    <button id="btn-end-round" class="gold">End turn</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
     <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
-    <button id="btn-reset-view" class="secondary">Reset view</button>
+    <button id="btn-clear-sel" class="secondary">Clear selection</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-grid" class="secondary">Grid: off</button>
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
+    <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
     <button id="btn-reset" class="danger">Reset board</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <span class="phase-tag" id="phase">Turn 1 · Side A</span>
     <span class="phase-rail" id="phase-rail"></span>
     <span class="phase-hint" id="phase-hint" hidden></span>
@@ -379,7 +384,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.15';
+const SIM_VERSION = '0.10.16';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
