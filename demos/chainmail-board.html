@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.30 · Terrain editing — move / rotate / delete placed regions. Terrain rects gain a `rot` (degrees); inTerrainRect un-rotates the point into the rect's local frame (axis-aligned fast path kept identical when rot is 0, so all geometry — moveMult, crossings, woods cover/block, path cost — becomes rotation-aware for free and existing tests are unchanged). A stream/river can now run vertical or diagonal. Authoring is now select-based: in terrain mode, click empty board to place the current type, click a placed region to select it (highlighted), then drag to move, [ / ] or Ctrl+wheel to rotate ±15°, arrow keys to nudge, Delete/Backspace to remove, Escape to deselect. Drags drop their undo step if nothing moved; terrainSelId/terrainDrag clear on mode-off, reset, and snapshot restore. Label drawn upright outside the rotation with the angle shown. A one-line hint appears beside the type select. -->
+<!-- chainmail-board.html · v0.10.31 · Terrain resize handles. A selected region now shows 8 grips (4 corners + 4 edge mids) that drag to resize, rotation-aware. New pure helpers: terrainHandles(r) (grip world positions, respecting rot), terrainHandleAt(p,r,radPx) (hit-test), and resizeRect(rs,px,py,snap) — pins the edge/corner opposite the grip, projects the pointer into the rect's local frame, clamps to a ½″ minimum, and (with snap) rounds the dimension to whole inches while keeping the pinned edge fixed; edge grips resize one axis, corners both. Handles take priority over move/place on mousedown; resize drags drop their undo if size is unchanged; terrainResize clears on mode-off, reset, and snapshot restore. Hint updated. Resize is the last terrain authoring piece (place/move/rotate/delete shipped in v0.10.30). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.30</title>
+<title>Chainmail — Battlefield · v0.10.31</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain editing — move/rotate/delete</div>
-    <span class="version-tag">v0.10.30</span>
+    <div class="sub">Chainmail HTML Sim · Terrain editing — resize handles</div>
+    <span class="version-tag">v0.10.31</span>
   </div>
 
   <div class="toolbar">
@@ -206,7 +206,7 @@
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
     <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
     <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
-    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>click to place · drag to move · [ ] or ⌃wheel rotate · Del remove</span>
+    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>click place · drag move · corner/edge handles resize · [ ] or ⌃wheel rotate · Del remove</span>
     <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
@@ -392,7 +392,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.30';
+const SIM_VERSION = '0.10.31';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1294,6 +1294,7 @@ const state = {
   terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
   terrainSelId: null,     // T4-edit: id of the selected placed region (move/rotate/delete target)
   terrainDrag: null,      // T4-edit: in-flight terrain reposition drag
+  terrainResize: null,    // T4-edit: in-flight terrain resize drag (handle grip)
   ctxUnitId: null,
   turn: 1,
   phaseIdx: 0,          // Slice 8D: index into PHASES
@@ -1510,6 +1511,52 @@ const inTerrainRect = (x, y, r) => {
   const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
   return Math.abs(lx) <= r.w / 2 && Math.abs(ly) <= r.h / 2;
 };
+// Resize-handle grips for a selected region (T4-edit): 4 corners + 4 edge mids,
+// in world coords, respecting rotation. grip (gx,gy) ∈ {-1,0,1}²\{0,0}: a corner
+// resizes both axes, an edge only one. Shared by render and hit-test.
+const TERRAIN_GRIPS = Object.freeze([[-1,-1],[1,-1],[1,1],[-1,1],[0,-1],[1,0],[0,1],[-1,0]]);
+function terrainHandles(r) {
+  const hw = r.w / 2, hh = r.h / 2, th = (r.rot || 0) * Math.PI / 180;
+  const cs = Math.cos(th), sn = Math.sin(th);
+  return TERRAIN_GRIPS.map(([gx, gy]) => ({
+    gx, gy,
+    x: r.x + (gx * hw) * cs - (gy * hh) * sn,
+    y: r.y + (gx * hw) * sn + (gy * hh) * cs,
+  }));
+}
+// Grip under a point (within radPx, world), else null.
+function terrainHandleAt(p, r, radPx) {
+  const r2 = radPx * radPx;
+  for (const h of terrainHandles(r)) if ((h.x - p.x) ** 2 + (h.y - p.y) ** 2 <= r2) return h;
+  return null;
+}
+// Pure resize: given a resize-drag record `rs` (grip, start centre C0, rot in
+// radians, start half-extents) and a pointer (px,py), return the new {x,y,w,h}.
+// The edge opposite the grip stays pinned; the grip axis/axes follow the pointer
+// (projected into the rect's local frame), clamped to a ½″ minimum and optionally
+// snapped to whole inches. Axes with grip 0 are unchanged.
+function resizeRect(rs, px, py, snap) {
+  const cs = Math.cos(rs.rot), sn = Math.sin(rs.rot);
+  const dx = px - rs.C0.x, dy = py - rs.C0.y;
+  const plx = dx * cs + dy * sn, ply = -dx * sn + dy * cs;   // pointer in local frame
+  const MIN = PX_PER_INCH / 2;
+  let newHw = rs.hw0, newHh = rs.hh0, offX = 0, offY = 0;
+  if (rs.gx !== 0) {
+    const fixedX = -rs.gx * rs.hw0;
+    let w = Math.max(MIN, Math.abs(plx - fixedX));
+    if (snap) w = Math.max(MIN, Math.round(w / PX_PER_INCH) * PX_PER_INCH);
+    const movingX = fixedX + rs.gx * w;
+    newHw = w / 2; offX = (movingX + fixedX) / 2;
+  }
+  if (rs.gy !== 0) {
+    const fixedY = -rs.gy * rs.hh0;
+    let h = Math.max(MIN, Math.abs(ply - fixedY));
+    if (snap) h = Math.max(MIN, Math.round(h / PX_PER_INCH) * PX_PER_INCH);
+    const movingY = fixedY + rs.gy * h;
+    newHh = h / 2; offY = (movingY + fixedY) / 2;
+  }
+  return { x: rs.C0.x + offX * cs - offY * sn, y: rs.C0.y + offX * sn + offY * cs, w: newHw * 2, h: newHh * 2 };
+}
 // Topmost (last-drawn) region containing a point — so a click removes what sits
 // visually on top.
 function terrainRegionAt(x, y) {
@@ -1923,7 +1970,11 @@ function renderTerrain() {
       `fill="${t.fill}" fill-opacity="${sel ? 0.42 : 0.30}" stroke="${t.fill}" ${strokeAttrs}/></g>` +
       // label drawn outside the rotation so it stays upright and readable at any angle
       `<text x="${r.x}" y="${r.y + 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
-      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${rot ? ` ${rot}°` : ''}</text>`;
+      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${rot ? ` ${rot}°` : ''}</text>` +
+      // resize handles on the selected region (corners + edge mids), drawn upright
+      (sel ? terrainHandles(r).map(h =>
+        `<rect x="${h.x - 4}" y="${h.y - 4}" width="8" height="8" fill="#fff" fill-opacity="0.95" ` +
+        `stroke="${t.fill}" stroke-width="1.5"/>`).join('') : '');
   }).join('');
   return `<g id="terrain" pointer-events="none">${rects}</g>`;
 }
@@ -2450,6 +2501,16 @@ function onUnitMouseDown(evt, unitId) {
 }
 
 function onBoardMouseMove(evt) {
+  if (state.terrainResize) {
+    const r = state.terrain.find(t => t.id === state.terrainResize.id);
+    if (r) {
+      const p = svgPoint(evt);
+      const nr = resizeRect(state.terrainResize, p.x, p.y, state.settings.snapToGrid);
+      r.x = nr.x; r.y = nr.y; r.w = nr.w; r.h = nr.h;
+      renderBoard();
+    }
+    return;
+  }
   if (state.terrainDrag) {
     const r = state.terrain.find(t => t.id === state.terrainDrag.id);
     if (r) {
@@ -2508,6 +2569,14 @@ function onBoardMouseMove(evt) {
   renderBoard();
 }
 function onBoardMouseUp() {
+  if (state.terrainResize) {
+    const r = state.terrain.find(t => t.id === state.terrainResize.id);
+    const changed = r && (Math.abs(r.w - state.terrainResize.before.w) > 0.5 || Math.abs(r.h - state.terrainResize.before.h) > 0.5);
+    if (!changed) discardUndo(state.terrainResize.undoTag);
+    state.terrainResize = null;
+    renderBoard();
+    return;
+  }
   if (state.terrainDrag) {
     const r = state.terrain.find(t => t.id === state.terrainDrag.id);
     const moved = r && (Math.abs(r.x - state.terrainDrag.originX) > 0.5 || Math.abs(r.y - state.terrainDrag.originY) > 0.5);
@@ -2574,7 +2643,7 @@ function toggleTerrain() {
     state.dragging = null;
     if (state.measure.active) { state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton(); }
   } else {
-    state.terrainSelId = null; state.terrainDrag = null;   // leaving the mode drops the editing selection
+    state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;   // leaving the mode drops the editing selection
   }
   syncTerrainButton();
   renderBoard();
@@ -2589,6 +2658,24 @@ function syncTerrainButton() {
 // drop the current type; click a placed region to select it, then drag to move,
 // [ / ] to rotate ±15° (or Ctrl+wheel), arrows to nudge, Delete to remove.
 function onTerrainMouseDown(p) {
+  // A resize handle on the already-selected region takes priority over move/place.
+  if (state.terrainSelId != null) {
+    const sel = state.terrain.find(t => t.id === state.terrainSelId);
+    if (sel) {
+      const grip = terrainHandleAt(p, sel, 9);
+      if (grip) {
+        const tag = 'terrain-resize:' + sel.id + ':' + Date.now();
+        pushUndo(tag);
+        state.terrainResize = {
+          id: sel.id, gx: grip.gx, gy: grip.gy, C0: { x: sel.x, y: sel.y },
+          rot: (sel.rot || 0) * Math.PI / 180, hw0: sel.w / 2, hh0: sel.h / 2,
+          before: { w: sel.w, h: sel.h }, undoTag: tag,
+        };
+        renderBoard();
+        return;
+      }
+    }
+  }
   const hit = terrainRegionAt(p.x, p.y);
   if (hit) {
     state.terrainSelId = hit.id;
@@ -2679,7 +2766,7 @@ function applySnapshot(s) {
   state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
   state.rngSeed = s.rngSeed;
   $('#log').innerHTML = s.logHtml;
-  state.dragging = null; state.panning = null; state.terrainDrag = null;   // drop any in-flight interaction
+  state.dragging = null; state.panning = null; state.terrainDrag = null; state.terrainResize = null;   // drop any in-flight interaction
 }
 // Snapshot the pre-action state. Consecutive same-target nudge/rotate runs
 // collapse (one undo reverses the whole run). Any push clears the redo stack.
@@ -4361,7 +4448,7 @@ function onContextMenuAction(evt) {
 function resetBoard() {
   state.units = [];
   state.terrain = [];
-  state.terrainSelId = null; state.terrainDrag = null;
+  state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;
   state.terrainMode = false; syncTerrainButton();
   state.selectedId = null;
   state.targetId = null;
@@ -5189,6 +5276,32 @@ renderBoard();
     console.assert(inTerrainRect(300 + d, 300 + d, diag) === true, 'terrain rot: 45° rect admits points along its diagonal long axis');
     console.assert(inTerrainRect(300 + d, 300 - d, diag) === false, 'terrain rot: 45° rect rejects points across its short axis');
     console.assert(inTerrainRect(300, 300, { x:300, y:300, w:10, h:10 }) === true, 'terrain rot: missing rot is treated as 0 (fast path unchanged)'); }
+
+  // Terrain editing — resize handles (geometry + pure resize math, T4-edit).
+  { const ax = { x:300, y:300, w:200, h:100, rot:0 };
+    const hs = terrainHandles(ax);
+    console.assert(hs.length === 8, 'terrain handles: 4 corners + 4 edge mids');
+    const corner = hs.find(h => h.gx === 1 && h.gy === 1);
+    const rightMid = hs.find(h => h.gx === 1 && h.gy === 0);
+    console.assert(corner.x === 400 && corner.y === 350, 'terrain handles: +x+y corner at the rect corner');
+    console.assert(rightMid.x === 400 && rightMid.y === 300, 'terrain handles: right-edge handle at the edge midpoint');
+    const v = terrainHandles({ x:300, y:300, w:200, h:100, rot:90 }).find(h => h.gx === 1 && h.gy === 0);
+    console.assert(Math.abs(v.x - 300) < 1e-9 && Math.abs(v.y - 400) < 1e-9, 'terrain handles: rotation moves the local +x handle onto the world +y side');
+    console.assert(terrainHandleAt({ x:401, y:351 }, ax, 9) && !terrainHandleAt({ x:340, y:300 }, ax, 9), 'terrain handles: hit-test inside the grip radius, miss in open body');
+    // resize: drag the right edge out; left edge stays pinned, height unchanged.
+    const rsX = { gx:1, gy:0, C0:{x:300,y:300}, rot:0, hw0:100, hh0:50 };
+    const out = resizeRect(rsX, 500, 300, false);
+    console.assert(out.w === 300 && out.h === 100 && out.x === 350 && out.x - out.w/2 === 200, 'resize: right-edge drag widens to 300, pins the left edge at 200, height unchanged');
+    // corner drag resizes both axes, pinning the opposite corner.
+    const rsC = { gx:1, gy:1, C0:{x:300,y:300}, rot:0, hw0:100, hh0:50 };
+    const oc = resizeRect(rsC, 500, 400, false);
+    console.assert(oc.w === 300 && oc.h === 150 && oc.x - oc.w/2 === 200 && oc.y - oc.h/2 === 250, 'resize: corner drag resizes both axes, pinning the top-left corner');
+    // minimum ½″ clamp when dragging the edge past its anchor.
+    const oclamp = resizeRect(rsX, 196, 300, false);
+    console.assert(oclamp.w === PX_PER_INCH / 2, 'resize: width clamps to the ½″ minimum');
+    // snap rounds the dimension to whole inches while keeping the fixed edge pinned.
+    const osnap = resizeRect(rsX, 503, 300, true);
+    console.assert(osnap.w % PX_PER_INCH === 0 && osnap.x - osnap.w/2 === 200, 'resize: snap rounds width to whole inches, fixed edge still pinned'); }
 
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
