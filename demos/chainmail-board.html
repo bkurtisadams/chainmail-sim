@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.27 · Terrain Slice T2b (crossing costs + path-aware slow, p.9). T1's centre-based 50% slow is replaced by per-inch path cost: effectiveMoveAllowance is now the plain move budget, and terrain charges the budget along the actual move segment. New terrainCostMultAt (1/moveMult, so hill/woods/marsh/ditch/pond cost 2 budget-inches per inch), crossingRegionsAt (stream/river regions under a point, keyed by region id), and pathMoveCost(ox,oy,dx,dy,u,budgetIn) which walks the segment summing per-inch cost plus a one-time lump on ENTERING a stream (its cross inches, 6″) or river (a full move) and returns {cost, scale}. Drag clamps by path cost (not raw length), mouseup folds the path cost — crossing penalty included — into movedThisTurn, and nudge costs its path cost. A unit starting inside a crossing region is not charged to leave it; a ford whose lump won't fit the budget halts the unit on the near bank. Footprint-aware blocking is still deferred. -->
+<!-- chainmail-board.html · v0.10.28 · Simultaneous missile fire (p.9). In the dedicated missile phase, with phases enforced, all fire "takes effect simultaneously just prior to melee": every unit fires at full pre-phase strength and casualties are held as unit.pendingHits, applied together when the phase ends (advancePhase out of missile, with an endRound safety net) — so red A→B and blue B→A both fire at full count regardless of click order. New simMissilePhase() predicate (enforcePhases && phase===missile) and resolveMissilePhase() which removes held hits then runs the loss-% morale check RAW puts before melee, in deterministic unit order for seeded replay. All three resolvers (mass→mass, indiv→mass/indiv, mass→indiv) defer in sim mode; split-move and pass-through fire stay immediate (they happen in the move phases). Pane shows an Incoming pending line; pendingHits travels through undo and resets each round. Advisory play is unchanged (one shot at a time). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.27</title>
+<title>Chainmail — Battlefield · v0.10.28</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain T2b — crossings + path slow</div>
-    <span class="version-tag">v0.10.27</span>
+    <div class="sub">Chainmail HTML Sim · Simultaneous missile fire</div>
+    <span class="version-tag">v0.10.28</span>
   </div>
 
   <div class="toolbar">
@@ -391,7 +391,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.27';
+const SIM_VERSION = '0.10.28';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2257,6 +2257,7 @@ function updateSidebar() {
         : `<div class="stat"><span class="k">Count</span><span class="v">${u.count} / ${u.startCount}  (−${pct}%)</span></div>`) +
       (u.status && u.status !== 'ready' ? `<div class="stat"><span class="k">Status</span><span class="v">${u.status.toUpperCase()}</span></div>` : '') +
       (isParalyzed(u) ? `<div class="stat"><span class="k">Paralyzed</span><span class="v">${paralyzedFigures(u)}${isIndiv ? '' : ` / ${u.count}`} figure${paralyzedFigures(u)>1?'s':''} · ${paralysisReleaseLabel(u)}</span></div>` : '') +
+      ((u.pendingHits || 0) > 0 ? `<div class="stat"><span class="k">Incoming</span><span class="v" style="color:#a3322a">${u.pendingHits} hit${u.pendingHits>1?'s':''} pending — applied before melee (p.9)</span></div>` : '') +
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man · charge ${chargeAllowanceOf(u)}″</span></div>` : '') +
       (!u.charged && u.chargedLastTurn ? `<div class="stat"><span class="k">Charge</span><span class="v" style="color:var(--ink-soft)">charged last turn · normal speed only</span></div>` : '') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
@@ -3542,6 +3543,58 @@ function missileTitle(a, d, suffix = '') {
   return `${verb} · ${typeById(a.type).name} (${a.side}) → ${typeById(d.type).name} (${d.side})${suffix}`;
 }
 
+// Simultaneous missile fire (p.9). In the dedicated missile phase (step 5) all
+// fire "takes effect simultaneously just prior to melee resolution": every unit
+// fires at its full pre-phase strength and casualties are held as `pendingHits`,
+// applied together when the phase ends. Split-move / pass-through fire happen in
+// the move phases and are NOT deferred (they "take effect immediately"). Only
+// engaged when phases are enforced, since that is when the missile phase is a
+// real, bounded step; advisory play stays one-shot-at-a-time.
+const simMissilePhase = () => state.settings.enforcePhases && PHASES[state.phaseIdx].id === 'missile';
+// Apply every unit's held missile hits at once, then run the loss-% morale check
+// RAW requires "before the melee portion of the turn." Deterministic order (unit
+// list), so a seeded replay reproduces it. Returns true if anything was applied.
+function resolveMissilePhase() {
+  let any = false;
+  for (const d of state.units) {
+    const pend = d.pendingHits || 0;
+    if (pend <= 0 || d.destroyed) { d.pendingHits = 0; continue; }
+    any = true;
+    const dT = typeById(d.type);
+    let html;
+    if (d.kind === 'individual') {
+      const hpBefore = d.hp;
+      d.hp = Math.max(0, (d.hp || 0) - pend);
+      html = `<div class="step">${pend} pending hit${pend===1?'':'s'} applied · hp ${hpBefore}/${d.maxHp} → ${d.hp}/${d.maxHp}</div>`;
+      if (d.hp <= 0) {
+        d.count = 0; d.destroyed = true; cleanupEngagementsForUnit(d.id);
+        if (d.id === state.targetId) state.targetId = null;
+        html += `<div class="verdict v-rout">${d.side} · ${dT.name} → killed</div>`;
+      } else html += `<div class="verdict v-killed">${d.side} · ${dT.name} survives</div>`;
+    } else {
+      const before = d.count;
+      applyCasualties(d, pend);
+      html = `<div class="step">${pend} pending hit${pend===1?'':'s'} applied · ${before} → ${d.count} figure${d.count===1?'':'s'}${d.destroyed?' (destroyed)':''}</div>`;
+      if (!d.destroyed) {
+        const cas = d.startCount - d.count;
+        const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
+          fatigued: !!d.fatigued && state.settings.applyFatigue });
+        if (lr.triggered) {
+          const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+          const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+          html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
+                  `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+          html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
+          if (!lr.passed) { d.destroyed = true; cleanupEngagementsForUnit(d.id); if (d.id === state.targetId) state.targetId = null; }
+        }
+      }
+    }
+    d.pendingHits = 0;
+    appendTurn(`Missile resolved · ${dT.name} (${d.side})`, html);
+  }
+  return any;
+}
+
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3639,6 +3692,15 @@ function onResolveMissile() {
   }
   html += `<div class="verdict v-${res.totalKills>0?'killed':'noeffect'}">${res.totalKills} kill${res.totalKills===1?'':'s'}</div>`;
 
+  if (simMissilePhase()) {
+    d.pendingHits = (d.pendingHits || 0) + res.totalKills;   // p.9: held, applied simultaneously before melee
+    html += `<div class="step" style="color:var(--ink-soft)">simultaneous fire — ${res.totalKills} hit${res.totalKills===1?'':'s'} pending; applied when the missile phase ends (p.9)</div>`;
+    appendTurn(missileTitle(a, d), html);
+    markFired(a);
+    renderBoard();
+    return;
+  }
+
   applyCasualties(d, res.totalKills);
 
   // Loss-morale on defender if threshold crossed
@@ -3718,6 +3780,15 @@ function onIndivMissile(a, d) {
             `<b>${r.dice.sum}</b>${coverStr}${r.cover?` = <b>${r.total}</b>`:''} → ` +
             (r.kill ? `<b style="color:#a3322a">HIT</b>` : 'miss') + `</div>`;
     if (r.kill) {
+      if (simMissilePhase()) {
+        d.pendingHits = (d.pendingHits || 0) + (d.kind === 'individual' ? (d.maxHp || 1) : 1);   // p.9: held until phase ends
+        html += `<div class="step" style="color:var(--ink-soft)">simultaneous fire — hit pending; applied when the missile phase ends (p.9)</div>`;
+        html += `<div class="verdict v-killed">${d.side} · ${dT.name} — 1 hit pending</div>`;
+        appendTurn(missileTitle(a, d, ' · indiv'), html);
+        markFired(a);
+        renderBoard();
+        return;
+      }
       if (d.kind === 'individual') {
         html += `<div class="verdict v-rout">${d.side} · ${dT.name} → killed</div>`;
         d.count = 0; d.destroyed = true;
@@ -3822,6 +3893,15 @@ function onMassMissileAtIndiv(a, d) {
   });
   if (cover && res.totalRaw !== res.totalKills) {
     html += `<div class="step">soft cover · ${res.totalRaw} → halved → <b>${res.totalKills}</b></div>`;
+  }
+
+  if (simMissilePhase()) {
+    d.pendingHits = (d.pendingHits || 0) + res.totalKills;   // p.9: held until the phase ends
+    html += `<div class="step" style="color:var(--ink-soft)">simultaneous fire — ${res.totalKills} hit${res.totalKills===1?'':'s'} pending; applied when the missile phase ends (p.9)</div>`;
+    appendTurn(missileTitle(a, d), html);
+    markFired(a);
+    renderBoard();
+    return;
   }
 
   d.hp = Math.max(0, (d.hp || 0) - res.totalKills);
@@ -4387,6 +4467,7 @@ function rollInitiativeAction() {
 function advancePhase() {
   if (state.phaseIdx >= PHASES.length - 1) { endRound(); return; }
   pushUndo('phase');
+  if (PHASES[state.phaseIdx].id === 'missile') resolveMissilePhase();   // p.9: simultaneous fire lands just before melee
   state.phaseIdx += 1;
   renderTurnUI();
   renderBoard();
@@ -4412,6 +4493,7 @@ function toggleInitiativeOrder() {
 
 function endRound() {
   pushUndo('endRound');
+  resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   for (const u of state.units) {
     releaseExpiredParalysis(u, state.turn);
@@ -4428,6 +4510,7 @@ function endRound() {
     u.chargedLastTurn = !!u.charged;   // Slice 8C: this turn's charge bars a fresh charge next turn
     u.charged = false;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
+    u.pendingHits = 0;     // held missile hits are resolved above; clear defensively
     u._touchedThisTurn = [];   // move-touch (Wraith/Balrog) re-arms each turn
     u.halfMovePaused = false;   // checkpoints reset with the new move
     u.splitFired = false; u.splitLeg1 = 0;
@@ -4949,7 +5032,25 @@ renderBoard();
   console.assert(snapToGridPx(11)===0 && snapToGridPx(13)===24, 'rounds to the nearest line (12px is the halfway point)');
   console.assert(snapToGridPx(37) % PX_PER_INCH === 0 && pxToInches(snapToGridPx(150) - snapToGridPx(30)) === 5, 'snapped points sit on whole inches, so grid-to-grid moves are clean inch distances');
 
-  console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
+  // Simultaneous missile fire (p.9) — sim mode predicate + phase resolution.
+  { const _ep = state.settings.enforcePhases, _pi = state.phaseIdx;
+    state.settings.enforcePhases = true; state.phaseIdx = PHASES.findIndex(p => p.id === 'missile');
+    console.assert(simMissilePhase() === true, 'sim missile: enforced phases + missile phase → simultaneous');
+    state.phaseIdx = PHASES.findIndex(p => p.id === 'melee');
+    console.assert(simMissilePhase() === false, 'sim missile: off outside the missile phase');
+    state.settings.enforcePhases = false; state.phaseIdx = PHASES.findIndex(p => p.id === 'missile');
+    console.assert(simMissilePhase() === false, 'sim missile: off when phases are not enforced (advisory stays one-shot-at-a-time)');
+    state.settings.enforcePhases = _ep; state.phaseIdx = _pi; }
+  { const _u = state.units, _log = $('#log').innerHTML;
+    // HF×20 holding 3 pending hits: resolution removes 3 (15% < 33⅓% so no loss check) and clears the tally.
+    state.units = [{ id:90001, side:'A', type:'HF', kind:'mass', count:20, startCount:20, cols:10, rows:2, pendingHits:3, facing:0 }];
+    const applied = resolveMissilePhase();
+    const b = state.units[0];
+    console.assert(applied === true && b.count === 17 && (b.pendingHits || 0) === 0, 'sim missile: held hits applied at phase resolution, tally cleared');
+    console.assert(resolveMissilePhase() === false, 'sim missile: resolving again with no pending is a no-op');
+    state.units = _u; $('#log').innerHTML = _log; }
+
+
 })();
 </script>
 </body>
