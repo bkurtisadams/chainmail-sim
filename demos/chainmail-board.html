@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.25 · Terrain pillar — Slice T1 (foundation + movement effects, p.9). New state.terrain (axis-aligned rects: centre + size px) + frozen TERRAIN_TYPES (hill/woods/marsh/rough/ditch/stream/river/pond/gulley with RAW effect flags moveMult/noCharge/blocksFormed/blocksHeavy + crossing data). Geometry: terrainRegionAt / terrainTypesAt / terrainMoveMultAt (most-restrictive) / terrainNoChargeAt. Two movement effects wired this slice: the 50% slow (hill/woods/marsh/ditch/pond) folds into effectiveMoveAllowance from the terrain under the unit centre, so the drag-clamp and ruler honour it; and no-charge terrain makes declare-charge refuse under enforceMovement (p.9). Render: a translucent non-interactive terrain layer beneath the grid/units; interaction by coordinate hit-test. Authoring: Terrain toggle (hotkey t) + type select — click empty board to place, click a region to remove; undoable (terrain added to the snapshot); Reset clears it. blocksFormed/blocksHeavy + stream/river crossing = T2. -->
+<!-- chainmail-board.html · v0.10.26 · Terrain Slice T2a (entry blocks via path-sampling, p.9). Woods now stops formed bodies (mass units): under enforceMovement a drag is clamped at the woods boundary and a nudge into woods is refused. New moveBlockScale(ox,oy,dx,dy,u) samples the move segment (~4px steps) and returns the fraction of the vector that stays clear of blocking terrain; terrainBlocksUnitAt tests woods-vs-formed and (dormant) marsh-vs-heavy. isFormedBody = mass kind; isHeavyEquip uses HEAVY_MOVE_TYPES, empty until catapult/cannon/wagon types exist, so the marsh block is wired but inert for now. Centre-based, sampled; advisory mode stays freeform (no clamp) and a unit already standing in woods is not trapped. Footprint-aware blocking, the stream/river crossing costs, and path-aware slow are T2b. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.25</title>
+<title>Chainmail — Battlefield · v0.10.26</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain T1 — movement</div>
-    <span class="version-tag">v0.10.25</span>
+    <div class="sub">Chainmail HTML Sim · Terrain T2a — woods block</div>
+    <span class="version-tag">v0.10.26</span>
   </div>
 
   <div class="toolbar">
@@ -391,7 +391,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.25';
+const SIM_VERSION = '0.10.26';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1522,6 +1522,35 @@ function terrainMoveMultAt(x, y) {
 function terrainNoChargeAt(x, y) {
   return terrainTypesAt(x, y).find(t => t.noCharge) || null;
 }
+// Entry-blocking terrain (T2, p.9). Formed bodies (mass units) are stopped by
+// woods; heavy equipment (catapults/cannon/wagons — none in play yet) by marsh.
+// Individuals/skirmishers are unaffected.
+const HEAVY_MOVE_TYPES = new Set();   // populated when artillery/wagon types exist; marsh block dormant until then
+const isFormedBody = (u) => u.kind === 'mass';
+const isHeavyEquip = (u) => HEAVY_MOVE_TYPES.has(u.type);
+function terrainBlocksUnitAt(x, y, u) {
+  return terrainTypesAt(x, y).some(t =>
+    (t.blocksFormed && isFormedBody(u)) || (t.blocksHeavy && isHeavyEquip(u)));
+}
+// Scale factor in [0,1] for a move vector so the unit's centre path
+// origin→origin+s·(dx,dy) does not ENTER terrain that blocks this unit (woods for
+// a formed body). 1 when clear. A unit already standing in blocking terrain is
+// not trapped — returns 1 so it can move out. Centre-based and sampled;
+// footprint-aware blocking and true path-cost are later refinements.
+function moveBlockScale(ox, oy, dx, dy, u) {
+  if (!isFormedBody(u) && !isHeavyEquip(u)) return 1;
+  if (terrainBlocksUnitAt(ox, oy, u)) return 1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return 1;
+  const steps = Math.max(2, Math.ceil(len / 4));   // ~4px ≈ 0.17″ sampling
+  let lastClear = 0;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (terrainBlocksUnitAt(ox + dx * t, oy + dy * t, u)) return lastClear;
+    lastClear = t;
+  }
+  return 1;
+}
 // A unit is "normal" (not a Fantasy Supplement creature) iff its type is not in
 // FANTASTIC_TYPES. Wraith paralysis and Balrog immolation only affect normals.
 const isNormalType = (t) => !fantasticTypeById(t);
@@ -2375,8 +2404,9 @@ function onBoardMouseMove(evt) {
     }
     const remBefore = Math.max(0, effectiveMoveAllowance(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
     const c = clampMoveVector(vx, vy, remBefore);
-    nx = state.dragging.originX + c.dx;
-    ny = state.dragging.originY + c.dy;
+    const s = moveBlockScale(state.dragging.originX, state.dragging.originY, c.dx, c.dy, u);   // T2: woods stops formed bodies (p.9)
+    nx = state.dragging.originX + c.dx * s;
+    ny = state.dragging.originY + c.dy * s;
   }
   u.x = Math.max(20, Math.min(BOARD_W - 20, nx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, ny));
@@ -2626,6 +2656,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   if (u.halfMovePaused) return false;          // held at the half-move checkpoint; resume first
   const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
   if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
+  if (state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2: blocked by woods (p.9)
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
@@ -4695,6 +4726,16 @@ renderBoard();
     console.assert(terrainRegionAt(100, 100) !== null && terrainRegionAt(1000, 1000) === null, 'terrain: region hit-test by point');
     console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:100, y:100 }) - 6) < 1e-9, 'terrain: LF (12″) on a hill moves 6″');
     console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:1000, y:1000 }) - 12) < 1e-9, 'terrain: LF off terrain moves its full 12″');
+    // T2: woods stops formed bodies (mass); individuals pass; an in-woods start isn't trapped.
+    state.terrain = [{ id:'tw', type:'wooded', x:400, y:100, w:240, h:192 }];   // woods rect 280–520 px in x
+    const mass = { kind:'mass', type:'HF' }, indiv = { kind:'individual', type:'HERO' };
+    console.assert(terrainBlocksUnitAt(400, 100, mass) === true,  'woods blocks a formed (mass) body');
+    console.assert(terrainBlocksUnitAt(400, 100, indiv) === false, 'woods does not block an individual');
+    console.assert(terrainBlocksUnitAt(1000, 100, mass) === false, 'clear ground blocks nobody');
+    console.assert(moveBlockScale(100, 100, 600, 0, mass) < 0.999, 'formed body: move into woods is clamped short of the boundary');
+    console.assert(moveBlockScale(100, 100, 150, 0, mass) === 1, 'formed body: move stopping short of woods is unclamped');
+    console.assert(moveBlockScale(100, 100, 600, 0, indiv) === 1, 'individual: woods never clamps the move');
+    console.assert(moveBlockScale(400, 100, 200, 0, mass) === 1, 'formed body already in woods is not trapped (can move out)');
     state.terrain = _t; }
 
   // Asymmetric attack/defend classes + Giant die (Slice 7B).
