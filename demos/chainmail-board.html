@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.23 · Settings now persist (localStorage). Previously there was no persistence layer at all: state.settings always came from the hardcoded defaults at boot, so every setting reverted on reload — and the browser restoring a few checkbox DOM states made it look like "some" stuck while their behaviour silently reset. New saveSettings()/loadSettings() round-trip state.settings through localStorage, wrapped in try/catch so a sandboxed preview or storage-disabled browser degrades to in-memory only. load merges only keys already in defaults (stale/unknown keys ignored; a setting added in a later version keeps its default until touched) and coerces number vs boolean. saveSettings runs on every onSettingChange / onSettingRange; loadSettings runs at boot before showGrid is derived from gridOnByDefault, then syncSettingsCheckboxes() makes the dialog reflect the restored state instead of browser form-restore. -->
+<!-- chainmail-board.html · v0.10.24 · Auto move-touch (p.33 Wraith, p.34 Balrog). When a Wraith or Balrog finishes a move (drag commit or keyboard nudge), it now auto-applies its touch to the normal enemy figures it reaches — the Wraith paralyzing those in contact or within 1″ (held until freed by a friendly Elf/Hero/Wizard), the Balrog immolating figures within its footprint — replacing the manual context-menu trigger for the common case. New autoMoveTouch(u) reuses edgeGapInches / figuresWithinFootprint and the new isNormalType (Fantasy Supplement creatures are immune); it fires once per target per turn via u._touchedThisTurn (reset in endRound) so repeated nudges/drags do not re-apply, and folds into the move's undo snapshot. Wight paralysis stays a melee-time effect (p.37), out of scope here. The manual ctx touch/immolate actions remain as explicit overrides. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.23</title>
+<title>Chainmail — Battlefield · v0.10.24</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Persistent settings</div>
-    <span class="version-tag">v0.10.23</span>
+    <div class="sub">Chainmail HTML Sim · Auto move-touch</div>
+    <span class="version-tag">v0.10.24</span>
   </div>
 
   <div class="toolbar">
@@ -389,7 +389,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.23';
+const SIM_VERSION = '0.10.24';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1477,6 +1477,50 @@ function chargeContactExpected(mover) {
     canReachContact(mover, t, reach) &&
     (!cav || Math.abs(bearingTo(mover, t)) <= 45 + 1e-9));
 }
+// A unit is "normal" (not a Fantasy Supplement creature) iff its type is not in
+// FANTASTIC_TYPES. Wraith paralysis and Balrog immolation only affect normals.
+const isNormalType = (t) => !fantasticTypeById(t);
+// Move-touch (p.33 Wraith, p.34 Balrog): as a Wraith or Balrog finishes a move,
+// it auto-applies its touch to the normal enemy figures it now reaches — the
+// Wraith paralyzing those in contact or within 1″, the Balrog immolating figures
+// within its footprint. Fires once per target per turn (tracked on
+// u._touchedThisTurn, reset in endRound) so repeated drags/nudges don't re-apply.
+// Wight paralysis is a melee-time effect (p.37), not a move-touch. The manual ctx
+// touch/immolate actions remain as explicit overrides.
+function autoMoveTouch(u) {
+  if (!u || u.destroyed) return;
+  const wraith = u.type === 'WRAITH', balrog = u.type === 'BALROG';
+  if (!wraith && !balrog) return;
+  if (!u._touchedThisTurn) u._touchedThisTurn = [];
+  for (const t of state.units) {
+    if (t.side === u.side || t.destroyed || !isNormalType(t.type)) continue;
+    if (u._touchedThisTurn.includes(t.id)) continue;
+    if (wraith) {
+      if (edgeGapInches(u, t) > 1 + 1e-9) continue;        // touch = contact or within 1″
+      const n = addParalysis(t, 2, 'wraith', null);        // held until freed by a friendly Elf/Hero/Wizard
+      u._touchedThisTurn.push(t.id);
+      if (n > 0) appendTurn(`Move-touch · ${typeById(u.type).name} (${u.side}) → ${typeById(t.type).name} (${t.side})`,
+        `<div class="step">The Wraith's touch paralyzes <b>${n}</b> figure${n>1?'s':''} — held until freed by a friendly Elf/Hero/Wizard (p.33).</div>`);
+    } else {
+      if (t.kind === 'individual') continue;               // hero/fantastic flame saves not modeled
+      const n = figuresWithinFootprint(u, t);
+      if (n <= 0) continue;
+      applyCasualties(t, n);
+      capParalysisToCount(t);
+      u._touchedThisTurn.push(t.id);
+      let body = `<div class="step">The Balrog's flames immolate <b>${n}</b> ${typeById(t.type).name} figure${n>1?'s':''} in contact (p.34).</div>`;
+      if (t.destroyed) {
+        body += `<div class="verdict v-rout">${typeById(t.type).name} (${t.side}) consumed entirely</div>`;
+        cleanupEngagementsForUnit(t.id);
+        if (t.id === state.selectedId) state.selectedId = null;
+        if (t.id === state.targetId) state.targetId = null;
+      } else {
+        body += `<div class="step">${typeById(t.type).name} now ${t.count}/${t.startCount}</div>`;
+      }
+      appendTurn(`Move-touch · ${typeById(u.type).name} (${u.side}) → ${typeById(t.type).name} (${t.side})`, body);
+    }
+  }
+}
 // Count how many of target's figures fall within source's footprint (Slice 7H,
 // Balrog immolation). The footprint is a circle of source's half-extent; a
 // target figure counts if its cell centre is within that circle plus half a
@@ -2285,6 +2329,7 @@ function onBoardMouseUp() {
         // Slice 8A: add this drag's straight-line distance to the turn total.
         u.movedThisTurn = (state.dragging.movedBefore || 0) + pxToInches(distPx);
         u.acted.moved = true;
+        autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
       } else {
         discardUndo(state.dragging.undoTag);   // a click, not a move — no undo step
       }
@@ -2492,6 +2537,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
   u.movedThisTurn = (u.movedThisTurn || 0) + stepIn;
   u.acted.moved = true;
+  autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
   return true;
 }
 // Slice 8B: rotate the selected unit by deltaDeg, charging the facing-change
@@ -4203,6 +4249,7 @@ function endRound() {
     u.chargedLastTurn = !!u.charged;   // Slice 8C: this turn's charge bars a fresh charge next turn
     u.charged = false;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
+    u._touchedThisTurn = [];   // move-touch (Wraith/Balrog) re-arms each turn
     u.halfMovePaused = false;   // checkpoints reset with the new move
     u.splitFired = false; u.splitLeg1 = 0;
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
@@ -4527,6 +4574,12 @@ renderBoard();
   console.assert(canReachContact({ side:'A' }, { side:'A' }, 99) === false, 'reach: same-side is never a contact target');
   console.assert(canReachContact({ side:'A' }, { side:'B', destroyed:true }, 99) === false, 'reach: a destroyed target is not reachable');
   console.assert(canReachContact({ side:'A' }, null, 99) === false, 'reach: no target → not reachable');
+
+  // Move-touch (Wraith/Balrog). Guard clauses are geometry-independent; the
+  // contact/footprint logic is exercised by the node harness.
+  console.assert(isNormalType('LF') === true && isNormalType('WRAITH') === false && isNormalType('BALROG') === false, 'isNormalType: men are normal, fantasy creatures are not');
+  { const norm = { type:'LF' }; autoMoveTouch(norm); console.assert(norm._touchedThisTurn === undefined, 'move-touch: a normal unit never touches'); }
+  { const dead = { type:'WRAITH', destroyed:true }; autoMoveTouch(dead); console.assert(dead._touchedThisTurn === undefined, 'move-touch: a destroyed Wraith no-ops'); }
 
   // Asymmetric attack/defend classes + Giant die (Slice 7B).
   console.assert(fightingClassFor('GIANT') === 'HF' && defendClassFor('GIANT') === 'AF', 'Giant attacks HF / defends AF');
