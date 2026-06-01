@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.24 · Auto move-touch (p.33 Wraith, p.34 Balrog). When a Wraith or Balrog finishes a move (drag commit or keyboard nudge), it now auto-applies its touch to the normal enemy figures it reaches — the Wraith paralyzing those in contact or within 1″ (held until freed by a friendly Elf/Hero/Wizard), the Balrog immolating figures within its footprint — replacing the manual context-menu trigger for the common case. New autoMoveTouch(u) reuses edgeGapInches / figuresWithinFootprint and the new isNormalType (Fantasy Supplement creatures are immune); it fires once per target per turn via u._touchedThisTurn (reset in endRound) so repeated nudges/drags do not re-apply, and folds into the move's undo snapshot. Wight paralysis stays a melee-time effect (p.37), out of scope here. The manual ctx touch/immolate actions remain as explicit overrides. -->
+<!-- chainmail-board.html · v0.10.25 · Terrain pillar — Slice T1 (foundation + movement effects, p.9). New state.terrain (axis-aligned rects: centre + size px) + frozen TERRAIN_TYPES (hill/woods/marsh/rough/ditch/stream/river/pond/gulley with RAW effect flags moveMult/noCharge/blocksFormed/blocksHeavy + crossing data). Geometry: terrainRegionAt / terrainTypesAt / terrainMoveMultAt (most-restrictive) / terrainNoChargeAt. Two movement effects wired this slice: the 50% slow (hill/woods/marsh/ditch/pond) folds into effectiveMoveAllowance from the terrain under the unit centre, so the drag-clamp and ruler honour it; and no-charge terrain makes declare-charge refuse under enforceMovement (p.9). Render: a translucent non-interactive terrain layer beneath the grid/units; interaction by coordinate hit-test. Authoring: Terrain toggle (hotkey t) + type select — click empty board to place, click a region to remove; undoable (terrain added to the snapshot); Reset clears it. blocksFormed/blocksHeavy + stream/river crossing = T2. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.24</title>
+<title>Chainmail — Battlefield · v0.10.25</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Auto move-touch</div>
-    <span class="version-tag">v0.10.24</span>
+    <div class="sub">Chainmail HTML Sim · Terrain T1 — movement</div>
+    <span class="version-tag">v0.10.25</span>
   </div>
 
   <div class="toolbar">
@@ -204,6 +204,8 @@
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-grid" class="secondary">Grid: off</button>
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
+    <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
+    <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
     <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
@@ -389,11 +391,28 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.24';
+const SIM_VERSION = '0.10.25';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
 const MELEE_RANGE_IN = 3; // inches of contact, per rules
+
+// Terrain (p.9–10). Effects are RAW flags; T1 wires moveMult (50% slow) and
+// noCharge. blocksFormed (wooded) / blocksHeavy (marshy) and the stream/river
+// crossing costs are T2. Fills are translucent so the grid and units read
+// through. wIn/hIn are the default footprint dropped on placement.
+const TERRAIN_TYPES = Object.freeze({
+  hill:   { label: 'Hill',          fill: '#cda86a', moveMult: 0.5, noCharge: true,                      wIn: 12, hIn: 8 },
+  wooded: { label: 'Woods',         fill: '#5f7d4f', moveMult: 0.5, noCharge: true, blocksFormed: true,  wIn: 10, hIn: 8 },
+  marshy: { label: 'Marsh',         fill: '#7a8a5a', moveMult: 0.5, noCharge: true, blocksHeavy: true,   wIn: 9,  hIn: 7 },
+  ditch:  { label: 'Ditch/Rampart', fill: '#a98b5a', moveMult: 0.5, noCharge: true,                      wIn: 14, hIn: 3 },
+  rough:  { label: 'Rough',         fill: '#b09a6a', moveMult: 1,   noCharge: true,                      wIn: 9,  hIn: 6 },
+  stream: { label: 'Stream',        fill: '#5b86a8', moveMult: 1,   noCharge: true, cross: 6,            wIn: 16, hIn: 2 },
+  river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full',      wIn: 22, hIn: 3 },
+  pond:   { label: 'Pond',          fill: '#4f7c9c', moveMult: 0.5, noCharge: true,                      wIn: 7,  hIn: 6 },
+  gulley: { label: 'Gulley',        fill: '#9c8757', moveMult: 1,   noCharge: true,                      wIn: 11, hIn: 3 },
+});
+const TERRAIN_ORDER = ['hill', 'wooded', 'marshy', 'rough', 'ditch', 'stream', 'river', 'pond', 'gulley'];
 
 /* === A. RNG ============================================================ */
 function mulberry32(seed) {
@@ -1269,6 +1288,9 @@ const state = {
   measure: { active: false, a: null, b: null, live: null },  // free-standing ruler: a/b are locked board-px points, live follows the cursor while anchored
   viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
   showGrid: false,
+  terrain: [],            // T1: placed terrain regions { id, type, x, y, w, h } (centre + size, px)
+  terrainMode: false,     // T1: terrain placement mode (parity with the measure tool)
+  terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
   ctxUnitId: null,
   turn: 1,
   phaseIdx: 0,          // Slice 8D: index into PHASES
@@ -1477,6 +1499,29 @@ function chargeContactExpected(mover) {
     canReachContact(mover, t, reach) &&
     (!cav || Math.abs(bearingTo(mover, t)) <= 45 + 1e-9));
 }
+// Terrain geometry (T1). Regions are axis-aligned rects (centre + size, px).
+const inTerrainRect = (x, y, r) => Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2;
+// Topmost (last-drawn) region containing a point — so a click removes what sits
+// visually on top.
+function terrainRegionAt(x, y) {
+  for (let i = state.terrain.length - 1; i >= 0; i--) if (inTerrainRect(x, y, state.terrain[i])) return state.terrain[i];
+  return null;
+}
+function terrainTypesAt(x, y) {
+  const out = [];
+  for (const r of state.terrain) if (inTerrainRect(x, y, r)) { const t = TERRAIN_TYPES[r.type]; if (t) out.push(t); }
+  return out;
+}
+// Most-restrictive (lowest) move multiplier under a point; 1 on clear ground.
+function terrainMoveMultAt(x, y) {
+  let m = 1;
+  for (const t of terrainTypesAt(x, y)) if (t.moveMult < m) m = t.moveMult;
+  return m;
+}
+// First no-charge terrain type under a point, else null (for the charge gate).
+function terrainNoChargeAt(x, y) {
+  return terrainTypesAt(x, y).find(t => t.noCharge) || null;
+}
 // A unit is "normal" (not a Fantasy Supplement creature) iff its type is not in
 // FANTASTIC_TYPES. Wraith paralysis and Balrog immolation only affect normals.
 const isNormalType = (t) => !fantasticTypeById(t);
@@ -1661,6 +1706,7 @@ function renderBoard() {
   applyViewBox();
   board.innerHTML =
     renderBg() +
+    renderTerrain() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
     `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderMeasure()}${renderDragRuler()}</g>`;
@@ -1759,6 +1805,21 @@ function renderBg() {
   return `<g id="bg">${ticks.join('')}</g>`;
 }
 
+// Terrain layer (T1). Non-interactive (pointer-events:none) — placement and
+// removal are done by coordinate hit-test in terrain mode, not via DOM target,
+// so terrain never intercepts unit clicks in normal play.
+function renderTerrain() {
+  if (!state.terrain.length) return '';
+  const rects = state.terrain.map(r => {
+    const t = TERRAIN_TYPES[r.type] || { label: r.type, fill: '#999' };
+    const x = r.x - r.w / 2, y = r.y - r.h / 2;
+    return `<g><rect x="${x}" y="${y}" width="${r.w}" height="${r.h}" rx="6" ` +
+      `fill="${t.fill}" fill-opacity="0.30" stroke="${t.fill}" stroke-opacity="0.75" stroke-width="2"/>` +
+      `<text x="${r.x}" y="${y + 15}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
+      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}</text></g>`;
+  }).join('');
+  return `<g id="terrain" pointer-events="none">${rects}</g>`;
+}
 function renderGrid() {
   if (!state.showGrid) return '';
   const lines = [];
@@ -2233,6 +2294,7 @@ function toggleGrid() {
 }
 
 function onBoardMouseDown(evt) {
+  if (state.terrainMode && evt.button === 0) { terrainClick(svgPoint(evt)); return; }
   if (state.measure.active && evt.button === 0) { measureClick(svgPoint(evt), null); return; }
   // Middle-click → pan; ignore on units (their handlers stopPropagation)
   if (evt.button === 1) {
@@ -2244,6 +2306,7 @@ function onBoardMouseDown(evt) {
 
 function onUnitMouseDown(evt, unitId) {
   evt.stopPropagation();
+  if (state.terrainMode) { terrainClick(svgPoint(evt)); return; }
   const u = state.units.find(u => u.id === unitId);
   if (!u || u.destroyed) return;
   if (state.measure.active) { measureClick(svgPoint(evt), unitId); return; }
@@ -2367,6 +2430,35 @@ function syncMeasureButton() {
   btn.textContent = state.measure.active ? 'Measure: on' : 'Measure';
   btn.classList.toggle('active', state.measure.active);
 }
+// Terrain placement (T1) — a mode toggle in the spirit of the measure tool.
+// While on, a board click drops the selected terrain type; clicking an existing
+// region removes it. Mutually exclusive with measuring and dragging.
+function toggleTerrain() {
+  state.terrainMode = !state.terrainMode;
+  if (state.terrainMode) {
+    state.dragging = null;
+    if (state.measure.active) { state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton(); }
+  }
+  syncTerrainButton();
+  renderBoard();
+}
+function syncTerrainButton() {
+  const btn = $('#btn-terrain'), sel = $('#terrain-type');
+  if (btn) { btn.textContent = state.terrainMode ? 'Terrain: on' : 'Terrain'; btn.classList.toggle('active', state.terrainMode); }
+  if (sel) sel.hidden = !state.terrainMode;
+}
+function terrainClick(p) {
+  const hit = terrainRegionAt(p.x, p.y);
+  if (hit) {
+    pushUndo('terrain-remove');
+    state.terrain = state.terrain.filter(r => r !== hit);
+  } else {
+    const t = TERRAIN_TYPES[state.terrainType] || TERRAIN_TYPES.hill;
+    pushUndo('terrain-add');
+    state.terrain.push({ id: 'tr' + (state.nextId++), type: state.terrainType, x: p.x, y: p.y, w: inchesToPx(t.wIn), h: inchesToPx(t.hIn) });
+  }
+  renderBoard();
+}
 const measureSnap = (p) => state.settings.snapToGrid
   ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) }
   : { x: p.x, y: p.y };
@@ -2422,6 +2514,7 @@ function captureSnapshot() {
   return {
     units: structuredClone(state.units),
     engagements: structuredClone(state.engagements),
+    terrain: structuredClone(state.terrain),
     selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
     nextId: state.nextId, turn: state.turn,
     phaseIdx: state.phaseIdx, firstMover: state.firstMover,
@@ -2433,6 +2526,7 @@ function captureSnapshot() {
 function applySnapshot(s) {
   state.units = structuredClone(s.units);
   state.engagements = structuredClone(s.engagements);
+  state.terrain = structuredClone(s.terrain || []);
   state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
   state.nextId = s.nextId; state.turn = s.turn;
   state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
@@ -2504,7 +2598,7 @@ const BOW_WEAPONS = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
 const isBowArmed = (u) => BOW_WEAPONS.has(u.weapon);
 const canSplitMoveFire = (u) => isHorseman(u) && isBowArmed(u);
 function effectiveMoveAllowance(u) {
-  const base = moveAllowanceOf(u);
+  const base = moveAllowanceOf(u) * terrainMoveMultAt(u.x, u.y);   // T1: hill/woods/marsh/ditch halve the move
   if (u.splitFired) return Math.min(base, (u.splitLeg1 || 0) + halfMoveIn(u));  // leg 1 (at fire) + ≤½ for leg 2
   return base;
 }
@@ -2582,6 +2676,7 @@ function onKeyDown(evt) {
   if (evt.key === '0') { resetView(); evt.preventDefault(); return; }
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
   if ((evt.key === 'm' || evt.key === 'M') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleMeasure(); evt.preventDefault(); return; }
+  if ((evt.key === 't' || evt.key === 'T') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleTerrain(); evt.preventDefault(); return; }
   if (evt.key === '?') { openHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#help-modal').hidden) { closeHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); return; }
@@ -3951,7 +4046,11 @@ function onContextMenuAction(evt) {
   } else if (act === 'clear-fatigue') {
     u.fatigued = false;
   } else if (act === 'declare-charge') {
-    if (state.settings.enforceMovement && !chargeContactExpected(u)) {
+    const noChargeTerr = terrainNoChargeAt(u.x, u.y);
+    if (state.settings.enforceMovement && noChargeTerr) {
+      appendTurn(`Charge refused`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) stands in ${noChargeTerr.label} — that terrain prevents all charge moves (p.9).</div>`);
+    } else if (state.settings.enforceMovement && !chargeContactExpected(u)) {
       const cav = isMountedType(u.type) || !!u.mounted;
       appendTurn(`Charge refused`,
         `<div class="step">${typeById(u.type).name} (${u.side}) has no enemy reachable into melee contact within its ${chargeAllowanceOf(u)}″ charge${cav ? ' (≤45° straight line)' : ''} — a charge is only permitted when contact is expected (p.16).</div>`);
@@ -3991,6 +4090,8 @@ function onContextMenuAction(evt) {
 
 function resetBoard() {
   state.units = [];
+  state.terrain = [];
+  state.terrainMode = false; syncTerrainButton();
   state.selectedId = null;
   state.targetId = null;
   state.dragging = null;
@@ -4284,6 +4385,10 @@ $('#btn-clear-sel').addEventListener('click', () => { state.selectedId = null; s
 $('#btn-reset-view').addEventListener('click', resetView);
 $('#btn-grid').addEventListener('click', toggleGrid);
 $('#btn-measure').addEventListener('click', toggleMeasure);
+$('#btn-terrain').addEventListener('click', toggleTerrain);
+$('#terrain-type').innerHTML = TERRAIN_ORDER.map(k => `<option value="${k}">${TERRAIN_TYPES[k].label}</option>`).join('');
+$('#terrain-type').value = state.terrainType;
+$('#terrain-type').addEventListener('change', e => { state.terrainType = e.target.value; });
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
 $('#btn-settings').addEventListener('click', openSettings);
@@ -4580,6 +4685,17 @@ renderBoard();
   console.assert(isNormalType('LF') === true && isNormalType('WRAITH') === false && isNormalType('BALROG') === false, 'isNormalType: men are normal, fantasy creatures are not');
   { const norm = { type:'LF' }; autoMoveTouch(norm); console.assert(norm._touchedThisTurn === undefined, 'move-touch: a normal unit never touches'); }
   { const dead = { type:'WRAITH', destroyed:true }; autoMoveTouch(dead); console.assert(dead._touchedThisTurn === undefined, 'move-touch: a destroyed Wraith no-ops'); }
+
+  // Terrain (T1) — geometry + the 50% slow folded into effectiveMoveAllowance.
+  { const _t = state.terrain;
+    state.terrain = [{ id:'tt', type:'hill', x:100, y:100, w:240, h:192 }];   // 10″×8″ hill centred at (100,100)
+    console.assert(terrainMoveMultAt(100, 100) === 0.5, 'terrain: hill halves the move multiplier inside its footprint');
+    console.assert(terrainMoveMultAt(1000, 1000) === 1, 'terrain: clear ground is full move');
+    console.assert(!!terrainNoChargeAt(100, 100) && terrainNoChargeAt(1000, 1000) === null, 'terrain: hill is a no-charge zone, clear ground is not');
+    console.assert(terrainRegionAt(100, 100) !== null && terrainRegionAt(1000, 1000) === null, 'terrain: region hit-test by point');
+    console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:100, y:100 }) - 6) < 1e-9, 'terrain: LF (12″) on a hill moves 6″');
+    console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:1000, y:1000 }) - 12) < 1e-9, 'terrain: LF off terrain moves its full 12″');
+    state.terrain = _t; }
 
   // Asymmetric attack/defend classes + Giant die (Slice 7B).
   console.assert(fightingClassFor('GIANT') === 'HF' && defendClassFor('GIANT') === 'AF', 'Giant attacks HF / defends AF');
