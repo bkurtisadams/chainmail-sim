@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.26 · Terrain Slice T2a (entry blocks via path-sampling, p.9). Woods now stops formed bodies (mass units): under enforceMovement a drag is clamped at the woods boundary and a nudge into woods is refused. New moveBlockScale(ox,oy,dx,dy,u) samples the move segment (~4px steps) and returns the fraction of the vector that stays clear of blocking terrain; terrainBlocksUnitAt tests woods-vs-formed and (dormant) marsh-vs-heavy. isFormedBody = mass kind; isHeavyEquip uses HEAVY_MOVE_TYPES, empty until catapult/cannon/wagon types exist, so the marsh block is wired but inert for now. Centre-based, sampled; advisory mode stays freeform (no clamp) and a unit already standing in woods is not trapped. Footprint-aware blocking, the stream/river crossing costs, and path-aware slow are T2b. -->
+<!-- chainmail-board.html · v0.10.27 · Terrain Slice T2b (crossing costs + path-aware slow, p.9). T1's centre-based 50% slow is replaced by per-inch path cost: effectiveMoveAllowance is now the plain move budget, and terrain charges the budget along the actual move segment. New terrainCostMultAt (1/moveMult, so hill/woods/marsh/ditch/pond cost 2 budget-inches per inch), crossingRegionsAt (stream/river regions under a point, keyed by region id), and pathMoveCost(ox,oy,dx,dy,u,budgetIn) which walks the segment summing per-inch cost plus a one-time lump on ENTERING a stream (its cross inches, 6″) or river (a full move) and returns {cost, scale}. Drag clamps by path cost (not raw length), mouseup folds the path cost — crossing penalty included — into movedThisTurn, and nudge costs its path cost. A unit starting inside a crossing region is not charged to leave it; a ford whose lump won't fit the budget halts the unit on the near bank. Footprint-aware blocking is still deferred. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.26</title>
+<title>Chainmail — Battlefield · v0.10.27</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Terrain T2a — woods block</div>
-    <span class="version-tag">v0.10.26</span>
+    <div class="sub">Chainmail HTML Sim · Terrain T2b — crossings + path slow</div>
+    <span class="version-tag">v0.10.27</span>
   </div>
 
   <div class="toolbar">
@@ -391,7 +391,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.26';
+const SIM_VERSION = '0.10.27';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1551,6 +1551,48 @@ function moveBlockScale(ox, oy, dx, dy, u) {
   }
   return 1;
 }
+// Path-aware terrain cost (T2b, p.9). Supersedes T1's centre-based slow: a move
+// no longer scales the whole allowance by the terrain under the unit's centre —
+// instead each inch of travel costs move-budget by the terrain it crosses, plus a
+// one-time penalty for fording a stream/river. costMult is 1/moveMult, so slow
+// ground (hill/woods/marsh/ditch/pond, moveMult 0.5) costs 2 budget-inches per inch.
+const terrainCostMultAt = (x, y) => 1 / terrainMoveMultAt(x, y);
+// Regions with a one-time crossing cost (stream 6″, river a full move) containing a
+// point, as a Map of region-id → cross value. Keyed by region id so re-entry after
+// leaving is charged again but staying inside is not.
+function crossingRegionsAt(x, y) {
+  const m = new Map();
+  for (const r of state.terrain) {
+    const t = TERRAIN_TYPES[r.type];
+    if (t && t.cross != null && inTerrainRect(x, y, r)) m.set(r.id, t.cross);
+  }
+  return m;
+}
+// Walk origin→origin+(dx,dy), summing per-inch terrain cost plus a lump each time
+// the path ENTERS a stream (its `cross` inches) or river (a full move). Returns the
+// total `cost` in move-budget inches and `scale` ∈ [0,1] — the furthest fraction of
+// the vector whose cumulative cost fits `budgetIn` (Infinity ⇒ pure measurement, no
+// clamp). A unit starting inside a crossing region is not charged to leave it; a
+// crossing whose lump won't fit the budget stops the unit on the near bank.
+function pathMoveCost(ox, oy, dx, dy, u, budgetIn = Infinity) {
+  const lenPx = Math.hypot(dx, dy);
+  if (lenPx < 1e-6) return { cost: 0, scale: 1 };
+  const steps = Math.max(2, Math.ceil(lenPx / 4));   // ~4px ≈ 0.17″ sampling, matches moveBlockScale
+  const stepIn = pxToInches(lenPx) / steps;
+  const fullMove = baseMoveAllowanceOf(u);
+  let cost = 0, scale = 1, capped = false;
+  let prev = crossingRegionsAt(ox, oy);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps, mid = t - 0.5 / steps;
+    let inc = stepIn * terrainCostMultAt(ox + dx * mid, oy + dy * mid);
+    const here = crossingRegionsAt(ox + dx * t, oy + dy * t);
+    for (const [id, pen] of here) if (!prev.has(id)) inc += (pen === 'full') ? fullMove : pen;
+    prev = here;
+    if (!capped && cost + inc > budgetIn + 1e-9) { scale = (i - 1) / steps; capped = true; }
+    cost += inc;
+  }
+  return { cost, scale };
+}
 // A unit is "normal" (not a Fantasy Supplement creature) iff its type is not in
 // FANTASTIC_TYPES. Wraith paralysis and Balrog immolation only affect normals.
 const isNormalType = (t) => !fantasticTypeById(t);
@@ -2403,10 +2445,10 @@ function onBoardMouseMove(evt) {
       vx = h.dx; vy = h.dy;
     }
     const remBefore = Math.max(0, effectiveMoveAllowance(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
-    const c = clampMoveVector(vx, vy, remBefore);
-    const s = moveBlockScale(state.dragging.originX, state.dragging.originY, c.dx, c.dy, u);   // T2: woods stops formed bodies (p.9)
-    nx = state.dragging.originX + c.dx * s;
-    ny = state.dragging.originY + c.dy * s;
+    const pc = pathMoveCost(state.dragging.originX, state.dragging.originY, vx, vy, u, remBefore);   // T2b: clamp by path cost (slow terrain + stream/river crossings), not raw length
+    const s = moveBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale, vy * pc.scale, u);   // T2a: woods stops formed bodies (p.9)
+    nx = state.dragging.originX + vx * pc.scale * s;
+    ny = state.dragging.originY + vy * pc.scale * s;
   }
   u.x = Math.max(20, Math.min(BOARD_W - 20, nx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, ny));
@@ -2419,8 +2461,10 @@ function onBoardMouseUp() {
     if (u) {
       const distPx = Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY);
       if (distPx > 0.5) {
-        // Slice 8A: add this drag's straight-line distance to the turn total.
-        u.movedThisTurn = (state.dragging.movedBefore || 0) + pxToInches(distPx);
+        // Slice 8A / T2b: charge the turn budget the PATH COST of this drag — base
+        // distance plus terrain slow and any stream/river crossing penalty.
+        const moved = pathMoveCost(state.dragging.originX, state.dragging.originY, u.x - state.dragging.originX, u.y - state.dragging.originY, u).cost;
+        u.movedThisTurn = (state.dragging.movedBefore || 0) + moved;
         u.acted.moved = true;
         autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
       } else {
@@ -2628,7 +2672,10 @@ const BOW_WEAPONS = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
 const isBowArmed = (u) => BOW_WEAPONS.has(u.weapon);
 const canSplitMoveFire = (u) => isHorseman(u) && isBowArmed(u);
 function effectiveMoveAllowance(u) {
-  const base = moveAllowanceOf(u) * terrainMoveMultAt(u.x, u.y);   // T1: hill/woods/marsh/ditch halve the move
+  // T2b: terrain slow is charged per-inch along the path (pathMoveCost), no longer
+  // by scaling the budget at the unit's centre. The allowance is the plain move
+  // budget; the split-fire cap still applies.
+  const base = moveAllowanceOf(u);
   if (u.splitFired) return Math.min(base, (u.splitLeg1 || 0) + halfMoveIn(u));  // leg 1 (at fire) + ≤½ for leg 2
   return base;
 }
@@ -2654,13 +2701,13 @@ function canPassThroughFire(firer, target) {
 function nudgeUnit(u, dxPx, dyPx) {
   if (!canSideMoveNow(u.side)) return false;   // Slice 8D phase gate
   if (u.halfMovePaused) return false;          // held at the half-move checkpoint; resume first
-  const stepIn = pxToInches(Math.hypot(dxPx, dyPx));
-  if (state.settings.enforceMovement && remainingMoveIn(u) < stepIn - 1e-9) return false;
-  if (state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2: blocked by woods (p.9)
+  const stepCost = pathMoveCost(u.x, u.y, dxPx, dyPx, u).cost;   // T2b: path-aware (slow terrain + crossings)
+  if (state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
+  if (state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
-  u.movedThisTurn = (u.movedThisTurn || 0) + stepIn;
+  u.movedThisTurn = (u.movedThisTurn || 0) + stepCost;
   u.acted.moved = true;
   autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
   return true;
@@ -4724,8 +4771,11 @@ renderBoard();
     console.assert(terrainMoveMultAt(1000, 1000) === 1, 'terrain: clear ground is full move');
     console.assert(!!terrainNoChargeAt(100, 100) && terrainNoChargeAt(1000, 1000) === null, 'terrain: hill is a no-charge zone, clear ground is not');
     console.assert(terrainRegionAt(100, 100) !== null && terrainRegionAt(1000, 1000) === null, 'terrain: region hit-test by point');
-    console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:100, y:100 }) - 6) < 1e-9, 'terrain: LF (12″) on a hill moves 6″');
-    console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:1000, y:1000 }) - 12) < 1e-9, 'terrain: LF off terrain moves its full 12″');
+    console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:100, y:100 }) - 12) < 1e-9, 'T2b: effectiveMoveAllowance no longer scales by centre terrain — slow is charged per-inch as path cost');
+    console.assert(terrainCostMultAt(100, 100) === 2 && terrainCostMultAt(1000, 1000) === 1, 'T2b: cost factor is 2× inside the hill, 1× on clear ground');
+    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }).cost - 10) < 1e-6, 'T2b: a 5″ path wholly inside the hill costs 10 budget-inches (2×)');
+    console.assert(Math.abs(pathMoveCost(1000, 1000, 120, 0, { type:'LF' }).cost - 5) < 1e-6, 'T2b: a 5″ path on clear ground costs 5');
+    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }, 6).scale - 0.6) < 1e-6, 'T2b: a 6-budget clamp on the hill reaches 60% of a 5″ vector (3″)');
     // T2: woods stops formed bodies (mass); individuals pass; an in-woods start isn't trapped.
     state.terrain = [{ id:'tw', type:'wooded', x:400, y:100, w:240, h:192 }];   // woods rect 280–520 px in x
     const mass = { kind:'mass', type:'HF' }, indiv = { kind:'individual', type:'HERO' };
@@ -4736,6 +4786,16 @@ renderBoard();
     console.assert(moveBlockScale(100, 100, 150, 0, mass) === 1, 'formed body: move stopping short of woods is unclamped');
     console.assert(moveBlockScale(100, 100, 600, 0, indiv) === 1, 'individual: woods never clamps the move');
     console.assert(moveBlockScale(400, 100, 200, 0, mass) === 1, 'formed body already in woods is not trapped (can move out)');
+    // T2b: stream/river crossing costs + near-bank halt.
+    state.terrain = [{ id:'ts', type:'stream', x:300, y:100, w:48, h:240 }];   // 2″-wide stream at x 276–324
+    const lf = { type:'LF' };
+    console.assert(Math.abs(pathMoveCost(200, 100, 144, 0, lf).cost - 12) < 1e-6, 'T2b: a 6″ path fording a stream costs 6 + the 6″ crossing = 12');
+    console.assert(pathMoveCost(200, 100, 144, 0, lf, 12).scale === 1, 'T2b: stream is crossable when the 6″ ford fits the budget');
+    console.assert(6 * pathMoveCost(200, 100, 144, 0, lf, 4).scale < 3.5, 'T2b: a stream ford it cannot afford halts the unit on the near bank');
+    state.terrain = [{ id:'tr', type:'river', x:600, y:100, w:72, h:240 }];     // 3″-wide river at x 564–636
+    console.assert(Math.abs(pathMoveCost(500, 100, 144, 0, lf).cost - 18) < 1e-6, 'T2b: fording a river costs a full move (12) on top of the 6″ travelled = 18');
+    console.assert(6 * pathMoveCost(500, 100, 144, 0, lf, 12).scale < 3, 'T2b: a river (full-move ford) overruns a 12″ budget, halting on the near bank');
+    console.assert(pathMoveCost(600, 100, 144, 0, lf, 12).scale > 0.99 && Math.abs(pathMoveCost(600, 100, 144, 0, lf).cost - 6) < 1e-6, 'T2b: a unit STARTING in the river is not charged to leave it (cost is just the 6″ travelled)');
     state.terrain = _t; }
 
   // Asymmetric attack/defend classes + Giant die (Slice 7B).
