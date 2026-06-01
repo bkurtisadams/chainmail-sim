@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.28 · Simultaneous missile fire (p.9). In the dedicated missile phase, with phases enforced, all fire "takes effect simultaneously just prior to melee": every unit fires at full pre-phase strength and casualties are held as unit.pendingHits, applied together when the phase ends (advancePhase out of missile, with an endRound safety net) — so red A→B and blue B→A both fire at full count regardless of click order. New simMissilePhase() predicate (enforcePhases && phase===missile) and resolveMissilePhase() which removes held hits then runs the loss-% morale check RAW puts before melee, in deterministic unit order for seeded replay. All three resolvers (mass→mass, indiv→mass/indiv, mass→indiv) defer in sim mode; split-move and pass-through fire stay immediate (they happen in the move phases). Pane shows an Incoming pending line; pendingHits travels through undo and resets each round. Advisory play is unchanged (one shot at a time). -->
+<!-- chainmail-board.html · v0.10.29 · Terrain Slice T3 (woods soft cover + indirect blocking, p.12). A target standing in woods now automatically gets soft cover (missile casualties halved, fractions dropped) via terrainCoverAt + effectiveCover (stronger of manual cover and terrain). Woods/overhead cover blocks indirect fire against a target under it: new terrainBlocksIndirectAt + effectiveIndirect (elected && weapon allows && target not under canopy), used by inMissileRange (so a blocked shot reverts to direct, full range) and all three missile resolvers (mass→mass, individual, mass→indiv) for cover negation and the arrow-proof bump. Pane shows effective cover with an "in woods" note; logs tag "indirect blocked by woods canopy". TERRAIN_TYPES.wooded gains softCover + blocksIndirect flags. Uphill melee / true line-of-sight blocking by intervening terrain are deferred — the terrain model has no elevation vector or LOS path test yet. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.28</title>
+<title>Chainmail — Battlefield · v0.10.29</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Simultaneous missile fire</div>
-    <span class="version-tag">v0.10.28</span>
+    <div class="sub">Chainmail HTML Sim · Terrain T3 — woods cover</div>
+    <span class="version-tag">v0.10.29</span>
   </div>
 
   <div class="toolbar">
@@ -391,7 +391,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.28';
+const SIM_VERSION = '0.10.29';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -403,7 +403,7 @@ const MELEE_RANGE_IN = 3; // inches of contact, per rules
 // through. wIn/hIn are the default footprint dropped on placement.
 const TERRAIN_TYPES = Object.freeze({
   hill:   { label: 'Hill',          fill: '#cda86a', moveMult: 0.5, noCharge: true,                      wIn: 12, hIn: 8 },
-  wooded: { label: 'Woods',         fill: '#5f7d4f', moveMult: 0.5, noCharge: true, blocksFormed: true,  wIn: 10, hIn: 8 },
+  wooded: { label: 'Woods',         fill: '#5f7d4f', moveMult: 0.5, noCharge: true, blocksFormed: true, softCover: true, blocksIndirect: true, wIn: 10, hIn: 8 },
   marshy: { label: 'Marsh',         fill: '#7a8a5a', moveMult: 0.5, noCharge: true, blocksHeavy: true,   wIn: 9,  hIn: 7 },
   ditch:  { label: 'Ditch/Rampart', fill: '#a98b5a', moveMult: 0.5, noCharge: true,                      wIn: 14, hIn: 3 },
   rough:  { label: 'Rough',         fill: '#b09a6a', moveMult: 1,   noCharge: true,                      wIn: 9,  hIn: 6 },
@@ -1522,6 +1522,26 @@ function terrainMoveMultAt(x, y) {
 function terrainNoChargeAt(x, y) {
   return terrainTypesAt(x, y).find(t => t.noCharge) || null;
 }
+// Missile cover & indirect-blocking from terrain (T3, p.12). Woods is soft cover
+// and its canopy stops plunging (indirect) fire. Cover ranks none<soft<hard;
+// effectiveCover takes the stronger of a unit's manual cover and the terrain it
+// stands in, so a unit in woods is at least soft cover even with none set.
+const COVER_RANK = Object.freeze({ none: 0, soft: 1, hard: 2 });
+const terrainCoverAt = (x, y) => terrainTypesAt(x, y).some(t => t.softCover) ? 'soft' : 'none';
+function effectiveCover(u) {
+  const manual = u.cover || 'none';
+  const terr = terrainCoverAt(u.x, u.y);
+  return (COVER_RANK[terr] || 0) > (COVER_RANK[manual] || 0) ? terr : manual;
+}
+// Woods/overhead cover prevents all indirect fire AGAINST a target standing in it
+// (p.12). LOS blocking by terrain merely *between* shooter and target is a later
+// refinement; this keys off the target's own position.
+const terrainBlocksIndirectAt = (x, y) => terrainTypesAt(x, y).some(t => t.blocksIndirect);
+// Indirect fire is only actually in effect if the shooter elected it, the weapon
+// allows it, and the target isn't under woods/overhead cover (p.12). Centralised
+// so range (−⅓) and the cover/arrow-proof rules never disagree.
+const effectiveIndirect = (firer, target) =>
+  !!firer.indirect && weaponIndirectAllowed(firer.weapon) && !terrainBlocksIndirectAt(target.x, target.y);
 // Entry-blocking terrain (T2, p.9). Formed bodies (mass units) are stopped by
 // woods; heavy equipment (catapults/cannon/wagons — none in play yet) by marsh.
 // Individuals/skirmishers are unaffected.
@@ -1662,7 +1682,7 @@ function figuresWithinFootprint(source, target) {
 
 function inMissileRange(firer, target) {
   if (!firer.weapon) return { ok:false, reason:'no weapon' };
-  const indirect = !!firer.indirect && weaponIndirectAllowed(firer.weapon);
+  const indirect = effectiveIndirect(firer, target);
   // Indirect fire reduces a weapon's range by one-third (p.12).
   let maxIn = WEAPON_RANGES[firer.weapon];
   if (indirect) maxIn = Math.floor(maxIn * 2 / 3);
@@ -2263,7 +2283,7 @@ function updateSidebar() {
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
       (u.indirect ? `<div class="stat"><span class="k">Indirect fire</span><span class="v" style="color:#8a6d3b">ON · range −⅓, +1 armor cat</span></div>` : '') +
-      (u.cover && u.cover !== 'none' ? `<div class="stat"><span class="k">Cover</span><span class="v" style="color:#8a6d3b">${u.cover.toUpperCase()}</span></div>` : '') +
+      (effectiveCover(u) !== 'none' ? `<div class="stat"><span class="k">Cover</span><span class="v" style="color:#8a6d3b">${effectiveCover(u).toUpperCase()}${terrainCoverAt(u.x, u.y) !== 'none' && COVER_RANK[terrainCoverAt(u.x, u.y)] >= COVER_RANK[u.cover || 'none'] ? ' · in woods' : ''}</span></div>` : '') +
       (u.type === 'DRAGON' ? `<div class="stat"><span class="k">Breath</span><span class="v" style="color:#8a6d3b">${3-(u.breathsUsed||0)}/3 left${(u.breathsUsed||0)>=3?' · must rekindle':''}</span></div>` : '') +
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
@@ -3652,9 +3672,13 @@ function onResolveMissile() {
   const reach = inMissileRange(a, d);
   if (!reach.ok) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
   // Indirect (p.12): bows/longbows only, range −⅓ (in inMissileRange), target
-  // bumped one armor category, and cover is negated.
-  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
-  const cover = indirect ? false : coverHalves(d.cover);
+  // bumped one armor category, and cover is negated — but woods/overhead cover
+  // blocks indirect entirely, reverting the shot to direct fire.
+  const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const indirect = effectiveIndirect(a, d);
+  const indirectBlocked = indirectWanted && !indirect;
+  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const cover = indirect ? false : coverHalves(dCover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   let firingCount = Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = firingCount < a.count;
@@ -3668,8 +3692,9 @@ function onResolveMissile() {
   const tags = [];
   if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
-  if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
-  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  if (indirectBlocked) tags.push('indirect blocked by woods canopy (p.12)');
+  if (cover) tags.push(`${coverLabel(dCover)} (casualties halved)`);
+  else if (dCover !== 'none' && indirect) tags.push(`${coverLabel(dCover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   let html = `<div class="step">${a.side} · ${aT.name} × ${a.count} fires ${a.weapon} at ${d.side} · ${dT.name} (${dT.cls}) · ` +
              `distance ${reach.distanceIn.toFixed(1)}″ · target armor: ${MASS_MISSILE[res.armorGroup].label}${rankNote}${hobbitNote}${tagNote}</div>`;
@@ -3749,16 +3774,20 @@ function onIndivMissile(a, d) {
   const armorLabel = (d.kind === 'individual')
     ? (ARMOR_MTM[armorIdx] || {label:'?'}).label
     : `${dT.name} (${ARMOR_MTM[armorIdx].label})`;
-  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
-  const coverPenalty = indirect ? 0 : coverDiceMinus(d.cover);
+  const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const indirect = effectiveIndirect(a, d);
+  const indirectBlocked = indirectWanted && !indirect;
+  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const coverPenalty = indirect ? 0 : coverDiceMinus(dCover);
   const r = resolveIndividualMissile({
     weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, indirect, rng: state.rng,
   });
 
   const tags = [];
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
-  if (coverPenalty) tags.push(`${coverLabel(d.cover)} (−${coverPenalty} dice)`);
-  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  if (indirectBlocked) tags.push('indirect blocked by woods canopy (p.12)');
+  if (coverPenalty) tags.push(`${coverLabel(dCover)} (−${coverPenalty} dice)`);
+  else if (dCover !== 'none' && indirect) tags.push(`${coverLabel(dCover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   let html = `<div class="step">${a.side} · ${aT.name} fires ${weapon.name} (range ${weapon.range}″) at ` +
              `${d.side} · ${dT.name}${d.kind === 'mass' ? ` × ${d.count}` : ''} · ` +
@@ -3855,8 +3884,11 @@ function onMassMissileAtIndiv(a, d) {
 
   const armorIdx = targetArmorIdx(d);
   const baseGroup = indivArmorIdxToMassGroup(armorIdx);
-  const indirect = !!a.indirect && weaponIndirectAllowed(a.weapon);
-  const cover = indirect ? false : coverHalves(d.cover);
+  const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
+  const indirect = effectiveIndirect(a, d);
+  const indirectBlocked = indirectWanted && !indirect;
+  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const cover = indirect ? false : coverHalves(dCover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   let firingCount = Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = firingCount < a.count;
@@ -3870,8 +3902,9 @@ function onMassMissileAtIndiv(a, d) {
   const tags = [];
   if (isThrown(a.weapon)) tags.push('thrown · short range · no indirect · once/turn · may loose at chargers');
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
-  if (cover) tags.push(`${coverLabel(d.cover)} (casualties halved)`);
-  else if (d.cover && d.cover !== 'none' && indirect) tags.push(`${coverLabel(d.cover)} negated by indirect`);
+  if (indirectBlocked) tags.push('indirect blocked by woods canopy (p.12)');
+  if (cover) tags.push(`${coverLabel(dCover)} (casualties halved)`);
+  else if (dCover !== 'none' && indirect) tags.push(`${coverLabel(dCover)} negated by indirect`);
   const tagNote = tags.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${tags.join(' · ')}</small>` : '';
   const hpBefore = d.hp;
   let html = `<div class="step">${a.side} · ${aT.name} × ${a.count} fires ${a.weapon} at ${d.side} · ${dT.name} · ` +
@@ -5050,7 +5083,23 @@ renderBoard();
     console.assert(resolveMissilePhase() === false, 'sim missile: resolving again with no pending is a no-op');
     state.units = _u; $('#log').innerHTML = _log; }
 
+  // Terrain T3 — woods as soft cover + indirect-fire blocker (p.12).
+  { const _t = state.terrain;
+    state.terrain = [{ id:'tw3', type:'wooded', x:400, y:100, w:240, h:192 }];
+    const inWoods = { x:400, y:100, cover:'none' };
+    const clear   = { x:1000, y:100, cover:'none' };
+    console.assert(terrainCoverAt(400,100) === 'soft' && terrainCoverAt(1000,100) === 'none', 'T3: woods is soft cover, clear ground none');
+    console.assert(effectiveCover(inWoods) === 'soft', 'T3: a unit in woods gets soft cover automatically');
+    console.assert(effectiveCover({ x:400, y:100, cover:'hard' }) === 'hard', 'T3: stronger manual cover (hard) is kept over woods soft');
+    console.assert(effectiveCover(clear) === 'none', 'T3: clear ground + no manual cover = none');
+    console.assert(terrainBlocksIndirectAt(400,100) === true && terrainBlocksIndirectAt(1000,100) === false, 'T3: woods canopy blocks indirect; clear ground does not');
+    const lb = { indirect:true, weapon:'longbow' };
+    console.assert(effectiveIndirect(lb, clear) === true, 'T3: longbow indirect reaches a target in the open');
+    console.assert(effectiveIndirect(lb, inWoods) === false, 'T3: woods blocks indirect against a target under canopy');
+    console.assert(effectiveIndirect({ indirect:false, weapon:'longbow' }, clear) === false, 'T3: indirect not elected → direct fire');
+    state.terrain = _t; }
 
+  console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
 </body>
