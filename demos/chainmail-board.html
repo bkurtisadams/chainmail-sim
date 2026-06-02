@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.35 · Jousting duel panel (UI for the v0.10.34 engine). A new right-column "Resolver" pane (#resolver-pane) appears whenever a unit is selected and a foe targeted; it offers a contextual "⚔ Joust" action that expands the duel controls in place — aim (attack) + saddle position (defense) selectors for each knight across 3 rides — so both combatants stay visible on the board (no modal). Run validates PDP/AP legality, calls runJoust with state.rng, renders ride-by-ride results + running score + outcome in the pane, and writes a summary to the combat log via appendTurn. Joust UI state (joustOpen/joustPair) is transient (not snapshotted); the pane auto-collapses if the selected/target pair changes. This is the first occupant of the shared resolver-pane slot that cannon/siege will reuse (updateResolverPane + the data-jact delegated handler). One UI-path assert added to tests(). -->
+<!-- chainmail-board.html · v0.10.36 · Jousting takeover mode. The resolver-pane "⚔ Joust" trigger (shown when a unit is selected and a foe targeted) now ENTERS a full-area joust mode (#joust-mode) instead of expanding a cramped sidebar panel: enterJoustMode hides the battlefield (.toolbar + .layout) and shows a dedicated duel surface — header with combatants + "Exit to battlefield", an arena strip, and two knight columns of aim (attack) + saddle-position (defense) selects across 3 rides. Run validates PDP/AP legality, calls runJoust with state.rng, renders ride results + score + outcome, and logs a summary via appendTurn; Exit (exitJoustMode) restores the battlefield with selection intact. joustMode is transient (not snapshotted); the engine (runJoust) is unchanged — this reworks the joust SURFACE from the v0.10.35 sidebar panel into a mode. Tournament layer (entrant roster + standings table, scores accumulated per duel) is the next slice; history check (web) confirmed period joust tournaments were herald-scored point competitions, not knockout brackets, matching the Appendix C scoring already encoded. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.35</title>
+<title>Chainmail — Battlefield · v0.10.36</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -149,13 +149,26 @@
   .ctx-menu button[hidden] { display: none; }
   .ctx-menu button.danger { color: var(--rear); }
   .ctx-menu[hidden] { display: none; }
-  #resolver-pane .joust-head { font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; line-height: 1.45; }
-  #resolver-pane .joust-ride { border-top: 1px dashed var(--rule); padding-top: 5px; margin-top: 5px; }
-  #resolver-pane .joust-rhead { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-soft); }
-  #resolver-pane .joust-row { display: flex; gap: 5px; align-items: center; margin: 3px 0; }
-  #resolver-pane .joust-row .who { flex: 0 0 72px; font-size: 10px; color: var(--ink-soft); }
-  #resolver-pane .joust-row select { flex: 1; min-width: 0; }
-  #resolver-pane .joust-res .r { font-size: 11px; padding: 2px 0; }
+  #joust-mode { max-width: 860px; margin: 0 auto; padding: 6px 4px 28px; }
+  #joust-mode[hidden] { display: none; }
+  .jm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; margin-bottom: 14px; }
+  .jm-arena { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
+  .jm-knight { font-weight: 600; }
+  .jm-lists { flex: 1; text-align: center; color: var(--ink-soft); font-size: 12px; }
+  .jm-badge { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; align-items: center; justify-content: center; color: #fff; font-size: 11px; vertical-align: middle; }
+  .jm-badge.jm-a { background: var(--side-a); }
+  .jm-badge.jm-b { background: var(--side-b); }
+  .jm-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .jm-col { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; }
+  .jm-colhead { font-weight: 600; margin-bottom: 4px; }
+  .jm-ride { border-top: 1px dashed var(--rule); padding-top: 8px; margin-top: 8px; }
+  .jm-rhead { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-soft); }
+  .jm-field { margin-top: 6px; }
+  .jm-field label { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 2px; }
+  .jm-field select { width: 100%; }
+  .jm-run { width: 100%; margin-top: 14px; }
+  .jm-res { margin-top: 14px; }
+  .jm-res .r { font-size: 13px; padding: 3px 0; }
 
   .modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
   .modal[hidden] { display: none; }
@@ -194,8 +207,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Jousting duel panel</div>
-    <span class="version-tag">v0.10.35</span>
+    <div class="sub">Chainmail HTML Sim · Jousting takeover mode</div>
+    <span class="version-tag">v0.10.36</span>
   </div>
 
   <div class="toolbar">
@@ -244,7 +257,6 @@
       <div class="panel" id="resolver-pane" hidden>
         <h2>Resolver</h2>
         <div id="resolver-trigger"></div>
-        <div id="joust-body"></div>
       </div>
       <div class="panel" id="new-unit-panel">
         <h2 class="collapsible" id="new-unit-toggle">New unit <span class="caret">▾</span></h2>
@@ -303,6 +315,24 @@
         <div id="log"></div>
       </div>
     </aside>
+  </div>
+
+  <div id="joust-mode" hidden>
+    <div class="jm-head">
+      <div><h1 style="margin:0">Tournament joust</h1><div class="sub" id="joust-subtitle"></div></div>
+      <button data-jact="exit" class="secondary">◀ Exit to battlefield</button>
+    </div>
+    <div class="jm-arena">
+      <span class="jm-knight"><span class="jm-badge jm-a">A</span> <span id="joust-A-name"></span></span>
+      <span class="jm-lists">⟶&nbsp; the lists &nbsp;⟵</span>
+      <span class="jm-knight"><span id="joust-B-name"></span> <span class="jm-badge jm-b">B</span></span>
+    </div>
+    <div class="jm-cols">
+      <div class="jm-col" id="joust-col-A"></div>
+      <div class="jm-col" id="joust-col-B"></div>
+    </div>
+    <button data-jact="run" class="gold jm-run">Run joust</button>
+    <div id="joust-result" class="jm-res"></div>
   </div>
 </div>
 
@@ -405,7 +435,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.35';
+const SIM_VERSION = '0.10.36';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1393,8 +1423,7 @@ const state = {
   units: [],          // { id, side, type, count, startCount, cols, rows, spacing, weapon, hedgehog, x, y, facing }
   selectedId: null,
   targetId: null,
-  joustOpen: false,   // v0.10.35: resolver-pane joust controls expanded?
-  joustPair: null,    // v0.10.35: 'selId/tgtId' the open joust is bound to
+  joustMode: false,   // v0.10.36: joust takeover mode active?
   nextId: 1,
   dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
   panning: null,      // { clientX0, clientY0, vb0 }
@@ -2519,64 +2548,60 @@ function updateButtons() {
   updateResolverPane();
 }
 
-// v0.10.35: the right-column resolver pane. Appears when a unit is selected and a
-// foe targeted; offers a contextual Joust action that expands the duel controls in
-// place (so both knights stay visible on the board). First occupant of a slot that
-// cannon/siege will reuse. Joust state (joustOpen/joustPair) is transient UI only.
+// v0.10.36: the resolver pane shows a contextual Joust trigger when a unit is selected and a
+// foe targeted; clicking it enters joust MODE — a full-area takeover that hides the battlefield
+// (toolbar + layout) and shows the duel surface, returning on Exit. The engine (runJoust) is
+// unchanged; this is purely the joust surface. joustMode is transient UI (not snapshotted).
 function updateResolverPane() {
   const pane = $('#resolver-pane');
   if (!pane) return;
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   const ok = a && d && a.id !== d.id && !a.destroyed && !d.destroyed;
-  if (!ok) { pane.hidden = true; closeJoust(); return; }
-  pane.hidden = false;
-  const pair = `${a.id}/${d.id}`;
-  if (state.joustOpen && state.joustPair !== pair) closeJoust();
-  const trig = $('#resolver-trigger');
-  if (state.joustOpen) { trig.innerHTML = ''; return; }
-  trig.innerHTML = `<button data-jact="open" style="width:100%">⚔ Joust — ${joustName(a)} vs ${joustName(d)}</button>`;
+  pane.hidden = !ok;
+  if (!ok) return;
+  $('#resolver-trigger').innerHTML = `<button data-jact="open" style="width:100%">⚔ Joust — ${joustName(a)} vs ${joustName(d)}</button>`;
 }
 const joustName = (u) => `${typeById(u.type).name} (${u.side})`;
-function closeJoust() {
-  state.joustOpen = false; state.joustPair = null;
-  const jb = $('#joust-body'); if (jb) jb.innerHTML = '';
-}
-function openJoust() {
+function enterJoustMode() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d) return;
-  state.joustOpen = true; state.joustPair = `${a.id}/${d.id}`;
+  state.joustMode = true;
+  $('#joust-subtitle').textContent = `${joustName(a)} vs ${joustName(d)} · best of 3 rides, ends on an unhorse`;
+  $('#joust-A-name').textContent = joustName(a);
+  $('#joust-B-name').textContent = joustName(d);
   const aimOpts = JOUST_AIMS.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
   const posOpts = JOUST_POSITIONS.map(p => `<option value="${p.n}"${p.n === 4 ? ' selected' : ''}>${p.n} · ${p.name}</option>`).join('');
-  const an = joustName(a), dn = joustName(d);
-  let rides = '';
-  for (let r = 1; r <= 3; r++) {
-    rides += `<div class="joust-ride"><div class="joust-rhead">Ride ${r}</div>` +
-      `<div class="joust-row"><span class="who">${an}</span>` +
-        `<select data-knight="A" data-ride="${r}" data-kind="aim">${aimOpts}</select>` +
-        `<select data-knight="A" data-ride="${r}" data-kind="pos">${posOpts}</select></div>` +
-      `<div class="joust-row"><span class="who">${dn}</span>` +
-        `<select data-knight="B" data-ride="${r}" data-kind="aim">${aimOpts}</select>` +
-        `<select data-knight="B" data-ride="${r}" data-kind="pos">${posOpts}</select></div></div>`;
+  for (const [k, u] of [['A', a], ['B', d]]) {
+    let html = `<div class="jm-colhead"><span class="jm-badge jm-${k.toLowerCase()}">${k}</span> ${joustName(u)}</div>`;
+    for (let r = 1; r <= 3; r++) {
+      html += `<div class="jm-ride"><div class="jm-rhead">Ride ${r}</div>` +
+        `<div class="jm-field"><label>Aim (attack)</label><select data-knight="${k}" data-ride="${r}" data-kind="aim">${aimOpts}</select></div>` +
+        `<div class="jm-field"><label>Saddle position (defense)</label><select data-knight="${k}" data-ride="${r}" data-kind="pos">${posOpts}</select></div></div>`;
+    }
+    $(`#joust-col-${k}`).innerHTML = html;
   }
-  $('#resolver-trigger').innerHTML = '';
-  $('#joust-body').innerHTML =
-    `<div class="joust-head">Tournament joust · aim (attack) + saddle position (defense) per ride; best of 3, ends on an unhorse.</div>` +
-    rides +
-    `<div class="joust-row" style="margin-top:8px"><button data-jact="run" style="flex:1">Run joust</button>` +
-    `<button data-jact="close" class="secondary">Close</button></div>` +
-    `<div id="joust-result" class="joust-res"></div>`;
+  $('#joust-result').innerHTML = '';
+  document.querySelector('.toolbar').hidden = true;
+  document.querySelector('.layout').hidden = true;
+  $('#joust-mode').hidden = false;
 }
-function runJoustFromPanel() {
+function exitJoustMode() {
+  state.joustMode = false;
+  $('#joust-mode').hidden = true;
+  document.querySelector('.toolbar').hidden = false;
+  document.querySelector('.layout').hidden = false;
+}
+function runJoustFromMode() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d) return;
   const read = (knight) => {
     const rides = [];
     for (let r = 1; r <= 3; r++) {
-      const aim = $(`#joust-body select[data-knight="${knight}"][data-ride="${r}"][data-kind="aim"]`).value;
-      const pos = Number($(`#joust-body select[data-knight="${knight}"][data-ride="${r}"][data-kind="pos"]`).value);
+      const aim = $(`#joust-mode select[data-knight="${knight}"][data-ride="${r}"][data-kind="aim"]`).value;
+      const pos = Number($(`#joust-mode select[data-knight="${knight}"][data-ride="${r}"][data-kind="pos"]`).value);
       rides.push({ aim, position: pos });
     }
     return rides;
@@ -2597,7 +2622,7 @@ function runJoustFromPanel() {
   for (const L of result.log) {
     html += `<div class="r"><strong>Ride ${L.ride}</strong> · ${an}: ${L.aAtk.result}${L.aAtk.multiOutcome ? ` (${L.aAtk.cell})` : ''} · ${dn}: ${L.bAtk.result}${L.bAtk.multiOutcome ? ` (${L.bAtk.cell})` : ''}</div>`;
   }
-  html += `<div class="r" style="margin-top:4px"><strong>Score</strong> · ${an} ${result.total.A} · ${dn} ${result.total.B}</div>`;
+  html += `<div class="r" style="margin-top:6px"><strong>Score</strong> · ${an} ${result.total.A} · ${dn} ${result.total.B}</div>`;
   html += `<div class="r"><strong>Outcome</strong> · ${result.outcome}</div>`;
   $('#joust-result').innerHTML = html;
   appendTurn(`Joust · ${an} vs ${dn} · ${result.ridesPlayed} ride${result.ridesPlayed > 1 ? 's' : ''}`,
@@ -2605,10 +2630,12 @@ function runJoustFromPanel() {
     `<div class="step">Score ${an} ${result.total.A}, ${dn} ${result.total.B} — ${result.outcome}</div>`);
 }
 function onResolverAction(evt) {
+  if (evt.target.dataset.jact === 'open') enterJoustMode();
+}
+function onJoustModeAction(evt) {
   const act = evt.target.dataset.jact;
-  if (act === 'open') openJoust();
-  else if (act === 'run') runJoustFromPanel();
-  else if (act === 'close') { closeJoust(); updateResolverPane(); }
+  if (act === 'run') runJoustFromMode();
+  else if (act === 'exit') exitJoustMode();
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -5074,6 +5101,7 @@ $('#board').addEventListener('wheel', onWheel, { passive: false });
 $('#board').addEventListener('contextmenu', e => e.preventDefault());
 $('#ctx-menu').addEventListener('click', onContextMenuAction);
 $('#resolver-pane').addEventListener('click', onResolverAction);
+$('#joust-mode').addEventListener('click', onJoustModeAction);
 document.addEventListener('mousedown', e => {
   if (!$('#ctx-menu').hidden && !$('#ctx-menu').contains(e.target)) closeContextMenu();
 });
