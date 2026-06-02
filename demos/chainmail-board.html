@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.38 · Fix two pre-existing latent test failures (unrelated to jousting; both predate it and were silent because console.assert doesn't halt). (1) canMeleeThisTurn now null-guards — `!!u && !(u.acted && u.acted.fought)` — so a null unit reads as not-meleeable (false) per its test's intent, instead of returning true; normal truthy-unit callers are unaffected, and the melee resolver's null path is now safe rather than proceeding. (2) The canPauseAtHalf distance asserts are wrapped to run with enforcePhases temporarily false (restored after), isolating the half-move distance predicate from the move-phase gate (canSideMoveNow), which at load returns false and was failing the one "should pause" case. -->
+<!-- chainmail-board.html · v0.10.39 · Shield aim-picker + ride-by-ride jousting. Joust mode now resolves one ride at a time: each knight's column shows a clickable heraldic SHIELD (joustShieldSVG) whose 8 zones — Helm above; dexter/sinister chief, the pale, fess, and base — set that knight's aiming point (clicks handled via .jm-zone in onJoustModeAction), plus a saddle-position select. A "Ride N of 3" banner, "Run ride" + "Reset duel" actions. runJoustRide calls the engine's resolveJoustRide per ride, accumulates the herald's-cheque score into state.joustTotals, pushes to state.joustLog, applies the * forced-Steady-Seat rule to the next ride (posture locked + flagged), and ends on an unhorse or after 3 rides with an outcome (unhorse / wins on points / draw); summary logged via appendTurn. New transient state joustRide/joustTotals/joustForced/joustSel/joustLog/joustDone/joustOutcome. Replaces the v0.10.37 set-3-up-front controls + batch runJoustFromMode. New assert: ride-by-ride accumulation matches the runJoust batch. Next: the tournament standings layer (entrants + per-duel score accumulation, persisted). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.38</title>
+<title>Chainmail — Battlefield · v0.10.39</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -173,6 +173,18 @@
   .jm-run { width: 100%; margin-top: 14px; }
   .jm-res { margin-top: 14px; }
   .jm-res .r { font-size: 13px; padding: 3px 0; }
+  .jm-banner { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-soft); text-align: center; margin-bottom: 12px; }
+  .jm-actions { display: flex; gap: 10px; margin-top: 14px; }
+  .jm-actions .jm-run { flex: 1; margin-top: 0; }
+  .jm-aimcap { font-size: 12px; text-align: center; margin: 6px 0 4px; }
+  .jm-shield { width: 100%; max-width: 188px; display: block; margin: 4px auto 0; }
+  .jm-shield-body { fill: var(--bg); stroke: var(--rule); stroke-width: 1; }
+  .jm-shield-div { stroke: var(--rule); stroke-width: 0.5; }
+  .jm-zone rect { fill: var(--panel); stroke: var(--rule); stroke-width: 0.5; cursor: pointer; }
+  .jm-zone text { fill: var(--ink-soft); font-size: 11px; pointer-events: none; }
+  .jm-zone:hover rect { stroke: var(--ink-soft); }
+  .jm-zone.on rect { fill: var(--rank-hi); stroke: var(--gold); stroke-width: 1; }
+  .jm-zone.on text { fill: var(--ink); font-weight: 700; }
 
   .modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
   .modal[hidden] { display: none; }
@@ -211,9 +223,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Test-suite fixes</div>
+    <div class="sub">Chainmail HTML Sim · Shield aim-picker + ride-by-ride</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.10.38</span>
+    <span class="version-tag">v0.10.39</span>
   </div>
 
   <div class="toolbar">
@@ -337,11 +349,15 @@
       <span class="jm-lists">⟶&nbsp; the lists &nbsp;⟵</span>
       <span class="jm-knight"><span id="joust-B-name"></span> <span class="jm-badge jm-b">B</span></span>
     </div>
+    <div id="joust-ride-banner" class="jm-banner"></div>
     <div class="jm-cols">
       <div class="jm-col" id="joust-col-A"></div>
       <div class="jm-col" id="joust-col-B"></div>
     </div>
-    <button data-jact="run" class="gold jm-run">Run joust</button>
+    <div class="jm-actions">
+      <button data-jact="run" class="gold jm-run">Run ride</button>
+      <button data-jact="reset" class="secondary">Reset duel</button>
+    </div>
     <div id="joust-result" class="jm-res"></div>
   </div>
 </div>
@@ -445,7 +461,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.38';
+const SIM_VERSION = '0.10.39';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1436,6 +1452,13 @@ const state = {
   joustMode: false,   // v0.10.36: joust takeover mode active?
   joustA: null,       // v0.10.37: chosen combatant ids (in-mode pickers)
   joustB: null,
+  joustRide: 1,       // v0.10.39: ride-by-ride state
+  joustTotals: { A: 0, B: 0 },
+  joustForced: { A: false, B: false },
+  joustSel: { A: { aim: 'Helm', pos: 4 }, B: { aim: 'Helm', pos: 4 } },
+  joustLog: [],
+  joustDone: false,
+  joustOutcome: '',
   nextId: 1,
   dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
   panning: null,      // { clientX0, clientY0, vb0 }
@@ -2584,6 +2607,7 @@ function enterJoustMode(preA, preB) {
   if (!ids.includes(bId) || bId === aId) bId = ids.find(id => id !== aId) || null;
   state.joustA = aId; state.joustB = bId;
   state.joustMode = true;
+  resetJoustDuel();
   renderJoustCombatantPickers();
   renderJoustDuel();
   document.querySelector('.toolbar').hidden = true;
@@ -2595,43 +2619,87 @@ function renderJoustCombatantPickers() {
   $('#joust-pick-A').innerHTML = opts(state.joustA);
   $('#joust-pick-B').innerHTML = opts(state.joustB);
 }
+function resetJoustDuel() {
+  state.joustRide = 1;
+  state.joustTotals = { A: 0, B: 0 };
+  state.joustForced = { A: false, B: false };
+  state.joustLog = [];
+  state.joustDone = false;
+  state.joustOutcome = '';
+  state.joustSel = { A: { aim: 'Helm', pos: 4 }, B: { aim: 'Helm', pos: 4 } };
+}
+const JOUST_SHIELD_ZONES = [
+  ['Helm', 'Helm', 100, 22], ['DC', 'DC', 61, 72], ['CP', 'CP', 100, 72], ['SC', 'SC', 139, 72],
+  ['DF', 'DF', 61, 120], ['FP', 'FP', 100, 120], ['SF', 'SF', 139, 120], ['Base', 'Base', 100, 176],
+];
+function joustShieldSVG(knight, selAim) {
+  const zones = JOUST_SHIELD_ZONES.map(([aim, lbl, cx, cy]) => {
+    const w = lbl.length > 2 ? 48 : 36, x = cx - w / 2, y = cy - 10;
+    return `<g class="jm-zone${selAim === aim ? ' on' : ''}" data-knight="${knight}" data-aim="${aim}">` +
+      `<rect x="${x}" y="${y}" width="${w}" height="20" rx="4"></rect>` +
+      `<text x="${cx}" y="${cy + 4}" text-anchor="middle">${lbl}</text></g>`;
+  }).join('');
+  return `<svg viewBox="0 0 200 244" class="jm-shield" role="img" aria-label="Aiming point — click a zone">` +
+    `<path class="jm-shield-body" d="M26 48 L174 48 L174 150 Q174 202 100 236 Q26 202 26 150 Z"></path>` +
+    `<line class="jm-shield-div" x1="26" y1="96" x2="174" y2="96"></line>` +
+    `<line class="jm-shield-div" x1="100" y1="48" x2="100" y2="210"></line>${zones}</svg>`;
+}
 function renderJoustDuel() {
   const a = state.units.find(u => u.id === state.joustA);
   const d = state.units.find(u => u.id === state.joustB);
+  const banner = $('#joust-ride-banner'), runBtn = document.querySelector('#joust-mode [data-jact="run"]');
   if (!a || !d) {
     $('#joust-subtitle').textContent = 'Pick two knights to begin.';
     $('#joust-A-name').textContent = $('#joust-B-name').textContent = '—';
+    if (banner) banner.textContent = '';
     $('#joust-col-A').innerHTML = $('#joust-col-B').innerHTML = '';
     $('#joust-result').innerHTML = '';
+    if (runBtn) runBtn.disabled = true;
     return;
   }
   $('#joust-subtitle').textContent = `${joustName(a)} vs ${joustName(d)} · best of 3 rides, ends on an unhorse`;
   $('#joust-A-name').textContent = joustName(a);
   $('#joust-B-name').textContent = joustName(d);
-  const aimOpts = JOUST_AIMS.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
-  const posOpts = JOUST_POSITIONS.map(p => `<option value="${p.n}"${p.n === 4 ? ' selected' : ''}>${p.n} · ${p.name}</option>`).join('');
+  if (banner) banner.textContent = state.joustDone ? 'Duel complete' : `Ride ${state.joustRide} of 3`;
+  if (runBtn) runBtn.disabled = state.joustDone;
   for (const [k, u] of [['A', a], ['B', d]]) {
-    let html = `<div class="jm-colhead"><span class="jm-badge jm-${k.toLowerCase()}">${k}</span> ${joustName(u)}</div>`;
-    for (let r = 1; r <= 3; r++) {
-      html += `<div class="jm-ride"><div class="jm-rhead">Ride ${r}</div>` +
-        `<div class="jm-field"><label>Aim (attack)</label><select data-knight="${k}" data-ride="${r}" data-kind="aim">${aimOpts}</select></div>` +
-        `<div class="jm-field"><label>Saddle position (defense)</label><select data-knight="${k}" data-ride="${r}" data-kind="pos">${posOpts}</select></div></div>`;
-    }
-    $(`#joust-col-${k}`).innerHTML = html;
+    const sel = state.joustSel[k], aimName = (JOUST_AIMS.find(x => x.id === sel.aim) || {}).name || sel.aim;
+    const posSel = state.joustForced[k]
+      ? `<select disabled><option>4 · Steady seat (forced *)</option></select>`
+      : `<select data-knight="${k}" data-kind="pos"${state.joustDone ? ' disabled' : ''}>${JOUST_POSITIONS.map(p => `<option value="${p.n}"${p.n === sel.pos ? ' selected' : ''}>${p.n} · ${p.name}</option>`).join('')}</select>`;
+    $(`#joust-col-${k}`).innerHTML =
+      `<div class="jm-colhead"><span class="jm-badge jm-${k.toLowerCase()}">${k}</span> ${joustName(u)}</div>` +
+      joustShieldSVG(k, sel.aim) +
+      `<div class="jm-aimcap">Aiming: <strong>${aimName}</strong></div>` +
+      `<div class="jm-field"><label>Saddle position</label>${posSel}</div>`;
   }
-  $('#joust-result').innerHTML = '';
+  renderJoustResult(a, d);
+}
+function renderJoustResult(a, d) {
+  const an = joustName(a), dn = joustName(d);
+  let html = '';
+  for (const L of state.joustLog)
+    html += `<div class="r"><strong>Ride ${L.ride}</strong> · ${an}: ${L.aRes}${L.aCell ? ` (${L.aCell})` : ''} · ${dn}: ${L.bRes}${L.bCell ? ` (${L.bCell})` : ''}</div>`;
+  if (state.joustLog.length) html += `<div class="r" style="margin-top:6px"><strong>Score</strong> · ${an} ${state.joustTotals.A} · ${dn} ${state.joustTotals.B}</div>`;
+  if (state.joustDone) html += `<div class="r"><strong>Outcome</strong> · ${state.joustOutcome}</div>`;
+  $('#joust-result').innerHTML = html;
 }
 function onJoustPick(evt) {
-  if (evt.target.id !== 'joust-pick-A' && evt.target.id !== 'joust-pick-B') return;
-  if (evt.target.id === 'joust-pick-A') state.joustA = evt.target.value;
-  else state.joustB = evt.target.value;
-  if (state.joustA && state.joustA === state.joustB) {
-    const other = joustEligibleUnits().map(u => u.id).find(id => id !== state.joustA);
-    if (evt.target.id === 'joust-pick-A') state.joustB = other || null;
-    else state.joustA = other || null;
+  if (evt.target.id === 'joust-pick-A' || evt.target.id === 'joust-pick-B') {
+    if (evt.target.id === 'joust-pick-A') state.joustA = evt.target.value;
+    else state.joustB = evt.target.value;
+    if (state.joustA && state.joustA === state.joustB) {
+      const other = joustEligibleUnits().map(u => u.id).find(id => id !== state.joustA);
+      if (evt.target.id === 'joust-pick-A') state.joustB = other || null;
+      else state.joustA = other || null;
+    }
+    resetJoustDuel();
+    renderJoustCombatantPickers();
+    renderJoustDuel();
+    return;
   }
-  renderJoustCombatantPickers();
-  renderJoustDuel();
+  if (evt.target.dataset.kind === 'pos' && state.joustSel[evt.target.dataset.knight])
+    state.joustSel[evt.target.dataset.knight].pos = Number(evt.target.value);
 }
 function exitJoustMode() {
   state.joustMode = false;
@@ -2639,49 +2707,54 @@ function exitJoustMode() {
   document.querySelector('.toolbar').hidden = false;
   document.querySelector('.layout').hidden = false;
 }
-function runJoustFromMode() {
+function runJoustRide() {
+  if (state.joustDone) return;
   const a = state.units.find(u => u.id === state.joustA);
   const d = state.units.find(u => u.id === state.joustB);
   if (!a || !d) return;
-  const read = (knight) => {
-    const rides = [];
-    for (let r = 1; r <= 3; r++) {
-      const aim = $(`#joust-mode select[data-knight="${knight}"][data-ride="${r}"][data-kind="aim"]`).value;
-      const pos = Number($(`#joust-mode select[data-knight="${knight}"][data-ride="${r}"][data-kind="pos"]`).value);
-      rides.push({ aim, position: pos });
-    }
-    return rides;
-  };
-  const aRides = read('A'), bRides = read('B');
-  const bad = [];
-  for (let r = 0; r < 3; r++) {
-    if (!joustPositionAllowed(aRides[r].aim, aRides[r].position)) bad.push(`${joustName(a)} ride ${r + 1}`);
-    if (!joustPositionAllowed(bRides[r].aim, bRides[r].position)) bad.push(`${joustName(d)} ride ${r + 1}`);
-  }
-  if (bad.length) {
-    $('#joust-result').innerHTML = `<div class="r" style="color:var(--rear)">Illegal aim/position — ${bad.join(', ')}. An aiming point restricts which saddle positions are legal (p.26).</div>`;
+  const aChoice = { aim: state.joustSel.A.aim, position: state.joustForced.A ? 4 : state.joustSel.A.pos };
+  const bChoice = { aim: state.joustSel.B.aim, position: state.joustForced.B ? 4 : state.joustSel.B.pos };
+  if (!joustPositionAllowed(aChoice.aim, aChoice.position) || !joustPositionAllowed(bChoice.aim, bChoice.position)) {
+    $('#joust-result').innerHTML = `<div class="r" style="color:var(--rear)">Illegal aim/position — an aiming point restricts which saddle positions are legal (p.26). Adjust and run again.</div>`;
     return;
   }
   const an = joustName(a), dn = joustName(d);
-  const result = runJoust({ a:{ id:an, rides:aRides }, b:{ id:dn, rides:bRides }, rng: state.rng });
-  let html = '';
-  for (const L of result.log) {
-    html += `<div class="r"><strong>Ride ${L.ride}</strong> · ${an}: ${L.aAtk.result}${L.aAtk.multiOutcome ? ` (${L.aAtk.cell})` : ''} · ${dn}: ${L.bAtk.result}${L.bAtk.multiOutcome ? ` (${L.bAtk.cell})` : ''}</div>`;
+  const ride = resolveJoustRide(aChoice, bChoice, state.rng);
+  state.joustTotals.A += ride.score.A; state.joustTotals.B += ride.score.B;
+  state.joustLog.push({ ride: state.joustRide,
+    aRes: ride.aAtk.result, aCell: ride.aAtk.multiOutcome ? ride.aAtk.cell : '',
+    bRes: ride.bAtk.result, bCell: ride.bAtk.multiOutcome ? ride.bAtk.cell : '' });
+  if (ride.unhorsed.A || ride.unhorsed.B || state.joustRide >= 3) {
+    state.joustDone = true;
+    state.joustOutcome = (ride.unhorsed.A && ride.unhorsed.B) ? 'double unhorse'
+      : ride.unhorsed.B ? `${an} unhorses ${dn}`
+      : ride.unhorsed.A ? `${dn} unhorses ${an}`
+      : state.joustTotals.A === state.joustTotals.B ? 'drawn on points'
+      : state.joustTotals.A > state.joustTotals.B ? `${an} wins on points` : `${dn} wins on points`;
+    appendTurn(`Joust · ${an} vs ${dn} · ${state.joustLog.length} ride${state.joustLog.length > 1 ? 's' : ''}`,
+      state.joustLog.map(L => `<div class="step">Ride ${L.ride}: ${an} — ${L.aRes.toLowerCase()}; ${dn} — ${L.bRes.toLowerCase()}</div>`).join('') +
+      `<div class="step">Score ${an} ${state.joustTotals.A}, ${dn} ${state.joustTotals.B} — ${state.joustOutcome}</div>`);
+  } else {
+    state.joustForced = ride.forcedNext;
+    state.joustRide++;
+    state.joustSel = { A: { aim: 'Helm', pos: 4 }, B: { aim: 'Helm', pos: 4 } };
   }
-  html += `<div class="r" style="margin-top:6px"><strong>Score</strong> · ${an} ${result.total.A} · ${dn} ${result.total.B}</div>`;
-  html += `<div class="r"><strong>Outcome</strong> · ${result.outcome}</div>`;
-  $('#joust-result').innerHTML = html;
-  appendTurn(`Joust · ${an} vs ${dn} · ${result.ridesPlayed} ride${result.ridesPlayed > 1 ? 's' : ''}`,
-    result.log.map(L => `<div class="step">Ride ${L.ride}: ${an} — ${L.aAtk.result.toLowerCase()}; ${dn} — ${L.bAtk.result.toLowerCase()}</div>`).join('') +
-    `<div class="step">Score ${an} ${result.total.A}, ${dn} ${result.total.B} — ${result.outcome}</div>`);
+  renderJoustDuel();
 }
 function onResolverAction(evt) {
   if (evt.target.dataset.jact === 'open') enterJoustMode(state.selectedId, state.targetId);
 }
 function onJoustModeAction(evt) {
+  const zone = evt.target.closest ? evt.target.closest('.jm-zone') : null;
+  if (zone && !state.joustDone) {
+    state.joustSel[zone.dataset.knight].aim = zone.dataset.aim;
+    renderJoustDuel();
+    return;
+  }
   const act = evt.target.dataset.jact;
-  if (act === 'run') runJoustFromMode();
+  if (act === 'run') runJoustRide();
   else if (act === 'exit') exitJoustMode();
+  else if (act === 'reset') { resetJoustDuel(); renderJoustDuel(); }
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -5710,6 +5783,19 @@ renderBoard();
     console.assert(jl.log[1].aChoice.position === 4, 'joust: helm-off knight forced to Steady Seat next ride'); }
   { const jp = runJoust({ a:{ id:'Lance (A)', rides:[{ aim:'Helm', position:4 }] }, b:{ id:'Lance (B)', rides:[{ aim:'SC', position:5 }] }, rng:always(1) });
     console.assert(typeof jp.outcome === 'string' && jp.outcome.includes('Lance (A)'), 'joust panel: name ids flow into the outcome string'); }
+  { const A = { id:'A', rides:[{ aim:'DC', position:4 }, { aim:'DC', position:4 }, { aim:'DC', position:4 }] };
+    const B = { id:'B', rides:[{ aim:'SC', position:4 }, { aim:'SC', position:4 }, { aim:'SC', position:4 }] };
+    const batch = runJoust({ a:A, b:B, rng:always(1) });
+    let tA = 0, tB = 0, forced = { A:false, B:false }, played = 0;
+    for (let r = 0; r < 3; r++) {
+      const ac = { aim:A.rides[r].aim, position: forced.A ? 4 : A.rides[r].position };
+      const bc = { aim:B.rides[r].aim, position: forced.B ? 4 : B.rides[r].position };
+      const rd = resolveJoustRide(ac, bc, always(1));
+      tA += rd.score.A; tB += rd.score.B; played++;
+      if (rd.unhorsed.A || rd.unhorsed.B) break;
+      forced = rd.forcedNext;
+    }
+    console.assert(tA === batch.total.A && tB === batch.total.B && played === batch.ridesPlayed, 'joust ride-by-ride accumulation matches runJoust batch'); }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
