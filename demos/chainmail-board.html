@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.32 · One melee per turn (p.8). The Resolve-melee button previously only checked contact, so it could be clicked repeatedly to run unlimited rounds in a single turn. RAW resolves melee once per turn (step 6 of the move/counter-move sequence); a "melee continues" result carries the fight into the NEXT turn = next round. New canMeleeThisTurn(u) predicate (false once u.acted.fought is set) now gates the Resolve-melee button and guards onResolveMelee, which refuses a same-turn repeat with an explanatory log and takes no undo step. clearActed() on endRound re-arms it each turn, and the engagement round counter still increments across turns. The lone RAW same-turn repeat — a victorious charger following through into fresh contact (p.16) — remains deferred, so there is currently no path to a legitimate second melee in one turn. -->
+<!-- chainmail-board.html · v0.10.34 · Jousting engine inlined (Appendix C + p.26). The tournament-joust rules now live in the board: JOUST_MATRIX (8 aiming points × 6 saddle positions), the result legend (B/G/H/I/M/U) and p.26 tourney scoring — resolveJoust (one attack; multi-outcome cells B/U etc. resolved by the injected rng), resolveJoustRide (both knights' aims matched against the other's position), runJoust (3-ride loop, ends on any unhorse, the * rule forcing Steady Seat next ride: attacker on Breaks Lance, defender on Helm-off), and JOUST_PDP_AP legality. Forced-dice asserts added to tests(). Resolvers + data only this slice; the duel-resolver panel UI is the next slice (v0.10.35). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.32</title>
+<title>Chainmail — Battlefield · v0.10.34</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -187,8 +187,8 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · One melee per turn</div>
-    <span class="version-tag">v0.10.32</span>
+    <div class="sub">Chainmail HTML Sim · Jousting engine</div>
+    <span class="version-tag">v0.10.34</span>
   </div>
 
   <div class="toolbar">
@@ -369,6 +369,7 @@
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
       <label><input type="checkbox" data-setting="applyCavalryChargeMorale"> Cavalry-charge morale check (p.17)</label>
       <label><input type="checkbox" data-setting="applyPrisoners"> Prisoners step on surrender (p.17)</label>
+      <label><input type="checkbox" data-setting="applyChargeFollowThrough"> Victorious charger follows through its charge (p.16)</label>
       <p>Charge impetus bonus, prisoners step, and cavalry-charge morale check
          will appear here as their slices land. Chainmail p.16–18.</p>
     </section>
@@ -392,7 +393,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.32';
+const SIM_VERSION = '0.10.34';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1278,6 +1279,103 @@ function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=fal
     totalRaw:total, totalKills: cover ? Math.floor(total/2) : total, coverApplied:cover };
 }
 
+/* === C.5 JOUSTING (Appendix C + p.26) ================================== */
+// Each knight picks an aiming point (attack) + a saddle position (defense); each aim is matched
+// against the OPPONENT's position. Deterministic except multi-outcome cells (B/U etc.), where the
+// injected rng makes a uniform pick. The * rule forces Steady Seat (position 4) next ride —
+// attacker on Breaks Lance, defender on Helm Knocked Off (position 4 is legal under every aim).
+const JOUST_POSITIONS = Object.freeze([
+  { n:1, name:'Lower Helm' }, { n:2, name:'Lean Right' }, { n:3, name:'Lean Left' },
+  { n:4, name:'Steady Seat' }, { n:5, name:'Shield High' }, { n:6, name:'Shield Low' },
+]);
+const JOUST_AIMS = Object.freeze([
+  { id:'Helm', name:'Helm' }, { id:'DC', name:'Dexter Chief' }, { id:'CP', name:'Chief, Pale (centre)' },
+  { id:'SC', name:'Sinister Chief' }, { id:'DF', name:'Dexter Fess' }, { id:'FP', name:'Fess, Pale (centre)' },
+  { id:'SF', name:'Sinister Fess' }, { id:'Base', name:'Base' },
+]);
+const JOUST_RESULTS = Object.freeze({
+  B:{ name:'Breaks Lance', forces:'attacker' }, G:{ name:'Glances Off' },
+  H:{ name:'Helm Knocked Off', forces:'defender' }, I:{ name:'Injured' },
+  M:{ name:'Miss' }, U:{ name:'Unhorsed' },
+});
+const JOUST_SCORE = Object.freeze({
+  B:{ attacker:-1, defender:0 }, G:{ attacker:0, defender:0 }, H:{ attacker:3, defender:0 },
+  I:{ attacker:0, defender:-10 }, M:{ attacker:0, defender:0 }, U:{ attacker:20, defender:0 },
+});
+const JOUST_MATRIX = Object.freeze({
+  Helm:{ 1:'M',     2:'M',   3:'M',   4:'H',   5:'U',     6:'M'   },
+  DC:  { 1:'U',     2:'B',   3:'M',   4:'B',   5:'B',     6:'M'   },
+  CP:  { 1:'B/U/I', 2:'U',   3:'G',   4:'B',   5:'B/U',   6:'U/I' },
+  SC:  { 1:'G',     2:'M',   3:'B',   4:'G',   5:'G',     6:'U'   },
+  DF:  { 1:'B',     2:'B/U', 3:'M',   4:'B',   5:'M',     6:'B'   },
+  FP:  { 1:'B/U',   2:'G',   3:'B',   4:'B/U', 5:'B/U/I', 6:'B'   },
+  SF:  { 1:'G',     2:'M',   3:'B/U', 4:'G',   5:'G',     6:'G'   },
+  Base:{ 1:'B',     2:'G',   3:'U',   4:'B',   5:'B/U/I', 6:'B'   },
+});
+const JOUST_PDP_AP = Object.freeze({
+  Helm:[4,5,6], DC:[3,4,5,6], CP:'any', SC:[2,4,5,6], DF:[4,5,6], FP:'any', SF:[4,5,6], Base:[1,4,5,6],
+});
+function joustPositionAllowed(aim, position) {
+  const a = JOUST_PDP_AP[aim];
+  return !!a && (a === 'any' || a.includes(Number(position)));
+}
+function resolveJoust({ aim, position, rng }) {
+  const row = JOUST_MATRIX[aim];
+  if (!row) throw new Error(`unknown aiming point: ${aim}`);
+  const cell = row[position];
+  if (!cell) throw new Error(`no joust cell: ${aim} x position ${position}`);
+  const options = cell.split('/');
+  let code = options[0], rolled = null;
+  if (options.length > 1) {
+    const r = rng ? rng() : 0;
+    const idx = Math.min(options.length - 1, Math.floor(r * options.length));
+    code = options[idx]; rolled = { options, idx, r };
+  }
+  const res = JOUST_RESULTS[code];
+  return { aim, position:Number(position), cell, code, result:res.name,
+    multiOutcome:options.length > 1, options, rolled, forcesSteadyNext:res.forces || null };
+}
+function resolveJoustRide(aChoice, bChoice, rng) {
+  const aAtk = resolveJoust({ aim:aChoice.aim, position:bChoice.position, rng });
+  const bAtk = resolveJoust({ aim:bChoice.aim, position:aChoice.position, rng });
+  const unhorsed = { A:bAtk.code === 'U', B:aAtk.code === 'U' };
+  const injured  = { A:bAtk.code === 'I', B:aAtk.code === 'I' };
+  const score = {
+    A:JOUST_SCORE[aAtk.code].attacker + JOUST_SCORE[bAtk.code].defender,
+    B:JOUST_SCORE[bAtk.code].attacker + JOUST_SCORE[aAtk.code].defender,
+  };
+  const forcedNext = { A:false, B:false };
+  if (aAtk.forcesSteadyNext === 'attacker') forcedNext.A = true;
+  if (aAtk.forcesSteadyNext === 'defender') forcedNext.B = true;
+  if (bAtk.forcesSteadyNext === 'attacker') forcedNext.B = true;
+  if (bAtk.forcesSteadyNext === 'defender') forcedNext.A = true;
+  return { aAtk, bAtk, unhorsed, injured, score, forcedNext };
+}
+function runJoust({ a, b, rng }) {
+  const log = []; const total = { A:0, B:0 };
+  let forced = { A:false, B:false }, outcome = 'no unhorse - decided on points', ridesPlayed = 0;
+  for (let r = 0; r < 3; r++) {
+    const aC = { ...(a.rides[r] || a.rides[a.rides.length - 1]) };
+    const bC = { ...(b.rides[r] || b.rides[b.rides.length - 1]) };
+    if (forced.A) aC.position = 4;
+    if (forced.B) bC.position = 4;
+    if (!joustPositionAllowed(aC.aim, aC.position)) throw new Error(`illegal pairing A: aim ${aC.aim} precludes position ${aC.position}`);
+    if (!joustPositionAllowed(bC.aim, bC.position)) throw new Error(`illegal pairing B: aim ${bC.aim} precludes position ${bC.position}`);
+    const ride = resolveJoustRide(aC, bC, rng);
+    total.A += ride.score.A; total.B += ride.score.B;
+    log.push({ ride:r + 1, aChoice:aC, bChoice:bC, ...ride });
+    ridesPlayed = r + 1;
+    if (ride.unhorsed.A || ride.unhorsed.B) {
+      outcome = ride.unhorsed.A && ride.unhorsed.B ? 'double unhorse'
+        : ride.unhorsed.B ? `${a.id || 'A'} unhorses ${b.id || 'B'}`
+        : `${b.id || 'B'} unhorses ${a.id || 'A'}`;
+      break;
+    }
+    forced = ride.forcedNext;
+  }
+  return { ridesPlayed, log, total, outcome };
+}
+
 /* === D. STATE ========================================================== */
 const state = {
   units: [],          // { id, side, type, count, startCount, cols, rows, spacing, weapon, hedgehog, x, y, facing }
@@ -1309,6 +1407,7 @@ const state = {
     applyFatigue: false,
     applyCavalryChargeMorale: false,
     applyPrisoners: false,
+    applyChargeFollowThrough: true,   // p.16: a victorious round-1 charger continues the balance of its charge
     enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
     enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
     snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
@@ -3102,6 +3201,59 @@ function diceTrace(dice, kills) {
   return `<small style="color:var(--ink-soft); font-family: var(--sans)">[ ${dice.map(v => kills.includes(v) ? `<b style="color:var(--ink)">${v}</b>` : String(v)).join(' ')} ]</small>`;
 }
 
+// Is any enemy in melee contact if `unit` stood at (x,y)? Non-mutating probe.
+function enemyInMeleeContactAt(unit, x, y) {
+  const probe = { ...unit, x, y };
+  return state.units.find(u => u.side !== unit.side && !u.destroyed && u.id !== unit.id && inMeleeContact(probe, u)) || null;
+}
+// Victorious-charger follow-through (p.16): "Victorious charging units must
+// continue to move out the balance of their charge move, in the direction first
+// indicated, providing they attained victory before melee or during the first
+// round of melee." Moves `charger` along its recorded chargeDir by the balance of
+// its charge allowance, stopping at the board edge, at blocking/slow terrain (via
+// the path helpers), or at the first fresh enemy contact — and if it reaches a
+// contact, re-arms its melee for this turn and selects the foe so the player can
+// resolve the new fight ("the two units will again melee that turn"). Returns log
+// HTML (folded into the melee card), or '' if it can't advance.
+function followThroughCharge(charger) {
+  if (!charger.charged || charger.destroyed || charger.chargeDir == null) return '';
+  const remaining = chargeAllowanceOf(charger) - (charger.movedThisTurn || 0);
+  if (remaining <= 1e-6) return '';
+  const distPx = inchesToPx(remaining);
+  const vx = Math.cos(charger.chargeDir) * distPx, vy = Math.sin(charger.chargeDir) * distPx;
+  // Cap by terrain budget (slow ground / stream-river fords) and woods entry-block.
+  const pc = pathMoveCost(charger.x, charger.y, vx, vy, charger, remaining);
+  const block = moveBlockScale(charger.x, charger.y, vx * pc.scale, vy * pc.scale, charger);
+  const maxScale = pc.scale * block;
+  const cx = (v) => Math.max(20, Math.min(BOARD_W - 20, v));
+  const cy = (v) => Math.max(20, Math.min(BOARD_H - 20, v));
+  // Sample the path; stop at the first point that brings a fresh enemy into contact.
+  const ox = charger.x, oy = charger.y;
+  const total = Math.hypot(vx, vy) * maxScale;
+  const steps = Math.max(2, Math.ceil(total / 4));
+  let endT = maxScale, foe = null;
+  for (let i = 1; i <= steps; i++) {
+    const t = maxScale * (i / steps);
+    const tx = cx(ox + vx * t), ty = cy(oy + vy * t);
+    const hit = enemyInMeleeContactAt(charger, tx, ty);
+    if (hit) { foe = hit; endT = t; break; }
+  }
+  const nx = cx(ox + vx * endT), ny = cy(oy + vy * endT);
+  const movedPx = Math.hypot(nx - ox, ny - oy);
+  if (movedPx < 0.5) return '';
+  charger.movedThisTurn = (charger.movedThisTurn || 0) + pathMoveCost(ox, oy, nx - ox, ny - oy, charger).cost;
+  charger.x = nx; charger.y = ny;
+  autoMoveTouch(charger);   // Wraith/Balrog touch any normals the follow-through swept into (p.33/p.34)
+  const cd = charger.side === 'A' ? 'a' : 'b';
+  let out = `<div class="step"><b style="color:var(--side-${cd}-d)">${typeById(charger.type).name} (${charger.side})</b> victorious charger follows through ${pxToInches(movedPx).toFixed(1)}″ along the charge line (p.16)</div>`;
+  if (foe) {
+    charger.acted.fought = false;   // p.16: "the two units will again melee that turn"
+    state.selectedId = charger.id; state.targetId = foe.id;
+    out += `<div class="verdict v-killed">reaches ${typeById(foe.type).name} (${foe.side}) — selected; resolve melee again this turn (p.16)</div>`;
+  }
+  return out;
+}
+
 function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3193,6 +3345,9 @@ function onResolveMelee() {
             chargeMoraleHtml += `<div class="step">B · ${dTpre.name} displaced ${disp.distanceIn.toFixed(1)}″ away${facedNote}</div>`;
           }
           a.acted.fought = true;
+          if (round === 1 && state.settings.applyChargeFollowThrough && a.charged && !a.destroyed) {
+            chargeMoraleHtml += followThroughCharge(a);   // p.16: victory before melee
+          }
           appendTurn(`Charge morale · ${aTpre.name} (A) → ${dTpre.name} (B) · ${edge.toUpperCase()} · failed`, chargeMoraleHtml);
           renderBoard();
           return;
@@ -3400,14 +3555,26 @@ function onResolveMelee() {
   if (a.destroyed) cleanupEngagementsForUnit(a.id);
   if (d.destroyed) cleanupEngagementsForUnit(d.id);
 
+  a.acted.fought = true;
+  d.acted.fought = true;
+  // Victorious-charger follow-through (p.16) — first round only. The winning side
+  // that charged continues the balance of its charge along the original heading;
+  // followThroughCharge may re-arm its melee if it reaches a fresh contact.
+  let followHtml = '';
+  if (round === 1 && state.settings.applyChargeFollowThrough) {
+    let victor = null;
+    if (a.charged && !a.destroyed && (pm.loser === 'B' || d.destroyed)) victor = a;
+    else if (d.charged && !d.destroyed && (pm.loser === 'A' || a.destroyed)) victor = d;
+    if (victor) followHtml = followThroughCharge(victor);
+  }
+  html += followHtml;
+
   const headerExtras = [`round ${round}`];
   if (oh.a) headerExtras.push(`A overhang ${oh.a} fig`);
   if (oh.d) headerExtras.push(`B overhang ${oh.d} fig`);
   appendTurn(`Melee · ${aT.name} (A) → ${dT.name} (B) · ${edge} · ${headerExtras.join(' · ')}`, html);
-  a.acted.fought = true;
-  d.acted.fought = true;
   if (a.destroyed && state.selectedId === a.id) state.selectedId = null;
-  if (d.destroyed && state.targetId   === d.id) state.targetId = null;
+  if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
 }
 
@@ -4424,9 +4591,11 @@ function onContextMenuAction(evt) {
         `<div class="step">${typeById(u.type).name} (${u.side}) has no enemy reachable into melee contact within its ${chargeAllowanceOf(u)}″ charge${cav ? ' (≤45° straight line)' : ''} — a charge is only permitted when contact is expected (p.16).</div>`);
     } else {
       u.charged = true;
+      u.chargeDir = facingHeadingRad(u.facing);   // p.16: the "direction first indicated", for any follow-through
     }
   } else if (act === 'cancel-charge') {
     u.charged = false;
+    u.chargeDir = null;
   } else if (act === 'pause-half') {
     u.halfMovePaused = true;
   } else if (act === 'resume-move') {
@@ -4720,6 +4889,7 @@ function endRound() {
     }
     u.chargedLastTurn = !!u.charged;   // Slice 8C: this turn's charge bars a fresh charge next turn
     u.charged = false;
+    u.chargeDir = null;
     u.movedThisTurn = 0;   // Slice 8A: fresh allowance each round
     u.pendingHits = 0;     // held missile hits are resolved above; clear defensively
     u._touchedThisTurn = [];   // move-touch (Wraith/Balrog) re-arms each turn
@@ -5319,6 +5489,39 @@ renderBoard();
   console.assert(canMeleeThisTurn({ acted:{ fought:true } }) === false, 'melee gate: a unit that already meleed this turn may not melee again (next round = next turn)');
   console.assert(canMeleeThisTurn({}) === true && canMeleeThisTurn(null) === false, 'melee gate: missing acted reads as not-yet-fought; null is not meleeable');
 
+  // Victorious-charger follow-through (p.16).
+  { const _u = state.units, _t = state.terrain, _log = $('#log').innerHTML, _sel = state.selectedId, _tgt = state.targetId;
+    state.terrain = [];
+    const mk = (over) => ({ id: 91001, side:'A', type:'HH', kind:'mass', count:10, startCount:10, cols:5, rows:2, spacing:'close', x:200, y:300, facing:90, charged:true, chargeDir: facingHeadingRad(90), movedThisTurn: over, acted:{ fought:true } });
+    // Open ground: advance along the +x charge heading, no re-arm.
+    const c1 = mk(6); state.units = [c1]; state.selectedId = state.targetId = null;
+    followThroughCharge(c1);
+    console.assert(c1.x > 200 && Math.abs(c1.y - 300) < 1, 'follow-through: advances along the charge heading without drift');
+    console.assert(c1.acted.fought === true, 'follow-through into open ground does not re-arm melee');
+    // Fresh foe ahead: stop at contact, re-arm, select onto the foe.
+    const c2 = mk(6); const foe = { id:91003, side:'B', type:'HF', kind:'mass', count:10, startCount:10, cols:5, rows:2, spacing:'close', x:360, y:300, facing:270 };
+    state.units = [c2, foe]; state.selectedId = state.targetId = null;
+    followThroughCharge(c2);
+    console.assert(c2.acted.fought === false && state.selectedId === c2.id && state.targetId === foe.id, 'follow-through into fresh contact re-arms melee and selects the foe (p.16)');
+    console.assert(c2.x < 360, 'follow-through stops at contact instead of passing through the foe');
+    // No charge budget left → no movement.
+    const c3 = mk(18); state.units = [c3]; const x0 = c3.x;
+    followThroughCharge(c3);
+    console.assert(c3.x === x0, 'follow-through: a charger with no balance left does not move');
+    state.units = _u; state.terrain = _t; $('#log').innerHTML = _log; state.selectedId = _sel; state.targetId = _tgt; }
+
+  // Jousting (Appendix C + p.26)
+  console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
+  console.assert(resolveJoust({ aim:'DC', position:1, rng:always(1) }).code === 'U', 'joust: DC x1 = U');
+  console.assert(resolveJoust({ aim:'CP', position:1, rng:always(1) }).code === 'B', 'joust: CP x1 multi-cell low -> B');
+  console.assert(resolveJoust({ aim:'CP', position:1, rng:always(6) }).code === 'I', 'joust: CP x1 multi-cell high -> I');
+  console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).forcesSteadyNext === 'defender', 'joust: Helm-off forces defender Steady next');
+  console.assert(joustPositionAllowed('Helm', 5) && !joustPositionAllowed('Helm', 1), 'joust: PDP/AP legality (Helm 5 ok, 1 no)');
+  console.assert(['Helm','DC','CP','SC','DF','FP','SF','Base'].every(a => joustPositionAllowed(a, 4)), 'joust: position 4 legal under every aim');
+  { const jl = runJoust({ a:{ id:'A', rides:[{ aim:'Helm', position:4 }] }, b:{ id:'B', rides:[{ aim:'SC', position:5 }] }, rng:always(1) });
+    console.assert(jl.ridesPlayed === 1 && jl.total.A === 20 && jl.outcome === 'A unhorses B', 'joust: Helm vs pos5 unhorses, +20, ends ride 1'); }
+  { const jl = runJoust({ a:{ id:'A', rides:[{ aim:'SC', position:4 }, { aim:'SC', position:6 }] }, b:{ id:'B', rides:[{ aim:'Helm', position:4 }, { aim:'Helm', position:6 }] }, rng:always(1) });
+    console.assert(jl.log[1].aChoice.position === 4, 'joust: helm-off knight forced to Steady Seat next ride'); }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
