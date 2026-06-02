@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.39 · Shield aim-picker + ride-by-ride jousting. Joust mode now resolves one ride at a time: each knight's column shows a clickable heraldic SHIELD (joustShieldSVG) whose 8 zones — Helm above; dexter/sinister chief, the pale, fess, and base — set that knight's aiming point (clicks handled via .jm-zone in onJoustModeAction), plus a saddle-position select. A "Ride N of 3" banner, "Run ride" + "Reset duel" actions. runJoustRide calls the engine's resolveJoustRide per ride, accumulates the herald's-cheque score into state.joustTotals, pushes to state.joustLog, applies the * forced-Steady-Seat rule to the next ride (posture locked + flagged), and ends on an unhorse or after 3 rides with an outcome (unhorse / wins on points / draw); summary logged via appendTurn. New transient state joustRide/joustTotals/joustForced/joustSel/joustLog/joustDone/joustOutcome. Replaces the v0.10.37 set-3-up-front controls + batch runJoustFromMode. New assert: ride-by-ride accumulation matches the runJoust batch. Next: the tournament standings layer (entrants + per-duel score accumulation, persisted). -->
+<!-- chainmail-board.html · v0.10.40 · Tournament standings layer. Joust mode gains a left rail listing the field (every in-play unit) ranked by a persistent cumulative score: each completed duel adds its per-knight herald's-cheque total (state.joustTotals) to that knight's tally via recordJoustResult, incrementing a jousts-run count. joustStandings(scores, ids) is pure — maps ids to {id,score,jousts}, sorts by score desc then id (unscored = 0). renderJoustStandings paints the rail (rank · side-dot + name · score + Nj), highlighting the current pair; refreshed at the top of renderJoustDuel so it updates the moment a duel resolves. The tally persists to localStorage (TOURNAMENT_KEY, mirroring the settings save) via saveTournament/loadTournament, survives board undo (applySnapshot never touches state.tournament), and a "Clear" button zeroes it. New assert: standings rank by score desc with unscored = 0. This completes the jousting arc (engine → takeover mode → header entry + pickers → shield + ride-by-ride → standings). Next board systems to inline as resolver panels: weather, cannon/artillery, siege — geometry deferred to the Foundry port. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.39</title>
+<title>Chainmail — Battlefield · v0.10.40</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -185,6 +185,18 @@
   .jm-zone:hover rect { stroke: var(--ink-soft); }
   .jm-zone.on rect { fill: var(--rank-hi); stroke: var(--gold); stroke-width: 1; }
   .jm-zone.on text { fill: var(--ink); font-weight: 700; }
+  .jm-body { display: grid; grid-template-columns: 192px 1fr; gap: 16px; align-items: start; }
+  .jm-rail { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+  .jm-rail-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--sans); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 8px; }
+  .jm-clear { font-size: 10px; padding: 2px 7px; }
+  .jm-standings .row { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; align-items: baseline; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+  .jm-standings .row:last-child { border-bottom: none; }
+  .jm-standings .row.cur { background: var(--rank-hi); margin: 0 -6px; padding: 4px 6px; border-radius: 4px; border-bottom: none; }
+  .jm-standings .rk { color: var(--ink-soft); }
+  .jm-standings .sc { font-weight: 700; }
+  .jm-standings .sc small { font-weight: 400; color: var(--ink-soft); }
+  .jm-standings .nm .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .jm-standings .empty { font-size: 11px; color: var(--ink-soft); }
 
   .modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
   .modal[hidden] { display: none; }
@@ -223,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Shield aim-picker + ride-by-ride</div>
+    <div class="sub">Chainmail HTML Sim · Tournament standings</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.10.39</span>
+    <span class="version-tag">v0.10.40</span>
   </div>
 
   <div class="toolbar">
@@ -344,6 +356,12 @@
       <span class="jm-vs">vs</span>
       <label>Knight B <select id="joust-pick-B"></select></label>
     </div>
+    <div class="jm-body">
+      <aside class="jm-rail">
+        <div class="jm-rail-head"><span>Standings</span><button data-jact="clear-tourney" class="secondary jm-clear">Clear</button></div>
+        <div id="joust-standings" class="jm-standings"></div>
+      </aside>
+      <div class="jm-main">
     <div class="jm-arena">
       <span class="jm-knight"><span class="jm-badge jm-a">A</span> <span id="joust-A-name"></span></span>
       <span class="jm-lists">⟶&nbsp; the lists &nbsp;⟵</span>
@@ -359,6 +377,8 @@
       <button data-jact="reset" class="secondary">Reset duel</button>
     </div>
     <div id="joust-result" class="jm-res"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -461,7 +481,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.39';
+const SIM_VERSION = '0.10.40';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1459,6 +1479,7 @@ const state = {
   joustLog: [],
   joustDone: false,
   joustOutcome: '',
+  tournament: { scores: {} },   // v0.10.40: persistent cross-duel score tally (saved to localStorage)
   nextId: 1,
   dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
   panning: null,      // { clientX0, clientY0, vb0 }
@@ -2645,6 +2666,7 @@ function joustShieldSVG(knight, selAim) {
     `<line class="jm-shield-div" x1="100" y1="48" x2="100" y2="210"></line>${zones}</svg>`;
 }
 function renderJoustDuel() {
+  renderJoustStandings();
   const a = state.units.find(u => u.id === state.joustA);
   const d = state.units.find(u => u.id === state.joustB);
   const banner = $('#joust-ride-banner'), runBtn = document.querySelector('#joust-mode [data-jact="run"]');
@@ -2684,6 +2706,34 @@ function renderJoustResult(a, d) {
   if (state.joustDone) html += `<div class="r"><strong>Outcome</strong> · ${state.joustOutcome}</div>`;
   $('#joust-result').innerHTML = html;
 }
+const TOURNAMENT_KEY = 'chainmail-tournament';
+function saveTournament() { try { localStorage.setItem(TOURNAMENT_KEY, JSON.stringify(state.tournament)); } catch (e) {} }
+function loadTournament() { try { const s = JSON.parse(localStorage.getItem(TOURNAMENT_KEY) || 'null'); if (s && s.scores) state.tournament = s; } catch (e) {} }
+function joustStandings(scores, ids) {
+  return ids.map(id => ({ id, score: (scores[id] || {}).score || 0, jousts: (scores[id] || {}).jousts || 0 }))
+    .sort((p, q) => q.score - p.score || String(p.id).localeCompare(String(q.id)));
+}
+function renderJoustStandings() {
+  const el = $('#joust-standings'); if (!el) return;
+  const units = joustEligibleUnits();
+  if (!units.length) { el.innerHTML = `<div class="empty">No units in play.</div>`; return; }
+  const byId = Object.fromEntries(units.map(u => [u.id, u]));
+  el.innerHTML = joustStandings(state.tournament.scores, units.map(u => u.id)).map((r, i) => {
+    const u = byId[r.id], cur = (r.id === state.joustA || r.id === state.joustB) ? ' cur' : '';
+    const dot = `<span class="dot" style="background:${u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)'}"></span>`;
+    return `<div class="row${cur}"><span class="rk">${i + 1}</span><span class="nm">${dot}${joustName(u)}</span><span class="sc">${r.score}<small> ${r.jousts}j</small></span></div>`;
+  }).join('');
+}
+function recordJoustResult() {
+  for (const [k, id] of [['A', state.joustA], ['B', state.joustB]]) {
+    if (id == null) continue;
+    const rec = state.tournament.scores[id] || (state.tournament.scores[id] = { score: 0, jousts: 0 });
+    rec.score += state.joustTotals[k];
+    rec.jousts += 1;
+  }
+  saveTournament();
+}
+function clearTournament() { state.tournament = { scores: {} }; saveTournament(); }
 function onJoustPick(evt) {
   if (evt.target.id === 'joust-pick-A' || evt.target.id === 'joust-pick-B') {
     if (evt.target.id === 'joust-pick-A') state.joustA = evt.target.value;
@@ -2731,6 +2781,7 @@ function runJoustRide() {
       : ride.unhorsed.A ? `${dn} unhorses ${an}`
       : state.joustTotals.A === state.joustTotals.B ? 'drawn on points'
       : state.joustTotals.A > state.joustTotals.B ? `${an} wins on points` : `${dn} wins on points`;
+    recordJoustResult();
     appendTurn(`Joust · ${an} vs ${dn} · ${state.joustLog.length} ride${state.joustLog.length > 1 ? 's' : ''}`,
       state.joustLog.map(L => `<div class="step">Ride ${L.ride}: ${an} — ${L.aRes.toLowerCase()}; ${dn} — ${L.bRes.toLowerCase()}</div>`).join('') +
       `<div class="step">Score ${an} ${state.joustTotals.A}, ${dn} ${state.joustTotals.B} — ${state.joustOutcome}</div>`);
@@ -2755,6 +2806,7 @@ function onJoustModeAction(evt) {
   if (act === 'run') runJoustRide();
   else if (act === 'exit') exitJoustMode();
   else if (act === 'reset') { resetJoustDuel(); renderJoustDuel(); }
+  else if (act === 'clear-tourney') { if (confirm('Clear all tournament scores?')) { clearTournament(); renderJoustStandings(); } }
 }
 
 /* === G. INTERACTION ==================================================== */
@@ -5229,6 +5281,7 @@ document.addEventListener('mousedown', e => {
 document.addEventListener('keydown', onKeyDown);
 
 loadSettings();              // restore persisted settings before first paint
+loadTournament();            // restore persisted tournament scores
 syncSettingsCheckboxes();    // dialog controls reflect the restored state (not browser form-restore)
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
@@ -5796,6 +5849,8 @@ renderBoard();
       forced = rd.forcedNext;
     }
     console.assert(tA === batch.total.A && tB === batch.total.B && played === batch.ridesPlayed, 'joust ride-by-ride accumulation matches runJoust batch'); }
+  { const st = joustStandings({ a:{ score:20, jousts:1 }, b:{ score:-3, jousts:1 } }, ['a', 'b', 'c']);
+    console.assert(st[0].id === 'a' && st[0].score === 20 && st[1].id === 'c' && st[1].score === 0 && st[2].id === 'b' && st[2].score === -3, 'tournament standings rank by score desc; unscored = 0'); }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
