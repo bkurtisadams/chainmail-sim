@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.41 · Inline the artillery engine (Chainmail p.12-14), resolvers only — the 2-D board geometry (hit-area circles, cannon dowel lateral placement + deviation projection, which on-table figures fall under a circle or colour section) is deferred to the Foundry port. New section C.6: CATAPULTS (light 15-30"/2" area/every 2 turns, heavy 24-48"/3.5"/3) with catapultTurnsPerShot (4 crew = base cadence, each short crew +1 turn, >4 no benefit) and the fire-optional catapultScatter (two dice, higher wins = miss in inches, tie = on); ARQUEBUS_BANDS + resolveArquebus (per-man d6 vs 2/4/5 bands to 18", cover -1/-2, rested +1, a hit kills any armour — distinct from the existing missile-table arquebus weapon); CANNON dowels (light/heavy field gun + bombard, White/Black sections summing to range) with cannonSections, cannonVariation (d6, 4 = straight), and the 1-D cannonSectionsHitting (named-colour sections overlapping a target span). Reuses the shared d6. 18 ported asserts (incl. the p.14 heavy-gun WHITE 22-30 worked example = 2nd + 3rd white). Next: a cheap artillery fire panel (no canvas), then the siege engine + panel. -->
+<!-- chainmail-board.html · v0.11.13 · Inline the siege engine (Chainmail p.22-23), resolvers only — board-layer 2-D placement (breeches, oil paths/puddles, mantlets, structures, ditch/moat crossing) deferred to the Foundry port. New section C.7: STRUCTURES defense-value ranges (bastion 40-60, gatehouse 30-45, curtain 25-40, rampart 20-30, wooden 5-15, artillery 3/5) + structureDefenseRange; SIEGE_WEAPONS attack points (bombard 6, heavy gun 4, light gun/large catapult 3, small catapult 2, covered ram 2/turn, dropped rock 1) + the batterStructure loop (subtract per hit, destroyed at 0); pushed-equipment movement siegeTowerSpeed (1"/2 men, cap 4") + mantletSpeed (3"/man, cap 6"); ramDisabled (2d6>=9), ladderPushOff (d6 5-6 → 2nd killed/3rd stunned), rockOnLadder (2nd saved 1-3, 3rd 1-5), TOWER_CAPACITY/climb rates, BOILING_OIL (2" path + 4x3 puddle, burn 3, wood burn 5), MINE (counter within 12" foils, 6" breech) + mineFoiled, BREECH (6" wide, abatis 3 turns each way). Dice passed in (deterministic). 15 ported asserts. Next: cheap artillery + siege fire/battering panels (no canvas). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.41</title>
+<title>Chainmail — Battlefield · v0.11.13</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Artillery engine (p.12-14)</div>
+    <div class="sub">Chainmail HTML Sim · Siege engine (p.22-23)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.10.41</span>
+    <span class="version-tag">v0.11.13</span>
   </div>
 
   <div class="toolbar">
@@ -481,7 +481,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.41';
+const SIM_VERSION = '0.11.13';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1536,6 +1536,75 @@ function cannonVariation(die) {
 function cannonSectionsHitting(typeId, namedColor, nearIn, farIn) {
   return cannonSections(typeId).filter((s) => s.color === namedColor && s.end > nearIn && s.start < farIn);
 }
+
+/* === C.7 SIEGE — structures, battering, escalade, oil, mines (p.22-23) == */
+/* Engine layer: structure defense values, weapon attack points + battering  */
+/* loop, equipment movement formulas, escalade/ram/rock/mine dice + timers.   */
+/* Board layer deferred to Foundry: 2-D placement of breeches, oil paths and  */
+/* puddles, mantlets and structures, and the ditch/moat crossing test.        */
+/* Mirrors chainmail-siege.mjs (15/15). Dice are passed in (deterministic).   */
+const STRUCTURES = {
+  bastion:        { name: 'Bastion / round tower',                min: 40, max: 60 },
+  gatehouse:      { name: 'Gatehouse / square tower / gate',      min: 30, max: 45 },
+  curtain:        { name: 'Curtain wall / stone building',        min: 25, max: 40 },
+  rampart:        { name: 'Rampart / earth-filled gabion',        min: 20, max: 30 },
+  wooden:         { name: 'Wooden structure / palisade',          min: 5,  max: 15 },
+  artilleryLarge: { name: 'Cannon / large catapult (as target)',  min: 5,  max: 5 },
+  artillerySmall: { name: 'Small catapult / mantlet (as target)', min: 3,  max: 3 },
+};
+const structureDefenseRange = (id) => { const s = STRUCTURES[id]; return s ? { min: s.min, max: s.max } : null; };
+// Defense points removed per hit (per turn in contact, for the ram).
+const SIEGE_WEAPONS = {
+  bombard:         { name: 'Bombard',                          points: 6 },
+  heavyFieldGun:   { name: 'Heavy Field Gun',                  points: 4 },
+  lightFieldGun:   { name: 'Light Field Gun / Large Catapult', points: 3 },
+  smallCatapult:   { name: 'Small Catapult',                   points: 2 },
+  coveredRam:      { name: 'Covered ram / pick / screw',       points: 2 },
+  rockOnEquipment: { name: 'Dropped rock (vs equipment)',      points: 1 },
+};
+// Battering: subtract each hit's points; destroyed when defense reaches 0.
+function batterStructure(defenseValue, weaponIds) {
+  let v = defenseValue; const log = [];
+  for (const id of weaponIds) {
+    const w = SIEGE_WEAPONS[id];
+    if (!w) throw new Error(`unknown siege weapon: ${id}`);
+    v = Math.max(0, v - w.points);
+    log.push({ weapon: id, points: w.points, remaining: v });
+  }
+  return { remaining: v, destroyed: v <= 0, log };
+}
+// Pushed-equipment movement: tower 1"/2 men (cap 4"); mantlet 3"/man (cap 6").
+const siegeTowerSpeed = (pushers) => Math.min(4, Math.floor(Math.max(0, pushers) / 2));
+const mantletSpeed    = (pushers) => Math.min(6, Math.max(0, pushers) * 3);
+// Covered war machine: 2 dmg/turn in contact; defenders disable it on 2d6 >= 9.
+const RAM_DAMAGE_PER_TURN = 2;
+const ramDisabled = (d1, d2) => (d1 + d2) >= 9;
+// Escalade rates + siege-tower capacity.
+const LADDER_CLIMB_PER_TURN = 3;
+const TOWER_CLIMB_PER_TURN = 5;
+const TOWER_CAPACITY = { drawbridge: 5, top: 3 };
+// Defenders winning a melee vs escaladers push the ladder on a d6 of 5-6:
+// 2nd climber killed, 3rd stunned a turn.
+function ladderPushOff(die) {
+  const pushed = die >= 5;
+  return { pushed, secondKilled: pushed, thirdStunned: pushed };
+}
+// Rock down a ladder: 1st climber killed; 2nd saved on 1-3, 3rd saved on 1-5.
+function rockOnLadder(die2, die3) {
+  return { first: 'killed', secondSurvives: die2 <= 3, thirdSurvives: die3 <= 5 };
+}
+// Boiling oil: 2" path + 4"x3" puddle, kills all within, burns 3 turns; struck
+// wood (except ladders / peak-roofed rams) ignites, abandoned next turn, burns 5.
+const BOILING_OIL = {
+  pathWidthIn: 2, puddleWideIn: 4, puddleDeepIn: 3, burnTurns: 3,
+  woodAbandonInTurns: 1, woodBurnTurns: 5, immuneStructures: ['ladder', 'peakRoofRam'],
+};
+// Mines: a counter-mine within ~6-12" foils it (miners killed); success = 6" breech.
+const MINE = { counterProximityMinIn: 6, counterProximityMaxIn: 12, breechWidthIn: 6 };
+const mineFoiled = (counterDistIn) => counterDistIn <= MINE.counterProximityMaxIn;
+// Breech: passable at Rough Terrain speed; defender blocks with abatis (3 turns to
+// build, behaves as a movable mantlet, 3 uninterrupted turns to tear down).
+const BREECH = { widthIn: 6, abatisBuildTurns: 3, abatisTearDownTurns: 3 };
 
 /* === D. STATE ========================================================== */
 const state = {
@@ -5914,6 +5983,23 @@ renderBoard();
   console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, cover: 'half', rng: always(4) }).kills === 0, 'arquebus half cover (-1): die 4 -> 3 misses');
   console.assert(resolveArquebus({ rangeIn: 15, shooters: 1, support: true, rng: always(4) }).kills === 1, 'arquebus support (+1): die 4 -> 5 at 15" hits');
   console.assert(resolveArquebus({ rangeIn: 20, shooters: 10, rng: always(6) }).inRange === false, 'arquebus beyond 18" out of range');
+
+  // Siege (structures, battering, escalade, oil, mines — p.22-23)
+  console.assert(STRUCTURES.bastion.min === 40 && STRUCTURES.bastion.max === 60, 'siege: bastion 40-60');
+  console.assert(STRUCTURES.wooden.min === 5 && STRUCTURES.curtain.max === 40, 'siege: wooden 5-15, curtain max 40');
+  console.assert(SIEGE_WEAPONS.bombard.points === 6 && SIEGE_WEAPONS.heavyFieldGun.points === 4 && SIEGE_WEAPONS.lightFieldGun.points === 3 && SIEGE_WEAPONS.smallCatapult.points === 2, 'siege: weapon attack values');
+  console.assert(batterStructure(24, Array(8).fill('lightFieldGun')).destroyed, 'siege: curtain 24 falls to 8 light-gun hits (-3 each)');
+  console.assert(!batterStructure(24, Array(7).fill('lightFieldGun')).destroyed, 'siege: 7 hits leaves it standing (3 left)');
+  console.assert(batterStructure(60, ['smallCatapult']).remaining === 58, 'siege: a small catapult barely scratches a bastion (60 -> 58)');
+  { let threw = false; try { batterStructure(10, ['trebuchet']); } catch (e) { threw = true; } console.assert(threw, 'siege: unknown weapon throws'); }
+  console.assert(siegeTowerSpeed(2) === 1 && siegeTowerSpeed(8) === 4 && siegeTowerSpeed(10) === 4 && siegeTowerSpeed(1) === 0, 'siege: tower 1"/2 men, cap 4"');
+  console.assert(mantletSpeed(1) === 3 && mantletSpeed(2) === 6 && mantletSpeed(3) === 6, 'siege: mantlet 3"/man, cap 6"');
+  console.assert(ramDisabled(5, 4) && !ramDisabled(4, 4) && ramDisabled(6, 6), 'siege: ram-catchers disable on 2d6 >= 9');
+  console.assert(ladderPushOff(5).pushed && ladderPushOff(5).secondKilled && !ladderPushOff(4).pushed, 'siege: ladder pushed off on 5-6');
+  console.assert(rockOnLadder(3, 5).secondSurvives && rockOnLadder(3, 5).thirdSurvives, 'siege: rock 2nd saved on 3, 3rd saved on 5');
+  console.assert(!rockOnLadder(4, 6).secondSurvives && !rockOnLadder(4, 6).thirdSurvives, 'siege: rock 2nd dies on 4, 3rd dies on 6');
+  console.assert(mineFoiled(10) && !mineFoiled(15), 'siege: counter-mine within 12" foils the mine');
+  console.assert(MINE.breechWidthIn === 6 && BREECH.widthIn === 6, 'siege: a mined / battered breech is 6" wide');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
