@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.36 · Jousting takeover mode. The resolver-pane "⚔ Joust" trigger (shown when a unit is selected and a foe targeted) now ENTERS a full-area joust mode (#joust-mode) instead of expanding a cramped sidebar panel: enterJoustMode hides the battlefield (.toolbar + .layout) and shows a dedicated duel surface — header with combatants + "Exit to battlefield", an arena strip, and two knight columns of aim (attack) + saddle-position (defense) selects across 3 rides. Run validates PDP/AP legality, calls runJoust with state.rng, renders ride results + score + outcome, and logs a summary via appendTurn; Exit (exitJoustMode) restores the battlefield with selection intact. joustMode is transient (not snapshotted); the engine (runJoust) is unchanged — this reworks the joust SURFACE from the v0.10.35 sidebar panel into a mode. Tournament layer (entrant roster + standings table, scores accumulated per duel) is the next slice; history check (web) confirmed period joust tournaments were herald-scored point competitions, not knockout brackets, matching the Appendix C scoring already encoded. -->
+<!-- chainmail-board.html · v0.10.38 · Fix two pre-existing latent test failures (unrelated to jousting; both predate it and were silent because console.assert doesn't halt). (1) canMeleeThisTurn now null-guards — `!!u && !(u.acted && u.acted.fought)` — so a null unit reads as not-meleeable (false) per its test's intent, instead of returning true; normal truthy-unit callers are unaffected, and the melee resolver's null path is now safe rather than proceeding. (2) The canPauseAtHalf distance asserts are wrapped to run with enforcePhases temporarily false (restored after), isolating the half-move distance predicate from the move-phase gate (canSideMoveNow), which at load returns false and was failing the one "should pause" case. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.36</title>
+<title>Chainmail — Battlefield · v0.10.38</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -151,6 +151,10 @@
   .ctx-menu[hidden] { display: none; }
   #joust-mode { max-width: 860px; margin: 0 auto; padding: 6px 4px 28px; }
   #joust-mode[hidden] { display: none; }
+  .jm-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .jm-pick label { font-size: 12px; color: var(--ink-soft); }
+  .jm-pick select { margin-left: 4px; }
+  .jm-vs { color: var(--ink-soft); font-size: 12px; }
   .jm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; margin-bottom: 14px; }
   .jm-arena { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
   .jm-knight { font-weight: 600; }
@@ -207,8 +211,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Jousting takeover mode</div>
-    <span class="version-tag">v0.10.36</span>
+    <div class="sub">Chainmail HTML Sim · Test-suite fixes</div>
+    <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
+    <span class="version-tag">v0.10.38</span>
   </div>
 
   <div class="toolbar">
@@ -321,6 +326,11 @@
     <div class="jm-head">
       <div><h1 style="margin:0">Tournament joust</h1><div class="sub" id="joust-subtitle"></div></div>
       <button data-jact="exit" class="secondary">◀ Exit to battlefield</button>
+    </div>
+    <div class="jm-pick">
+      <label>Knight A <select id="joust-pick-A"></select></label>
+      <span class="jm-vs">vs</span>
+      <label>Knight B <select id="joust-pick-B"></select></label>
     </div>
     <div class="jm-arena">
       <span class="jm-knight"><span class="jm-badge jm-a">A</span> <span id="joust-A-name"></span></span>
@@ -435,7 +445,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.36';
+const SIM_VERSION = '0.10.38';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1424,6 +1434,8 @@ const state = {
   selectedId: null,
   targetId: null,
   joustMode: false,   // v0.10.36: joust takeover mode active?
+  joustA: null,       // v0.10.37: chosen combatant ids (in-mode pickers)
+  joustB: null,
   nextId: 1,
   dragging: null,     // { unitId, startMouseX, startMouseY, originX, originY }
   panning: null,      // { clientX0, clientY0, vb0 }
@@ -1621,7 +1633,7 @@ function inMeleeContact(a, b) {
 // the post-melee "melee continues" result carries the fight into the NEXT round =
 // next turn. The lone same-turn exception is a victorious charger following
 // through into fresh contact (p.16), which isn't automated yet.
-const canMeleeThisTurn = (u) => !(u && u.acted && u.acted.fought);
+const canMeleeThisTurn = (u) => !!u && !(u.acted && u.acted.fought);
 // Edge-to-edge gap in inches (0 when footprints touch/overlap).
 function edgeGapInches(a, b) {
   const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
@@ -2563,11 +2575,36 @@ function updateResolverPane() {
   $('#resolver-trigger').innerHTML = `<button data-jact="open" style="width:100%">⚔ Joust — ${joustName(a)} vs ${joustName(d)}</button>`;
 }
 const joustName = (u) => `${typeById(u.type).name} (${u.side})`;
-function enterJoustMode() {
-  const a = state.units.find(u => u.id === state.selectedId);
-  const d = state.units.find(u => u.id === state.targetId);
-  if (!a || !d) return;
+function joustEligibleUnits() { return state.units.filter(u => !u.destroyed); }
+function enterJoustMode(preA, preB) {
+  const ids = joustEligibleUnits().map(u => u.id);
+  let aId = preA || state.joustA || state.selectedId;
+  let bId = preB || state.joustB || state.targetId;
+  if (!ids.includes(aId)) aId = ids[0] || null;
+  if (!ids.includes(bId) || bId === aId) bId = ids.find(id => id !== aId) || null;
+  state.joustA = aId; state.joustB = bId;
   state.joustMode = true;
+  renderJoustCombatantPickers();
+  renderJoustDuel();
+  document.querySelector('.toolbar').hidden = true;
+  document.querySelector('.layout').hidden = true;
+  $('#joust-mode').hidden = false;
+}
+function renderJoustCombatantPickers() {
+  const opts = (selId) => joustEligibleUnits().map(u => `<option value="${u.id}"${u.id === selId ? ' selected' : ''}>${joustName(u)}</option>`).join('') || `<option value="">— no units —</option>`;
+  $('#joust-pick-A').innerHTML = opts(state.joustA);
+  $('#joust-pick-B').innerHTML = opts(state.joustB);
+}
+function renderJoustDuel() {
+  const a = state.units.find(u => u.id === state.joustA);
+  const d = state.units.find(u => u.id === state.joustB);
+  if (!a || !d) {
+    $('#joust-subtitle').textContent = 'Pick two knights to begin.';
+    $('#joust-A-name').textContent = $('#joust-B-name').textContent = '—';
+    $('#joust-col-A').innerHTML = $('#joust-col-B').innerHTML = '';
+    $('#joust-result').innerHTML = '';
+    return;
+  }
   $('#joust-subtitle').textContent = `${joustName(a)} vs ${joustName(d)} · best of 3 rides, ends on an unhorse`;
   $('#joust-A-name').textContent = joustName(a);
   $('#joust-B-name').textContent = joustName(d);
@@ -2583,9 +2620,18 @@ function enterJoustMode() {
     $(`#joust-col-${k}`).innerHTML = html;
   }
   $('#joust-result').innerHTML = '';
-  document.querySelector('.toolbar').hidden = true;
-  document.querySelector('.layout').hidden = true;
-  $('#joust-mode').hidden = false;
+}
+function onJoustPick(evt) {
+  if (evt.target.id !== 'joust-pick-A' && evt.target.id !== 'joust-pick-B') return;
+  if (evt.target.id === 'joust-pick-A') state.joustA = evt.target.value;
+  else state.joustB = evt.target.value;
+  if (state.joustA && state.joustA === state.joustB) {
+    const other = joustEligibleUnits().map(u => u.id).find(id => id !== state.joustA);
+    if (evt.target.id === 'joust-pick-A') state.joustB = other || null;
+    else state.joustA = other || null;
+  }
+  renderJoustCombatantPickers();
+  renderJoustDuel();
 }
 function exitJoustMode() {
   state.joustMode = false;
@@ -2594,8 +2640,8 @@ function exitJoustMode() {
   document.querySelector('.layout').hidden = false;
 }
 function runJoustFromMode() {
-  const a = state.units.find(u => u.id === state.selectedId);
-  const d = state.units.find(u => u.id === state.targetId);
+  const a = state.units.find(u => u.id === state.joustA);
+  const d = state.units.find(u => u.id === state.joustB);
   if (!a || !d) return;
   const read = (knight) => {
     const rides = [];
@@ -2630,7 +2676,7 @@ function runJoustFromMode() {
     `<div class="step">Score ${an} ${result.total.A}, ${dn} ${result.total.B} — ${result.outcome}</div>`);
 }
 function onResolverAction(evt) {
-  if (evt.target.dataset.jact === 'open') enterJoustMode();
+  if (evt.target.dataset.jact === 'open') enterJoustMode(state.selectedId, state.targetId);
 }
 function onJoustModeAction(evt) {
   const act = evt.target.dataset.jact;
@@ -5102,6 +5148,8 @@ $('#board').addEventListener('contextmenu', e => e.preventDefault());
 $('#ctx-menu').addEventListener('click', onContextMenuAction);
 $('#resolver-pane').addEventListener('click', onResolverAction);
 $('#joust-mode').addEventListener('click', onJoustModeAction);
+$('#joust-mode').addEventListener('change', onJoustPick);
+$('#btn-joust').addEventListener('click', () => enterJoustMode());
 document.addEventListener('mousedown', e => {
   if (!$('#ctx-menu').hidden && !$('#ctx-menu').contains(e.target)) closeContextMenu();
 });
@@ -5305,10 +5353,12 @@ renderBoard();
 
   // Half-move pause point: half line, eligibility, predicate, and movement hold.
   console.assert(Math.abs(halfMoveIn({ type:'LF' }) - 6) < 1e-9, 'half-move of LF (12″) is 6″');
-  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:4 }) === true, 'within ½ with move left → may pause');
-  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:9 }) === false, 'past ½ → may not pause');
-  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:12 }) === false, 'no move left → may not pause');
-  console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:3, halfMovePaused:true }) === false, 'already paused → not offered again');
+  { const _ep = state.settings.enforcePhases; state.settings.enforcePhases = false;   // isolate the distance predicate from the move-phase gate
+    console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:4 }) === true, 'within ½ with move left → may pause');
+    console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:9 }) === false, 'past ½ → may not pause');
+    console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:12 }) === false, 'no move left → may not pause');
+    console.assert(canPauseAtHalf({ type:'LF', side:'A', movedThisTurn:3, halfMovePaused:true }) === false, 'already paused → not offered again');
+    state.settings.enforcePhases = _ep; }
   console.assert(atHalfMovePause({ halfMovePaused:true }) === true && atHalfMovePause({}) === false, 'atHalfMovePause reflects the flag');
   console.assert(nudgeUnit({ type:'LF', side:'A', halfMovePaused:true, acted:{} }, 24, 0) === false, 'a unit paused at half-move cannot be nudged');
 
