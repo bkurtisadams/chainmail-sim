@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.10.40 · Tournament standings layer. Joust mode gains a left rail listing the field (every in-play unit) ranked by a persistent cumulative score: each completed duel adds its per-knight herald's-cheque total (state.joustTotals) to that knight's tally via recordJoustResult, incrementing a jousts-run count. joustStandings(scores, ids) is pure — maps ids to {id,score,jousts}, sorts by score desc then id (unscored = 0). renderJoustStandings paints the rail (rank · side-dot + name · score + Nj), highlighting the current pair; refreshed at the top of renderJoustDuel so it updates the moment a duel resolves. The tally persists to localStorage (TOURNAMENT_KEY, mirroring the settings save) via saveTournament/loadTournament, survives board undo (applySnapshot never touches state.tournament), and a "Clear" button zeroes it. New assert: standings rank by score desc with unscored = 0. This completes the jousting arc (engine → takeover mode → header entry + pickers → shield + ride-by-ride → standings). Next board systems to inline as resolver panels: weather, cannon/artillery, siege — geometry deferred to the Foundry port. -->
+<!-- chainmail-board.html · v0.10.41 · Inline the artillery engine (Chainmail p.12-14), resolvers only — the 2-D board geometry (hit-area circles, cannon dowel lateral placement + deviation projection, which on-table figures fall under a circle or colour section) is deferred to the Foundry port. New section C.6: CATAPULTS (light 15-30"/2" area/every 2 turns, heavy 24-48"/3.5"/3) with catapultTurnsPerShot (4 crew = base cadence, each short crew +1 turn, >4 no benefit) and the fire-optional catapultScatter (two dice, higher wins = miss in inches, tie = on); ARQUEBUS_BANDS + resolveArquebus (per-man d6 vs 2/4/5 bands to 18", cover -1/-2, rested +1, a hit kills any armour — distinct from the existing missile-table arquebus weapon); CANNON dowels (light/heavy field gun + bombard, White/Black sections summing to range) with cannonSections, cannonVariation (d6, 4 = straight), and the 1-D cannonSectionsHitting (named-colour sections overlapping a target span). Reuses the shared d6. 18 ported asserts (incl. the p.14 heavy-gun WHITE 22-30 worked example = 2nd + 3rd white). Next: a cheap artillery fire panel (no canvas), then the siege engine + panel. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.10.40</title>
+<title>Chainmail — Battlefield · v0.10.41</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Tournament standings</div>
+    <div class="sub">Chainmail HTML Sim · Artillery engine (p.12-14)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.10.40</span>
+    <span class="version-tag">v0.10.41</span>
   </div>
 
   <div class="toolbar">
@@ -481,7 +481,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.10.40';
+const SIM_VERSION = '0.10.41';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1462,6 +1462,79 @@ function runJoust({ a, b, rng }) {
     forced = ride.forcedNext;
   }
   return { ridesPlayed, log, total, outcome };
+}
+
+/* === C.6 ARTILLERY — catapults, arquebus, cannon (p.12-14) ============= */
+/* Resolvers only. The 2-D board geometry (hit-area circles, dowel lateral  */
+/* placement, deviation projection) is deferred to the Foundry port; the     */
+/* down-range 1-D "which sections touch the span" is here. Reuses the shared  */
+/* d6 above. Mirrors chainmail-artillery.mjs (18/18).                        */
+const CATAPULTS = {
+  light: { name: 'Light Catapult', min: 15, max: 30, hitArea: 2,   everyTurns: 2 },
+  heavy: { name: 'Heavy Catapult', min: 24, max: 48, hitArea: 3.5, everyTurns: 3 },
+};
+// 4 crew fires at base cadence; each crew short of 4 adds a turn; >4 no benefit.
+function catapultTurnsPerShot(typeId, crew) {
+  const t = CATAPULTS[typeId];
+  if (!t) throw new Error(`unknown catapult: ${typeId}`);
+  const eff = Math.max(0, Math.min(4, crew));
+  return t.everyTurns + (4 - eff);
+}
+// "Fire optional" scatter (p.12): two coloured dice; higher wins, pips = miss in inches; tie = on.
+function catapultScatter(overDie, underDie) {
+  if (overDie === underDie) return { dir: 'on', miss: 0 };
+  return overDie > underDie ? { dir: 'over', miss: overDie } : { dir: 'under', miss: underDie };
+}
+// Arquebusiers (p.13): per-man d6 vs a range band (score-or-better); a hit kills any armour.
+const ARQUEBUS_BANDS = [
+  { maxRange: 6,  hitOn: 2 },
+  { maxRange: 12, hitOn: 4 },
+  { maxRange: 18, hitOn: 5 },
+];
+function arquebusHitOn(rangeIn) {
+  const b = ARQUEBUS_BANDS.find((band) => rangeIn <= band.maxRange);
+  return b ? b.hitOn : null;
+}
+// cover: 'none' | 'half' (-1) | 'over' (-2). support: weapon rested = +1.
+function resolveArquebus({ rangeIn, shooters, cover = 'none', support = false, rng }) {
+  const hitOn = arquebusHitOn(rangeIn);
+  if (hitOn == null) return { inRange: false, kills: 0, rolls: [] };
+  const mod = (support ? 1 : 0) - (cover === 'half' ? 1 : cover === 'over' ? 2 : 0);
+  const rolls = []; let kills = 0;
+  for (let i = 0; i < shooters; i++) {
+    const die = d6(rng);
+    const hit = die + mod >= hitOn;
+    if (hit) kills++;
+    rolls.push({ die, score: die + mod, hit });
+  }
+  return { inRange: true, hitOn, mod, kills, rolls };
+}
+// Cannon (p.14): dowel sections muzzle->target, alternating White/Black, lengths sum to range.
+// Firer names a colour; every figure that colour touches is eliminated. Bombard may fire indirect.
+const CANNON = {
+  light:   { name: 'Light Field Gun', range: 30, diameter: 0.625, indirect: false,
+             dowel: [['W', 16], ['B', 6], ['W', 3], ['B', 5]] },
+  heavy:   { name: 'Heavy Field Gun', range: 36, diameter: 0.75,  indirect: false,
+             dowel: [['W', 18], ['B', 6], ['W', 3], ['B', 2], ['W', 1], ['B', 6]] },
+  bombard: { name: 'Bombard',         range: 42, diameter: 1,     indirect: true, indirectHitArea: 3.5,
+             dowel: [['W', 20], ['B', 8], ['W', 4], ['B', 2], ['W', 1], ['B', 7]] },
+};
+function cannonSections(typeId) {
+  const c = CANNON[typeId];
+  if (!c) throw new Error(`unknown cannon: ${typeId}`);
+  let at = 0; const ci = { W: 0, B: 0 };
+  return c.dowel.map(([color, len], i) => {
+    const start = at; at += len; ci[color]++;
+    return { color, len, start, end: at, idx: i, colorIdx: ci[color] };
+  });
+}
+// Variation measure: a d6 sets lateral deviation; 4 = straight (per the worked example).
+function cannonVariation(die) {
+  return { die, straight: die === 4 };
+}
+// Down-range hit (1-D): named-colour sections overlapping the target span [nearIn, farIn].
+function cannonSectionsHitting(typeId, namedColor, nearIn, farIn) {
+  return cannonSections(typeId).filter((s) => s.color === namedColor && s.end > nearIn && s.start < farIn);
 }
 
 /* === D. STATE ========================================================== */
@@ -5821,6 +5894,26 @@ renderBoard();
     followThroughCharge(c3);
     console.assert(c3.x === x0, 'follow-through: a charger with no balance left does not move');
     state.units = _u; state.terrain = _t; $('#log').innerHTML = _log; state.selectedId = _sel; state.targetId = _tgt; }
+
+  // Artillery (catapults, arquebus, cannon — p.12-14)
+  for (const id of Object.keys(CANNON))
+    console.assert(cannonSections(id).reduce((s, x) => s + x.len, 0) === CANNON[id].range, `${id} dowel sums to ${CANNON[id].range}"`);
+  { const hit = cannonSectionsHitting('heavy', 'W', 22, 30);
+    console.assert(hit.length === 2 && hit[0].colorIdx === 2 && hit[1].colorIdx === 3, 'cannon: heavy WHITE vs 22-30 = 2nd + 3rd white sections');
+    console.assert(hit[0].len === 3 && hit[1].len === 1, 'cannon: those white sections are 3" and 1" (p.14 example)');
+    console.assert(!cannonSectionsHitting('heavy', 'W', 22, 30).some((s) => s.colorIdx === 1), 'cannon: long 1st white section (0-18) does not reach 22-30'); }
+  console.assert(cannonVariation(4).straight && !cannonVariation(1).straight, 'cannon variation die: 4 = straight');
+  console.assert(catapultTurnsPerShot('light', 4) === 2 && catapultTurnsPerShot('light', 2) === 4, 'catapult: light 4 crew=2, 2 crew=4');
+  console.assert(catapultTurnsPerShot('heavy', 4) === 3 && catapultTurnsPerShot('heavy', 1) === 6, 'catapult: heavy 4 crew=3, 1 crew=6');
+  console.assert(catapultTurnsPerShot('light', 5) === 2, 'catapult: crew above 4 gives no benefit');
+  console.assert(catapultScatter(5, 3).dir === 'over' && catapultScatter(5, 3).miss === 5, 'catapult scatter: over wins, miss 5"');
+  console.assert(catapultScatter(2, 4).dir === 'under' && catapultScatter(2, 4).miss === 4, 'catapult scatter: under wins, miss 4"');
+  console.assert(catapultScatter(3, 3).dir === 'on' && catapultScatter(3, 3).miss === 0, 'catapult scatter: tie lands on range');
+  console.assert(arquebusHitOn(3) === 2 && arquebusHitOn(9) === 4 && arquebusHitOn(15) === 5 && arquebusHitOn(20) === null, 'arquebus bands 2/4/5, none beyond 18"');
+  console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, rng: always(4) }).kills === 1, 'arquebus: die 4 at 9" (need 4) hits');
+  console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, cover: 'half', rng: always(4) }).kills === 0, 'arquebus half cover (-1): die 4 -> 3 misses');
+  console.assert(resolveArquebus({ rangeIn: 15, shooters: 1, support: true, rng: always(4) }).kills === 1, 'arquebus support (+1): die 4 -> 5 at 15" hits');
+  console.assert(resolveArquebus({ rangeIn: 20, shooters: 10, rng: always(6) }).inRange === false, 'arquebus beyond 18" out of range');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
