@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.21 · Make the playing area resizable. BOARD_W/BOARD_H become reassignable and are driven by two new persisted settings, boardWIn/boardHIn (tabletop inches, clamped 24–600 via clampBoardIn). applyBoardSize() recomputes the px bounds from those inches; setBoardSize() updates the settings, clamps existing pieces inside the new bounds, refits the view (resetView) and saves. Settings ▸ Board size gains width/depth number inputs plus 6×4 / 8×6 / 12×8 / 20×12 ft presets, wired through data-setting-num and data-board-preset; syncSettingsCheckboxes mirrors the inputs. Bootstrap calls applyBoardSize() right after loadSettings() so the persisted size is in effect before first paint. Everything that reads the bounds (grid, rulers, zoom clamp, drag/nudge/charge clamps, spawn defaults) picks up the live values unchanged. Motivation: engine reach (a bombard throws 42″) and castles/forts overrun the standard 6×4 ft table. No engine logic touched; clamp asserted. -->
+<!-- chainmail-board.html · v0.11.22 · Add siege structures as spawnable, battered defense-value pieces. Five fortifications (curtain wall, rampart, palisade, bastion, gatehouse) join WORKS_TYPES with cat:'structure', a shape (wall/tower) and a reference to the C.7 STRUCTURES defense range; WORKS_STRUCTURES is the spawnable list. The new-unit works panel now lists engines and structures together; selecting a structure swaps the Crew field for a Defense field seeded to the structure midpoint and clamped to its rulebook range (syncWorksType). spawnUnit gives a structure defenseMax/defenseLeft from that input, crew 0, no fires/push. renderStructure draws a stone, crenellated, side-bordered block (wider for walls, square for towers) with a defense bar that reads BREACHED at 0; the sidebar/roster show structure-specific rows. No fire logic changed: engineFireState already accepts any enemy target with defenseMax>0 and resolveEngineFire applies the firing engine's batterAs points, so an engine simply targets a wall and Fire engine batters it down. Structures cannot fire (no fires) and cannot be battered by their own side. Asserts cover the ranges, battering-to-breach, and the spawn list. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.21</title>
+<title>Chainmail — Battlefield · v0.11.22</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Resizable playing area</div>
+    <div class="sub">Chainmail HTML Sim · Siege structures you can batter</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.21</span>
+    <span class="version-tag">v0.11.22</span>
   </div>
 
   <div class="toolbar">
@@ -329,9 +329,10 @@
           <option value="throwing_spear">Throwing Spear (3″)</option>
           <option value="javelin">Javelin (6″)</option>
         </select></div>
-        <div class="field f-works-only"><label>Engine</label><select id="f-works-type"></select></div>
-        <div class="field f-works-only"><label>Crew</label><input type="number" id="f-works-crew" value="4" min="0" max="12"></div>
-        <div class="field f-works-only"><span class="field-note">* light = small catapult · heavy = large catapult</span></div>
+        <div class="field f-works-only"><label>Engine / Structure</label><select id="f-works-type"></select></div>
+        <div class="field f-works-only f-works-engine"><label>Crew</label><input type="number" id="f-works-crew" value="4" min="0" max="12"></div>
+        <div class="field f-works-only f-works-struct"><label>Defense</label><input type="number" id="f-works-defense" value="30" min="1" max="60"></div>
+        <div class="field f-works-only"><span class="field-note" id="f-works-note">* light = small catapult · heavy = large catapult</span></div>
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
 
@@ -501,7 +502,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.21';
+const SIM_VERSION = '0.11.22';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1646,9 +1647,17 @@ const WORKS_TYPES = {
   mantlet:  { name: 'Movable Mantlet', cat: 'mantlet', defense: 3, push: 'mantlet', cover: { full: 3, slitFirers: 1 } },
   abatis:   { name: 'Abatis',          cat: 'mantlet', defense: 3, push: null,      buildTurns: 3, tearDownTurns: 3 },
   ladder:   { name: 'Scaling Ladder',  cat: 'ladder',  defense: 0, indestructible: true, climbPerTurn: 3 },
+  // Fortifications — immobile defense-value pieces engines batter down (C.7 STRUCTURES).
+  // defenseMax is chosen within the structure's range when placed; destroyed at 0.
+  curtain:   { name: 'Curtain Wall', cat: 'structure', structure: 'curtain',   shape: 'wall',  crewBase: 0 },
+  rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0 },
+  palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0 },
+  bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', crewBase: 0 },
+  gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0 },
 };
-// Stage 1: only the firing engines are spawnable as map pieces.
+// Stage 1: firing engines are spawnable; stage 2 adds fortifications as battered targets.
 const WORKS_SPAWNABLE = ['catLight', 'catHeavy', 'gunLight', 'gunHeavy', 'bombard'].map(id => ({ id, ...WORKS_TYPES[id] }));
+const WORKS_STRUCTURES = ['curtain', 'rampart', 'palisade', 'bastion', 'gatehouse'].map(id => ({ id, ...WORKS_TYPES[id], range: structureDefenseRange(WORKS_TYPES[id].structure) }));
 // Catapults reload on a crew-modified cadence (C.6); guns have no multi-turn reload.
 function worksReloadTurns(u) {
   const wt = WORKS_TYPES[u.worksType];
@@ -2246,7 +2255,9 @@ function syncKindFields() {
   document.querySelectorAll('.f-works-only').forEach(el => { el.style.display = isWorks ? '' : 'none'; });
   document.querySelectorAll('.f-troop-only').forEach(el => { el.style.display = isWorks ? 'none' : ''; });
   if (isWorks) {
-    fillSelect('#f-works-type', WORKS_SPAWNABLE, w => w.alt ? `${w.name} *` : w.name, 'gunLight');
+    fillSelect('#f-works-type', [...WORKS_SPAWNABLE, ...WORKS_STRUCTURES],
+      w => w.cat === 'structure' ? `▸ ${w.name}` : (w.alt ? `${w.name} *` : w.name), 'gunLight');
+    syncWorksType();
   } else if (isIndividual) {
     fillSelect('#f-type', FANTASTIC_TYPES, t => t.name, 'HERO');
   } else {
@@ -2256,6 +2267,24 @@ function syncKindFields() {
 }
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
+// Toggle crew (engines) vs defense (structures) and seed the defense range when the
+// selected works type changes.
+function syncWorksType() {
+  const wt = WORKS_TYPES[$('#f-works-type').value];
+  const isStruct = !!(wt && wt.cat === 'structure');
+  document.querySelectorAll('.f-works-engine').forEach(el => { el.style.display = isStruct ? 'none' : ''; });
+  document.querySelectorAll('.f-works-struct').forEach(el => { el.style.display = isStruct ? '' : 'none'; });
+  const note = $('#f-works-note');
+  if (isStruct) {
+    const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
+    const di = $('#f-works-defense');
+    di.min = r.min; di.max = r.max; di.value = Math.round((r.min + r.max) / 2);
+    if (note) note.textContent = `Defense ${r.min}–${r.max} (siege, p.22). Engines batter it down; breached at 0.`;
+  } else if (note) {
+    note.textContent = '* light = small catapult · heavy = large catapult';
+  }
+}
+$('#f-works-type').addEventListener('change', syncWorksType);
 
 function syncPikeRow() {
   const kind = $('#f-kind').value;
@@ -2311,7 +2340,7 @@ function rosterRowHtml(u) {
     const def = u.defenseMax > 0 ? `${Math.max(0, u.defenseLeft)}/${u.defenseMax}` : '—';
     return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${wt.name} · engine">` +
       `<span class="rsw" style="background:var(--side-${u.side === 'A' ? 'a' : 'b'})"></span>` +
-      `<span class="nm">${wt.name} · crew ${u.crew}</span>` +
+      `<span class="nm">${wt.name}${u.crew ? ` · crew ${u.crew}` : ''}</span>` +
       `<span class="chips"><span class="chip" style="background:rgba(255,250,230,0.65);color:rgba(0,0,0,0.45);border:0.6px solid rgba(0,0,0,0.35)">⚙</span></span>` +
       `<span class="mv">${def}</span></div>`;
   }
@@ -2443,8 +2472,47 @@ function statusVisual(status) {
   }
 }
 
+function renderStructure(u, wt) {
+  wt = wt || WORKS_TYPES[u.worksType] || { name: u.worksType || 'wall', shape: 'wall' };
+  const sideC = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
+  const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+  const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
+  const wall = wt.shape === 'wall';
+  const hw = wall ? 30 : 18, hh = wall ? 12 : 18;
+  const stone = '#8d857a', stoneD = '#615a51';
+  const ruined = u.defenseMax > 0 && u.defenseLeft <= 0;
+  // crenellations along the front (top) edge
+  const n = wall ? 5 : 3, mw = (2 * hw) / (n * 2 - 1);
+  let merlons = '';
+  for (let i = 0; i < n; i++) merlons += `<rect x="${(-hw + i * 2 * mw).toFixed(1)}" y="${-hh - 4}" width="${mw.toFixed(1)}" height="5" fill="${stoneD}"/>`;
+  const courses = wall
+    ? `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${stoneD}" stroke-width="0.8" opacity="0.6"/>`
+    : `<line x1="${-hw}" y1="${(-hh/3).toFixed(1)}" x2="${hw}" y2="${(-hh/3).toFixed(1)}" stroke="${stoneD}" stroke-width="0.8" opacity="0.5"/><line x1="${-hw}" y1="${(hh/3).toFixed(1)}" x2="${hw}" y2="${(hh/3).toFixed(1)}" stroke="${stoneD}" stroke-width="0.8" opacity="0.5"/>`;
+  const body = `<rect x="${-hw}" y="${-hh}" width="${2*hw}" height="${2*hh}" rx="2" fill="${ruined ? '#5c554c' : stone}" stroke="${sideC}" stroke-width="2"${ruined ? ' stroke-dasharray="4 3"' : ''}/>`;
+  const tick = `<line x1="0" y1="${-hh}" x2="0" y2="${-hh-6}" stroke="var(--front)" stroke-width="2.5" stroke-linecap="round"/>`;
+  let outline = '';
+  if (sel) outline = `<rect x="${-hw-4}" y="${-hh-9}" width="${2*hw+8}" height="${2*hh+13}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+  else if (tgt) outline = `<rect x="${-hw-4}" y="${-hh-9}" width="${2*hw+8}" height="${2*hh+13}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+  let bar = '';
+  if (u.defenseMax > 0) {
+    const bw = Math.max(34, 2 * hw), frac = Math.max(0, u.defenseLeft) / u.defenseMax, by = u.y - hh - 16;
+    bar = `<rect x="${u.x - bw/2}" y="${by}" width="${bw}" height="4" rx="2" fill="rgba(0,0,0,0.22)" pointer-events="none"/>` +
+      `<rect x="${u.x - bw/2}" y="${by}" width="${(bw*frac).toFixed(1)}" height="4" rx="2" fill="${ruined ? 'var(--rear)' : 'var(--front)'}" pointer-events="none"/>` +
+      `<text x="${u.x}" y="${by - 2.5}" font-family="sans-serif" font-size="8" fill="var(--ink-soft)" text-anchor="middle" pointer-events="none">${Math.max(0,u.defenseLeft)}/${u.defenseMax}${ruined ? ' · BREACHED' : ''}</text>`;
+  }
+  const labelY = u.y + hh + 13;
+  return `
+    <g class="unit-group" data-id="${u.id}" style="cursor:grab">
+      <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing || 0})">
+        ${body}${courses}${merlons}${tick}${outline}
+      </g>
+      ${bar}
+      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${sideD}" text-anchor="middle" pointer-events="none">${u.side} · ${wt.name}</text>
+    </g>`;
+}
 function renderWorks(u) {
   const wt = WORKS_TYPES[u.worksType] || { name: u.worksType || 'engine', cat: 'gun', defense: 0 };
+  if (wt.cat === 'structure') return renderStructure(u, wt);
   const sideC = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
   const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
@@ -2813,6 +2881,7 @@ function updateSidebar() {
     sw.style.background = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
     if (u.kind === 'works') {
       const wt = WORKS_TYPES[u.worksType] || { name: u.worksType };
+      const isStruct = !!(wt && wt.cat === 'structure');
       let firesBlock = '';
       if (wt.fires) {
         const f = wt.fires;
@@ -2832,10 +2901,11 @@ function updateSidebar() {
       }
       el.innerHTML =
         `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
-        `<div class="stat"><span class="k">Kind</span><span class="v">works · engine</span></div>` +
-        `<div class="stat"><span class="k">Engine</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
-        `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>` +
-        (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? ' · DESTROYED' : ''}</span></div>` : '') +
+        `<div class="stat"><span class="k">Kind</span><span class="v">works · ${isStruct ? 'structure' : 'engine'}</span></div>` +
+        `<div class="stat"><span class="k">${isStruct ? 'Structure' : 'Engine'}</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
+        (isStruct ? '' : `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>`) +
+        (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? (isStruct ? ' · BREACHED' : ' · DESTROYED') : ''}</span></div>` : '') +
+        (isStruct && structureDefenseRange(wt.structure) ? `<div class="stat"><span class="k">Defense range</span><span class="v">${structureDefenseRange(wt.structure).min}–${structureDefenseRange(wt.structure).max}</span></div>` : '') +
         firesBlock +
         `<div class="stat"><span class="k">Facing</span><span class="v">${(u.facing || 0).toFixed(0)}°</span></div>`;
       continue;
@@ -5109,10 +5179,20 @@ function spawnUnit() {
   } else if (kind === 'works') {
     const worksType = $('#f-works-type').value;
     const wt = WORKS_TYPES[worksType];
-    const crew = Math.max(0, parseInt($('#f-works-crew').value, 10) || (wt ? wt.crewBase : 0));
+    const isStruct = !!(wt && wt.cat === 'structure');
+    let crew, defMax;
+    if (isStruct) {
+      const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
+      defMax = Math.max(r.min, Math.min(r.max, parseInt($('#f-works-defense').value, 10) || Math.round((r.min + r.max) / 2)));
+      crew = 0;
+    } else {
+      crew = Math.max(0, parseInt($('#f-works-crew').value, 10) || (wt ? wt.crewBase : 0));
+      defMax = wt.defense;
+    }
     u = { ...common, type: null, weapon: null, count: 1, startCount: 1, cols: 1, rows: 1,
       hedgehog: false, formation: null, customCols: null, spacing: 'close', polearm: false,
-      worksType, crew, defenseMax: wt.defense, defenseLeft: wt.defense, disabled: false, readyTurn: 0 };
+      worksType, crew, defenseMax: defMax, defenseLeft: defMax, disabled: false, readyTurn: 0,
+      structure: isStruct ? wt.structure : null };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
@@ -6284,6 +6364,14 @@ renderBoard();
 
   // Board sizing (resizable playing area)
   console.assert(clampBoardIn(40, 72) === 40 && clampBoardIn(5, 72) === 24 && clampBoardIn(9999, 72) === 600 && clampBoardIn('x', 72) === 72, 'board size clamps to 24–600″, NaN falls back to default');
+
+  // Siege structures as battered defense-value pieces
+  console.assert(structureDefenseRange('curtain').min === 25 && structureDefenseRange('bastion').max === 60, 'structures expose the C.7 defense ranges');
+  { const wall = { defenseMax: 30, defenseLeft: 30 };
+    console.assert(batterTarget(wall, 3).remaining === 27, 'a light gun (-3) chips a 30-defense wall to 27');
+    for (let i = 0; i < 9; i++) batterTarget(wall, 3);
+    console.assert(wall.destroyed && wall.defenseLeft === 0, 'sustained battering breaches the wall (defense 0)'); }
+  console.assert(WORKS_STRUCTURES.length === 5 && WORKS_STRUCTURES.every(s => s.cat === 'structure' && s.range && !s.fires), 'works: 5 fortifications spawnable, each a non-firing target with a defense range');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
