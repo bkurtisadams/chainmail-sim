@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.15 · Works data model (artillery & siege equipment as map pieces) — engine layer only; the spawn/render/select UI is the next slice (it touches ~54 typeById sites + the roster/sidebar/button/melee paths that assume troop shape and break at interaction time, so the model lands and is asserted first). New section C.8: WORKS_TYPES catalog — a positioned object with a defense value and a role, referencing the C.6/C.7 numbers by key only. Five firing engines (catLight/catHeavy/gunLight/gunHeavy/bombard) are WORKS_SPAWNABLE for stage 1; tower/ram/mantlet/abatis/ladder are catalogued for stage 2. Catapult names follow p.12 light/heavy with an `alt` for p.22 small/large (light = small, defense 3, batters -2; heavy = large, defense 5, batters -3). Glue: worksReloadTurns (catapult crew cadence via C.6; guns every turn), worksReadyToFire, worksPushSpeed (tower/mantlet via C.7). 13 new asserts cross-check every fires.key against C.6, every batterAs against C.7, and the reload/push formulas. Next: the on-map UI (kind:'works' spawn + token render + selection, with guards on the troop-centric paths). -->
+<!-- chainmail-board.html · v0.11.16 · Works pieces on the map (spawn + token + selection). The New-unit panel gains a "Works (engine)" kind: pick an engine (the five C.8 firing types) and a crew, and it spawns a kind:'works' unit. renderUnit early-returns renderWorks — a distinct engine token (rounded side-coloured body, a catapult-arm/gun-barrel glyph, a front-facing tick, a defense bar showing defenseLeft/defenseMax, and a crew label) carrying data-id so the existing selection/drag machinery just works. Troop-centric paths are guarded so a works piece is inert to troop logic for now: moveAllowanceOf (→ push speed / free placement), facingCostIn (→ 0), updateSidebar + rosterRowHtml (works branches, no typeById), updateButtons (works can't melee/fire via the troop buttons), and endRound (skips the fatigue/charge resets). Spawn/select/drag/end-round are all safe; firing the engine and battering targets are the next slice (1b). No engine changes — works/siege/artillery/joust asserts unchanged. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.15</title>
+<title>Chainmail — Battlefield · v0.11.16</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Works data model</div>
+    <div class="sub">Chainmail HTML Sim · Works pieces on the map</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.15</span>
+    <span class="version-tag">v0.11.16</span>
   </div>
 
   <div class="toolbar">
@@ -295,6 +295,7 @@
         <div class="field"><label>Kind</label><select id="f-kind">
           <option value="mass">Mass</option>
           <option value="individual">Individual</option>
+          <option value="works">Works (engine)</option>
         </select></div>
         <div class="field"><label>Type</label><select id="f-type"></select></div>
         <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
@@ -319,7 +320,7 @@
           <label>Mounted</label>
           <input type="checkbox" id="f-mounted">
         </div>
-        <div class="field"><label>Missile</label><select id="f-weapon">
+        <div class="field f-troop-only"><label>Missile</label><select id="f-weapon">
           <option value="">none</option>
           <option value="short_bow">Short Bow (15″)</option>
           <option value="longbow">Longbow (21″)</option>
@@ -331,6 +332,9 @@
           <option value="throwing_spear">Throwing Spear (3″)</option>
           <option value="javelin">Javelin (6″)</option>
         </select></div>
+        <div class="field f-works-only"><label>Engine</label><select id="f-works-type"></select></div>
+        <div class="field f-works-only"><label>Crew</label><input type="number" id="f-works-crew" value="4" min="0" max="12"></div>
+        <div class="field f-works-only"><span class="field-note">* light = small catapult · heavy = large catapult</span></div>
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
       <div class="panel collapsed" id="artillery-panel">
@@ -520,7 +524,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.15';
+const SIM_VERSION = '0.11.16';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1752,7 +1756,7 @@ const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (worksPushSpeed(u) || 1e6) : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -1781,6 +1785,7 @@ function facingDiscipline(u) {
 // charge doesn't inflate pivot costs (cavalry charges are near-straight anyway).
 const facingCostInches = (u, netDeg) => facingTier(netDeg) * facingDiscipline(u) * baseMoveAllowanceOf(u);
 function facingCostIn(u) {
+  if (u.kind === 'works') return 0;
   if (u.facing == null || u.turnStartFacing == null) return 0;  // no baseline → no cost (e.g. test stubs)
   return facingCostInches(u, angDist(u.facing, u.turnStartFacing));
 }
@@ -2246,14 +2251,15 @@ fillSelect('#f-armor', ARMOR_MTM, a => a.label, 'chain_sh');
 function syncKindFields() {
   const kind = $('#f-kind').value;
   const isIndividual = kind === 'individual';
-  document.querySelectorAll('.f-mass-only').forEach(el => {
-    el.style.display = isIndividual ? 'none' : '';
-  });
-  document.querySelectorAll('.f-indiv-only').forEach(el => {
-    el.style.display = isIndividual ? '' : 'none';
-  });
-  // Repopulate type dropdown for the chosen kind
-  if (isIndividual) {
+  const isWorks = kind === 'works';
+  const isMass = kind === 'mass';
+  document.querySelectorAll('.f-mass-only').forEach(el => { el.style.display = isMass ? '' : 'none'; });
+  document.querySelectorAll('.f-indiv-only').forEach(el => { el.style.display = isIndividual ? '' : 'none'; });
+  document.querySelectorAll('.f-works-only').forEach(el => { el.style.display = isWorks ? '' : 'none'; });
+  document.querySelectorAll('.f-troop-only').forEach(el => { el.style.display = isWorks ? 'none' : ''; });
+  if (isWorks) {
+    fillSelect('#f-works-type', WORKS_SPAWNABLE, w => w.alt ? `${w.name} *` : w.name, 'gunLight');
+  } else if (isIndividual) {
     fillSelect('#f-type', FANTASTIC_TYPES, t => t.name, 'HERO');
   } else {
     fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
@@ -2265,7 +2271,7 @@ syncKindFields();
 
 function syncPikeRow() {
   const kind = $('#f-kind').value;
-  if (kind === 'individual') { $('#f-pike-row').style.display = 'none'; return; }
+  if (kind === 'individual' || kind === 'works') { $('#f-pike-row').style.display = 'none'; return; }
   const type = $('#f-type').value;
   const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
   $('#f-pike-row').style.display = pikeable ? '' : 'none';
@@ -2308,6 +2314,19 @@ function rosterSummary(units) {
            toMoveA: toMove(sides.A), toMoveB: toMove(sides.B) };
 }
 function rosterRowHtml(u) {
+  if (u.kind === 'works') {
+    const wt = WORKS_TYPES[u.worksType] || { name: u.worksType };
+    const cls = ['roster-row'];
+    if (u.id === state.selectedId) cls.push('sel');
+    if (u.id === state.targetId) cls.push('tgt');
+    if (u.defenseMax > 0 && u.defenseLeft <= 0) cls.push('out');
+    const def = u.defenseMax > 0 ? `${Math.max(0, u.defenseLeft)}/${u.defenseMax}` : '—';
+    return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${wt.name} · engine">` +
+      `<span class="rsw" style="background:var(--side-${u.side === 'A' ? 'a' : 'b'})"></span>` +
+      `<span class="nm">${wt.name} · crew ${u.crew}</span>` +
+      `<span class="chips"><span class="chip" style="background:rgba(255,250,230,0.65);color:rgba(0,0,0,0.45);border:0.6px solid rgba(0,0,0,0.35)">⚙</span></span>` +
+      `<span class="mv">${def}</span></div>`;
+  }
   const T = typeById(u.type);
   const acted = u.acted || {};
   const allow = moveAllowanceOf(u);
@@ -2436,8 +2455,42 @@ function statusVisual(status) {
   }
 }
 
+function renderWorks(u) {
+  const wt = WORKS_TYPES[u.worksType] || { name: u.worksType || 'engine', cat: 'gun', defense: 0 };
+  const sideC = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
+  const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
+  const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
+  const s = 13;
+  const glyph = wt.cat === 'catapult'
+    ? `<polygon points="0,${-s+4} ${s-5},${s-5} ${-(s-5)},${s-5}" fill="#f3ead4" opacity="0.9"/>`
+    : wt.cat === 'gun'
+      ? `<circle cx="0" cy="0" r="${s-7}" fill="none" stroke="#f3ead4" stroke-width="2"/><line x1="0" y1="0" x2="0" y2="${-s+2}" stroke="#f3ead4" stroke-width="2.5" stroke-linecap="round"/>`
+      : `<rect x="${-s+5}" y="${-s+5}" width="${2*(s-5)}" height="${2*(s-5)}" fill="none" stroke="#f3ead4" stroke-width="1.5"/>`;
+  const tick = `<line x1="0" y1="${-s}" x2="0" y2="${-s-5}" stroke="var(--front)" stroke-width="2.5" stroke-linecap="round"/>`;
+  let outline = '';
+  if (sel) outline = `<rect x="${-s-4}" y="${-s-4}" width="${2*s+8}" height="${2*s+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
+  else if (tgt) outline = `<rect x="${-s-4}" y="${-s-4}" width="${2*s+8}" height="${2*s+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+  let bar = '';
+  if (u.defenseMax > 0) {
+    const bw = 30, frac = Math.max(0, u.defenseLeft) / u.defenseMax, by = u.y - s - 9;
+    bar = `<rect x="${u.x - bw/2}" y="${by}" width="${bw}" height="4" rx="2" fill="rgba(0,0,0,0.22)" pointer-events="none"/>` +
+      `<rect x="${u.x - bw/2}" y="${by}" width="${(bw*frac).toFixed(1)}" height="4" rx="2" fill="var(--front)" pointer-events="none"/>` +
+      `<text x="${u.x}" y="${by - 2.5}" font-family="sans-serif" font-size="8" fill="var(--ink-soft)" text-anchor="middle" pointer-events="none">${u.defenseLeft}/${u.defenseMax}</text>`;
+  }
+  const labelY = u.y + s + 13, nm = wt.alt ? `${wt.name} *` : wt.name;
+  return `
+    <g class="unit-group" data-id="${u.id}" style="cursor:grab">
+      <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing || 0})">
+        <rect x="${-s}" y="${-s}" width="${2*s}" height="${2*s}" rx="3" fill="${sideD}" stroke="${sideC}" stroke-width="1.5"/>
+        ${glyph}${tick}${outline}
+      </g>
+      ${bar}
+      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">${u.side} · ${nm} · crew ${u.crew}</text>
+    </g>`;
+}
 function renderUnit(u) {
   if (u.destroyed) return '';
+  if (u.kind === 'works') return renderWorks(u);
   const b = unitBounds(u);
   const { w, h, pip, gap, pad, fig } = b;
   const sideC  = u.side === 'A' ? 'var(--side-a)'   : 'var(--side-b)';
@@ -2750,6 +2803,19 @@ function updateSidebar() {
     el.className = '';
     sw.style.display = 'inline-block';
     sw.style.background = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
+    if (u.kind === 'works') {
+      const wt = WORKS_TYPES[u.worksType] || { name: u.worksType };
+      el.innerHTML =
+        `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
+        `<div class="stat"><span class="k">Kind</span><span class="v">works · engine</span></div>` +
+        `<div class="stat"><span class="k">Engine</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
+        `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>` +
+        (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? ' · DESTROYED' : ''}</span></div>` : '') +
+        (wt.fires ? `<div class="stat"><span class="k">Fires</span><span class="v">${wt.fires.mode} · ${wt.fires.key}</span></div>` +
+                    `<div class="stat"><span class="k">Reload</span><span class="v">${worksReloadTurns(u)} turn${worksReloadTurns(u) > 1 ? 's' : ''}</span></div>` : '') +
+        `<div class="stat"><span class="k">Facing</span><span class="v">${(u.facing || 0).toFixed(0)}°</span></div>`;
+      continue;
+    }
     const T = typeById(u.type);
     const isIndiv = u.kind === 'individual';
     const pct = u.startCount ? (100 * (u.startCount - u.count) / u.startCount).toFixed(0) : 0;
@@ -2805,7 +2871,7 @@ function updateSidebar() {
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
-  const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side;
+  const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side && a.kind !== 'works' && d.kind !== 'works';
   const canAct = valid && activeFigures(a) > 0;
   // Slice 8D: when phases are enforced, melee resolves only in the melee phase.
   // Missile fire resolves in the dedicated missile phase, or — during a move
@@ -4951,6 +5017,13 @@ function spawnUnit() {
       formation: null, customCols: null, spacing: 'close', polearm: false,
       meleeWeapon, armor, mounted, prone: false, parry: false,
       hp: maxHp, maxHp };
+  } else if (kind === 'works') {
+    const worksType = $('#f-works-type').value;
+    const wt = WORKS_TYPES[worksType];
+    const crew = Math.max(0, parseInt($('#f-works-crew').value, 10) || (wt ? wt.crewBase : 0));
+    u = { ...common, type: null, weapon: null, count: 1, startCount: 1, cols: 1, rows: 1,
+      hedgehog: false, formation: null, customCols: null, spacing: 'close', polearm: false,
+      worksType, crew, defenseMax: wt.defense, defenseLeft: wt.defense, disabled: false, readyTurn: 0 };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
@@ -5444,6 +5517,7 @@ function endRound() {
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   for (const u of state.units) {
+    if (u.kind === 'works') { u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
     if (state.settings.applyFatigue) {
       if (u.acted.moved) {
