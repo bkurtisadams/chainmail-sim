@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.22 · Add siege structures as spawnable, battered defense-value pieces. Five fortifications (curtain wall, rampart, palisade, bastion, gatehouse) join WORKS_TYPES with cat:'structure', a shape (wall/tower) and a reference to the C.7 STRUCTURES defense range; WORKS_STRUCTURES is the spawnable list. The new-unit works panel now lists engines and structures together; selecting a structure swaps the Crew field for a Defense field seeded to the structure midpoint and clamped to its rulebook range (syncWorksType). spawnUnit gives a structure defenseMax/defenseLeft from that input, crew 0, no fires/push. renderStructure draws a stone, crenellated, side-bordered block (wider for walls, square for towers) with a defense bar that reads BREACHED at 0; the sidebar/roster show structure-specific rows. No fire logic changed: engineFireState already accepts any enemy target with defenseMax>0 and resolveEngineFire applies the firing engine's batterAs points, so an engine simply targets a wall and Fire engine batters it down. Structures cannot fire (no fires) and cannot be battered by their own side. Asserts cover the ranges, battering-to-breach, and the spawn list. -->
+<!-- chainmail-board.html · v0.11.23 · Give siege structures real-world dimensions and draw them to scale. Each fortification carries lengthFt / thickFt / heightFt (sensible medieval defaults: curtain 90×10×20, rampart 90×20×15, palisade 90×5×12, bastion 30×30×40, gatehouse 40×30×40) — edit to match the AD&D DMG construction tables. A ground-scale constant (GROUND_SCALE_FT_PER_IN = 30: Chainmail mass 1″ = 10 yards = 30 ft) plus ftToPx/ftToIn convert feet to the tabletop. The new-unit panel gains Length and Thickness (ft) inputs for structures, seeded per type and clamped; spawnUnit records the chosen footprint. renderStructure now sizes the stone block from those feet (a 90 ft curtain reads as a long wall, a 30 ft bastion as a square tower) with a small minimum so thin walls stay visible, and the sidebar shows Size (ft and tabletop ″) and Height. Footprints scale with the resizable board, so a fort sits correctly relative to engine reach. No fire/batter logic changed. Asserts cover the ft conversion and that every structure carries dimensions. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.22</title>
+<title>Chainmail — Battlefield · v0.11.23</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Siege structures you can batter</div>
+    <div class="sub">Chainmail HTML Sim · Structures sized in feet</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.22</span>
+    <span class="version-tag">v0.11.23</span>
   </div>
 
   <div class="toolbar">
@@ -332,6 +332,8 @@
         <div class="field f-works-only"><label>Engine / Structure</label><select id="f-works-type"></select></div>
         <div class="field f-works-only f-works-engine"><label>Crew</label><input type="number" id="f-works-crew" value="4" min="0" max="12"></div>
         <div class="field f-works-only f-works-struct"><label>Defense</label><input type="number" id="f-works-defense" value="30" min="1" max="60"></div>
+        <div class="field f-works-only f-works-struct"><label>Length (ft)</label><input type="number" id="f-works-length" value="90" min="5" max="600" step="5"></div>
+        <div class="field f-works-only f-works-struct"><label>Thickness (ft)</label><input type="number" id="f-works-thick" value="10" min="2" max="200" step="1"></div>
         <div class="field f-works-only"><span class="field-note" id="f-works-note">* light = small catapult · heavy = large catapult</span></div>
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
@@ -502,7 +504,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.22';
+const SIM_VERSION = '0.11.23';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1649,11 +1651,11 @@ const WORKS_TYPES = {
   ladder:   { name: 'Scaling Ladder',  cat: 'ladder',  defense: 0, indestructible: true, climbPerTurn: 3 },
   // Fortifications — immobile defense-value pieces engines batter down (C.7 STRUCTURES).
   // defenseMax is chosen within the structure's range when placed; destroyed at 0.
-  curtain:   { name: 'Curtain Wall', cat: 'structure', structure: 'curtain',   shape: 'wall',  crewBase: 0 },
-  rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0 },
-  palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0 },
-  bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', crewBase: 0 },
-  gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0 },
+  curtain:   { name: 'Curtain Wall', cat: 'structure', structure: 'curtain',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 10, heightFt: 20 },
+  rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 20, heightFt: 15 },
+  palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 5,  heightFt: 12 },
+  bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
+  gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 40, thickFt: 30, heightFt: 40 },
 };
 // Stage 1: firing engines are spawnable; stage 2 adds fortifications as battered targets.
 const WORKS_SPAWNABLE = ['catLight', 'catHeavy', 'gunLight', 'gunHeavy', 'bombard'].map(id => ({ id, ...WORKS_TYPES[id] }));
@@ -1742,6 +1744,11 @@ const state = {
 /* === E. GEOMETRY ======================================================= */
 const inchesToPx = (i) => i * PX_PER_INCH;
 const pxToInches = (p) => p / PX_PER_INCH;
+// Chainmail mass ground scale: 1 tabletop inch = 10 yards = 30 feet. Used to place
+// real-world fortification dimensions (in feet) onto the tabletop.
+const GROUND_SCALE_FT_PER_IN = 30;
+const ftToIn = (ft) => ft / GROUND_SCALE_FT_PER_IN;
+const ftToPx = (ft) => ftToIn(ft) * PX_PER_INCH;
 // Slice 8F: snap a pixel coordinate to the nearest 1″ grid line (the grid is
 // drawn at multiples of PX_PER_INCH), so movement lands on whole-inch steps.
 const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
@@ -2279,7 +2286,9 @@ function syncWorksType() {
     const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
     const di = $('#f-works-defense');
     di.min = r.min; di.max = r.max; di.value = Math.round((r.min + r.max) / 2);
-    if (note) note.textContent = `Defense ${r.min}–${r.max} (siege, p.22). Engines batter it down; breached at 0.`;
+    $('#f-works-length').value = wt.lengthFt || 90;
+    $('#f-works-thick').value = wt.thickFt || 10;
+    if (note) note.textContent = `Defense ${r.min}–${r.max} (siege, p.22) · ${wt.heightFt || 20} ft high. Size in feet at 1″ = 30 ft; edit to your DMG figures.`;
   } else if (note) {
     note.textContent = '* light = small catapult · heavy = large catapult';
   }
@@ -2478,7 +2487,9 @@ function renderStructure(u, wt) {
   const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
   const wall = wt.shape === 'wall';
-  const hw = wall ? 30 : 18, hh = wall ? 12 : 18;
+  const lengthFt = u.lengthFt || wt.lengthFt || (wall ? 90 : 30);
+  const thickFt  = u.thickFt  || wt.thickFt  || (wall ? 10 : 30);
+  const hw = Math.max(7, ftToPx(lengthFt) / 2), hh = Math.max(5, ftToPx(thickFt) / 2);
   const stone = '#8d857a', stoneD = '#615a51';
   const ruined = u.defenseMax > 0 && u.defenseLeft <= 0;
   // crenellations along the front (top) edge
@@ -2906,6 +2917,7 @@ function updateSidebar() {
         (isStruct ? '' : `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>`) +
         (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? (isStruct ? ' · BREACHED' : ' · DESTROYED') : ''}</span></div>` : '') +
         (isStruct && structureDefenseRange(wt.structure) ? `<div class="stat"><span class="k">Defense range</span><span class="v">${structureDefenseRange(wt.structure).min}–${structureDefenseRange(wt.structure).max}</span></div>` : '') +
+        (isStruct ? `<div class="stat"><span class="k">Size</span><span class="v">${u.lengthFt || wt.lengthFt}×${u.thickFt || wt.thickFt} ft <small>(${ftToIn(u.lengthFt || wt.lengthFt).toFixed(1)}×${ftToIn(u.thickFt || wt.thickFt).toFixed(1)}″)</small></span></div><div class="stat"><span class="k">Height</span><span class="v">${u.heightFt || wt.heightFt || 20} ft</span></div>` : '') +
         firesBlock +
         `<div class="stat"><span class="k">Facing</span><span class="v">${(u.facing || 0).toFixed(0)}°</span></div>`;
       continue;
@@ -5180,11 +5192,14 @@ function spawnUnit() {
     const worksType = $('#f-works-type').value;
     const wt = WORKS_TYPES[worksType];
     const isStruct = !!(wt && wt.cat === 'structure');
-    let crew, defMax;
+    let crew, defMax, lengthFt = null, thickFt = null, heightFt = null;
     if (isStruct) {
       const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
       defMax = Math.max(r.min, Math.min(r.max, parseInt($('#f-works-defense').value, 10) || Math.round((r.min + r.max) / 2)));
       crew = 0;
+      lengthFt = Math.max(5, Math.min(600, parseInt($('#f-works-length').value, 10) || wt.lengthFt || 90));
+      thickFt  = Math.max(2, Math.min(200, parseInt($('#f-works-thick').value, 10) || wt.thickFt || 10));
+      heightFt = wt.heightFt || 20;
     } else {
       crew = Math.max(0, parseInt($('#f-works-crew').value, 10) || (wt ? wt.crewBase : 0));
       defMax = wt.defense;
@@ -5192,7 +5207,7 @@ function spawnUnit() {
     u = { ...common, type: null, weapon: null, count: 1, startCount: 1, cols: 1, rows: 1,
       hedgehog: false, formation: null, customCols: null, spacing: 'close', polearm: false,
       worksType, crew, defenseMax: defMax, defenseLeft: defMax, disabled: false, readyTurn: 0,
-      structure: isStruct ? wt.structure : null };
+      structure: isStruct ? wt.structure : null, lengthFt, thickFt, heightFt };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
     const formation = $('#f-form').value;
@@ -6372,6 +6387,8 @@ renderBoard();
     for (let i = 0; i < 9; i++) batterTarget(wall, 3);
     console.assert(wall.destroyed && wall.defenseLeft === 0, 'sustained battering breaches the wall (defense 0)'); }
   console.assert(WORKS_STRUCTURES.length === 5 && WORKS_STRUCTURES.every(s => s.cat === 'structure' && s.range && !s.fires), 'works: 5 fortifications spawnable, each a non-firing target with a defense range');
+  console.assert(ftToPx(30) === PX_PER_INCH && ftToIn(90) === 3, 'ground scale: 30 ft = 1″ (1″ = 10 yards)');
+  console.assert(WORKS_STRUCTURES.every(s => s.lengthFt > 0 && s.thickFt > 0 && s.heightFt > 0), 'works: structures carry footprint dimensions in feet');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
