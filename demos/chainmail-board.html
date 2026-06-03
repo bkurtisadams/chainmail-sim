@@ -510,6 +510,7 @@ const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
 const BOARD_MIN_IN = 24, BOARD_MAX_IN = 600;   // playing-area clamp (2 ft … 50 ft)
+const ZOOM_MIN_VIEW_IN = 8;   // most zoomed-in: 8 tabletop inches span the board view (board-size-independent, so large boards still zoom in)
 const MELEE_RANGE_IN = 3; // inches of contact, per rules
 
 // Terrain (p.9–10). Effects are RAW flags; T1 wires moveMult (50% slow) and
@@ -3389,7 +3390,8 @@ function zoomAt(clientX, clientY, factor) {
   const pt = svgPoint({ clientX, clientY });
   const newW = state.viewBox.w * factor;
   const newH = state.viewBox.h * factor;
-  if (newW < BOARD_W * 0.25 || newW > BOARD_W * 4) return;
+  const minW = Math.min(BOARD_W * 0.25, inchesToPx(ZOOM_MIN_VIEW_IN));
+  if (newW < minW || newW > BOARD_W * 4) return;
   state.viewBox = {
     x: pt.x - (pt.x - state.viewBox.x) * factor,
     y: pt.y - (pt.y - state.viewBox.y) * factor,
