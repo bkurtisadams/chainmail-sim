@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.14 · Artillery fire panel (drives the C.6 resolvers; no canvas). A collapsible "Artillery" panel in the side column with a Piece selector (Catapult / Cannon / Arquebusiers) that swaps in the relevant fields via artSyncCategory (same el.style.display='' / 'none' idiom as the New-unit kind toggle, so it cooperates with collapse). Resolve outputs: catapult → rate of fire (catapultTurnsPerShot) + fire-optional scatter (catapultScatter) from two entered dice; cannon → variation die (cannonVariation) + which named-colour dowel sections fall in an entered target span (cannonSectionsHitting); arquebus → per-man kills via resolveArquebus rolled on the seeded state.rng, logged to the combat log via appendTurn. The 2-D parts (hit-area circle / colour-section placement, lateral deviation) stay deferred to Foundry and are noted in the panel output. Arquebus here is the detailed p.13 band resolution, separate from the missile-table arquebus weapon. Engine asserts unchanged (artillery 18 / siege 15 / joust still green). Next: siege battering panel. -->
+<!-- chainmail-board.html · v0.11.15 · Works data model (artillery & siege equipment as map pieces) — engine layer only; the spawn/render/select UI is the next slice (it touches ~54 typeById sites + the roster/sidebar/button/melee paths that assume troop shape and break at interaction time, so the model lands and is asserted first). New section C.8: WORKS_TYPES catalog — a positioned object with a defense value and a role, referencing the C.6/C.7 numbers by key only. Five firing engines (catLight/catHeavy/gunLight/gunHeavy/bombard) are WORKS_SPAWNABLE for stage 1; tower/ram/mantlet/abatis/ladder are catalogued for stage 2. Catapult names follow p.12 light/heavy with an `alt` for p.22 small/large (light = small, defense 3, batters -2; heavy = large, defense 5, batters -3). Glue: worksReloadTurns (catapult crew cadence via C.6; guns every turn), worksReadyToFire, worksPushSpeed (tower/mantlet via C.7). 13 new asserts cross-check every fires.key against C.6, every batterAs against C.7, and the reload/push formulas. Next: the on-map UI (kind:'works' spawn + token render + selection, with guards on the troop-centric paths). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.14</title>
+<title>Chainmail — Battlefield · v0.11.15</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Artillery fire panel</div>
+    <div class="sub">Chainmail HTML Sim · Works data model</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.14</span>
+    <span class="version-tag">v0.11.15</span>
   </div>
 
   <div class="toolbar">
@@ -520,7 +520,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.14';
+const SIM_VERSION = '0.11.15';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1644,6 +1644,47 @@ const mineFoiled = (counterDistIn) => counterDistIn <= MINE.counterProximityMaxI
 // Breech: passable at Rough Terrain speed; defender blocks with abatis (3 turns to
 // build, behaves as a movable mantlet, 3 uninterrupted turns to tear down).
 const BREECH = { widthIn: 6, abatisBuildTurns: 3, abatisTearDownTurns: 3 };
+
+/* === C.8 WORKS — artillery & siege equipment as map pieces (cross-refs C.6/C.7) === */
+/* A "works" piece is a positioned object with a defense value and a role: it fires      */
+/* (catapult/gun, via C.6), batters (ram), carries assault troops (tower), or gives       */
+/* cover (mantlet) — and most can themselves be battered (defense value, C.7 table).      */
+/* This catalog references the C.6/C.7 numbers by key only (no duplication). Stage 1       */
+/* wires the five firing engines; the equipment rows are the agreed shape for stage 2.    */
+/* Catapult names follow p.12 (light/heavy); p.22 calls them small/large (see `alt`):      */
+/* light catapult = "small" (defense 3, batters -2); heavy = "large" (defense 5, -3).      */
+const WORKS_TYPES = {
+  catLight: { name: 'Light Catapult',  alt: 'small catapult', cat: 'catapult', defense: 3, crewBase: 4, fires: { mode: 'catapult', key: 'light' },   batterAs: 'smallCatapult' },
+  catHeavy: { name: 'Heavy Catapult',  alt: 'large catapult', cat: 'catapult', defense: 5, crewBase: 4, fires: { mode: 'catapult', key: 'heavy' },   batterAs: 'lightFieldGun' },
+  gunLight: { name: 'Light Field Gun', cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'light' },   batterAs: 'lightFieldGun' },
+  gunHeavy: { name: 'Heavy Field Gun', cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'heavy' },   batterAs: 'heavyFieldGun' },
+  bombard:  { name: 'Bombard',         cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'bombard' }, batterAs: 'bombard' },
+  tower:    { name: 'Siege Tower',     cat: 'tower',   defense: 0, push: 'tower',   capacity: { drawbridge: 5, top: 3 }, climbPerTurn: 5 },
+  ram:      { name: 'Covered Ram',     cat: 'ram',     defense: 0, push: 'tower',   batters: 2, disableOn2d6: 9 },
+  mantlet:  { name: 'Movable Mantlet', cat: 'mantlet', defense: 3, push: 'mantlet', cover: { full: 3, slitFirers: 1 } },
+  abatis:   { name: 'Abatis',          cat: 'mantlet', defense: 3, push: null,      buildTurns: 3, tearDownTurns: 3 },
+  ladder:   { name: 'Scaling Ladder',  cat: 'ladder',  defense: 0, indestructible: true, climbPerTurn: 3 },
+};
+// Stage 1: only the firing engines are spawnable as map pieces.
+const WORKS_SPAWNABLE = ['catLight', 'catHeavy', 'gunLight', 'gunHeavy', 'bombard'].map(id => ({ id, ...WORKS_TYPES[id] }));
+// Catapults reload on a crew-modified cadence (C.6); guns have no multi-turn reload.
+function worksReloadTurns(u) {
+  const wt = WORKS_TYPES[u.worksType];
+  if (!wt || !wt.fires || wt.fires.mode !== 'catapult') return 1;
+  return catapultTurnsPerShot(wt.fires.key, u.crew);
+}
+function worksReadyToFire(u, turn) {
+  const wt = WORKS_TYPES[u.worksType];
+  if (!wt || !wt.fires) return false;
+  if (wt.fires.mode !== 'catapult') return true;
+  return turn >= (u.readyTurn || 0);
+}
+// Push speed (inches/turn) for pushed equipment, from C.7.
+function worksPushSpeed(u) {
+  const wt = WORKS_TYPES[u.worksType];
+  if (!wt || !wt.push) return 0;
+  return wt.push === 'tower' ? siegeTowerSpeed(u.crew) : mantletSpeed(u.crew);
+}
 
 /* === D. STATE ========================================================== */
 const state = {
@@ -6084,6 +6125,25 @@ renderBoard();
   console.assert(!rockOnLadder(4, 6).secondSurvives && !rockOnLadder(4, 6).thirdSurvives, 'siege: rock 2nd dies on 4, 3rd dies on 6');
   console.assert(mineFoiled(10) && !mineFoiled(15), 'siege: counter-mine within 12" foils the mine');
   console.assert(MINE.breechWidthIn === 6 && BREECH.widthIn === 6, 'siege: a mined / battered breech is 6" wide');
+
+  // Works pieces (engines as map pieces — C.8, cross-referencing C.6/C.7)
+  for (const k of Object.keys(WORKS_TYPES)) {
+    const wt = WORKS_TYPES[k];
+    if (wt.fires) {
+      const tbl = wt.fires.mode === 'catapult' ? CATAPULTS : CANNON;
+      console.assert(!!tbl[wt.fires.key], `works ${k}: fires.key '${wt.fires.key}' resolves in C.6`);
+      console.assert(!!SIEGE_WEAPONS[wt.batterAs], `works ${k}: batterAs '${wt.batterAs}' resolves in C.7`);
+    }
+    if (wt.push) console.assert(wt.push === 'tower' || wt.push === 'mantlet', `works ${k}: push key known`);
+  }
+  console.assert(WORKS_TYPES.catLight.defense === 3 && WORKS_TYPES.catHeavy.defense === 5, 'works: light catapult (small) defense 3, heavy (large) 5');
+  console.assert(WORKS_TYPES.catLight.batterAs === 'smallCatapult' && WORKS_TYPES.catHeavy.batterAs === 'lightFieldGun', 'works: light batters -2 (small), heavy -3 (large)');
+  console.assert(SIEGE_WEAPONS[WORKS_TYPES.bombard.batterAs].points === 6, 'works: bombard batters -6');
+  console.assert(worksReloadTurns({ worksType:'catLight', crew:4 }) === 2 && worksReloadTurns({ worksType:'catHeavy', crew:4 }) === 3, 'works: catapult reload at full crew (light 2, heavy 3)');
+  console.assert(worksReloadTurns({ worksType:'catLight', crew:2 }) === 4, 'works: understrength light catapult reloads in 4 turns (2 crew)');
+  console.assert(worksReloadTurns({ worksType:'gunHeavy', crew:1 }) === 1 && worksReadyToFire({ worksType:'gunLight' }, 3) === true, 'works: guns fire every turn, always ready');
+  console.assert(worksPushSpeed({ worksType:'tower', crew:8 }) === 4 && worksPushSpeed({ worksType:'mantlet', crew:2 }) === 6, 'works: push speed (tower 8 men=4", mantlet 2 men=6")');
+  console.assert(WORKS_SPAWNABLE.length === 5 && WORKS_SPAWNABLE.every(w => w.fires), 'works: 5 firing engines spawnable in stage 1');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
