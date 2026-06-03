@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.20 · Give artillery a range display on the map, mirroring the missile arc-of-fire that bow/javelin units show. A selected firing engine (or all of them when "show all arcs" is on) now draws its reach as a faint side-coloured ring in renderWorks: a filled disc to the gun range for cannon/bombard, and an annulus for catapults — outer ring at max, inner dashed ring at the minimum, with the hollow dead zone inside the minimum left unfilled so it is obvious a catapult cannot fire too close. Engines fire 360° (no firing arc is enforced in the model), so the indicator is a ring rather than a wedge. The selected-engine sidebar also gains a numeric Range line (e.g. 15–30″ or ≤30″) and, when a target is set, a live "To target" distance with in-range / out-of-range / reloading. No engine logic changed; this is purely the reach overlay + readout. -->
+<!-- chainmail-board.html · v0.11.21 · Make the playing area resizable. BOARD_W/BOARD_H become reassignable and are driven by two new persisted settings, boardWIn/boardHIn (tabletop inches, clamped 24–600 via clampBoardIn). applyBoardSize() recomputes the px bounds from those inches; setBoardSize() updates the settings, clamps existing pieces inside the new bounds, refits the view (resetView) and saves. Settings ▸ Board size gains width/depth number inputs plus 6×4 / 8×6 / 12×8 / 20×12 ft presets, wired through data-setting-num and data-board-preset; syncSettingsCheckboxes mirrors the inputs. Bootstrap calls applyBoardSize() right after loadSettings() so the persisted size is in effect before first paint. Everything that reads the bounds (grid, rulers, zoom clamp, drag/nudge/charge clamps, spawn defaults) picks up the live values unchanged. Motivation: engine reach (a bombard throws 42″) and castles/forts overrun the standard 6×4 ft table. No engine logic touched; clamp asserted. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.20</title>
+<title>Chainmail — Battlefield · v0.11.21</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Artillery reach rings on the map</div>
+    <div class="sub">Chainmail HTML Sim · Resizable playing area</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.20</span>
+    <span class="version-tag">v0.11.21</span>
   </div>
 
   <div class="toolbar">
@@ -454,6 +454,24 @@
     </section>
 
     <section>
+      <h3>Board size</h3>
+      <label style="justify-content:space-between; gap:12px;"><span>Width — inches across</span>
+        <input type="number" min="24" max="600" step="1" data-setting-num="boardWIn" style="flex:0 0 90px;"></label>
+      <label style="justify-content:space-between; gap:12px;"><span>Depth — inches deep</span>
+        <input type="number" min="24" max="600" step="1" data-setting-num="boardHIn" style="flex:0 0 90px;"></label>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+        <button class="secondary" data-board-preset="72,48">6×4 ft</button>
+        <button class="secondary" data-board-preset="96,72">8×6 ft</button>
+        <button class="secondary" data-board-preset="144,96">12×8 ft</button>
+        <button class="secondary" data-board-preset="240,144">20×12 ft</button>
+      </div>
+      <p>The playing area in tabletop inches (24–600″). A bombard reaches 42″ and
+         castles or forts need more room than the standard 6×4 ft table, so enlarge
+         the board to suit. Pieces are kept inside the new bounds; press Recenter
+         (<b>0</b>) to fit the whole board in view.</p>
+    </section>
+
+    <section>
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
@@ -483,10 +501,11 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.20';
+const SIM_VERSION = '0.11.21';
 const PX_PER_INCH = 24;
-const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
-const BOARD_H = 1152; // 48" deep  (4 ft)
+let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
+let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
+const BOARD_MIN_IN = 24, BOARD_MAX_IN = 600;   // playing-area clamp (2 ft … 50 ft)
 const MELEE_RANGE_IN = 3; // inches of contact, per rules
 
 // Terrain (p.9–10). Effects are RAW flags; T1 wires moveMult (50% slow) and
@@ -1703,6 +1722,8 @@ const state = {
     enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
     enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
     snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
+    boardWIn: 72,             // playing-area width in tabletop inches (resizable; clamped 24–600)
+    boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rngSeed: ((Date.now() & 0xffffffff) >>> 0) || 1,   // mulberry32 counter; plain data so undo can restore the dice stream
@@ -3192,6 +3213,28 @@ function onWheel(evt) {
 function resetView() {
   state.viewBox = { x: 0, y: 0, w: BOARD_W, h: BOARD_H };
   applyViewBox();
+}
+function clampBoardIn(n, def) { const v = Number(n); return Number.isNaN(v) ? def : Math.max(BOARD_MIN_IN, Math.min(BOARD_MAX_IN, Math.round(v))); }
+// Recompute the px playing area from the persisted inch dimensions. BOARD_W/BOARD_H
+// are read live everywhere (grid, clamps, spawn, zoom), so reassigning them resizes
+// the board wholesale.
+function applyBoardSize() {
+  const wIn = clampBoardIn(state.settings.boardWIn, 72), hIn = clampBoardIn(state.settings.boardHIn, 48);
+  state.settings.boardWIn = wIn; state.settings.boardHIn = hIn;
+  BOARD_W = Math.round(inchesToPx(wIn));
+  BOARD_H = Math.round(inchesToPx(hIn));
+}
+function setBoardSize(wIn, hIn) {
+  state.settings.boardWIn = clampBoardIn(wIn, 72);
+  state.settings.boardHIn = clampBoardIn(hIn, 48);
+  applyBoardSize();
+  for (const u of state.units) {           // keep pieces inside the new bounds
+    u.x = Math.max(20, Math.min(BOARD_W - 20, u.x));
+    u.y = Math.max(20, Math.min(BOARD_H - 20, u.y));
+  }
+  resetView();
+  renderBoard();
+  saveSettings();
 }
 
 function toggleGrid() {
@@ -5302,6 +5345,9 @@ function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting-range]').forEach(el => {
     el.value = state.settings[el.dataset.settingRange] ?? el.value;
   });
+  document.querySelectorAll('[data-setting-num]').forEach(el => {
+    el.value = state.settings[el.dataset.settingNum] ?? el.value;
+  });
 }
 // Settings persistence (localStorage). Wrapped in try/catch so a sandboxed
 // preview or a storage-disabled browser degrades cleanly to in-memory only. The
@@ -5605,6 +5651,16 @@ $('#settings-modal').addEventListener('click', e => { if (e.target.dataset.act =
 $('#help-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeHelp(); });
 document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
 document.querySelectorAll('[data-setting-range]').forEach(el => el.addEventListener('input', onSettingRange));
+document.querySelectorAll('[data-setting-num]').forEach(el => el.addEventListener('change', e => {
+  setBoardSize(
+    e.target.dataset.settingNum === 'boardWIn' ? e.target.value : state.settings.boardWIn,
+    e.target.dataset.settingNum === 'boardHIn' ? e.target.value : state.settings.boardHIn);
+  syncSettingsCheckboxes();
+}));
+document.querySelectorAll('[data-board-preset]').forEach(b => b.addEventListener('click', () => {
+  const [w, h] = b.dataset.boardPreset.split(',').map(Number);
+  setBoardSize(w, h); syncSettingsCheckboxes();
+}));
 $('#btn-reset').addEventListener('click', resetBoard);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
@@ -5623,6 +5679,8 @@ document.addEventListener('mousedown', e => {
 document.addEventListener('keydown', onKeyDown);
 
 loadSettings();              // restore persisted settings before first paint
+applyBoardSize();            // size the playing area from persisted board dims
+state.viewBox = { x: 0, y: 0, w: BOARD_W, h: BOARD_H };
 loadTournament();            // restore persisted tournament scores
 syncSettingsCheckboxes();    // dialog controls reflect the restored state (not browser form-restore)
 state.showGrid = state.settings.gridOnByDefault;
@@ -6223,6 +6281,9 @@ renderBoard();
     console.assert(batterTarget(t, 3).remaining === 2 && !t.destroyed, 'batter: -3 on a 5-defense engine leaves 2');
     console.assert(batterTarget(t, 3).destroyed && t.destroyed && t.defenseLeft === 0, 'batter: a second -3 destroys it (floored at 0)');
     console.assert(batterTarget({ defenseMax: 0 }, 6) === null, 'batter: a 0-defense piece is not batterable'); }
+
+  // Board sizing (resizable playing area)
+  console.assert(clampBoardIn(40, 72) === 40 && clampBoardIn(5, 72) === 24 && clampBoardIn(9999, 72) === 600 && clampBoardIn('x', 72) === 72, 'board size clamps to 24–600″, NaN falls back to default');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
