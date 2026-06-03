@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.16 · Works pieces on the map (spawn + token + selection). The New-unit panel gains a "Works (engine)" kind: pick an engine (the five C.8 firing types) and a crew, and it spawns a kind:'works' unit. renderUnit early-returns renderWorks — a distinct engine token (rounded side-coloured body, a catapult-arm/gun-barrel glyph, a front-facing tick, a defense bar showing defenseLeft/defenseMax, and a crew label) carrying data-id so the existing selection/drag machinery just works. Troop-centric paths are guarded so a works piece is inert to troop logic for now: moveAllowanceOf (→ push speed / free placement), facingCostIn (→ 0), updateSidebar + rosterRowHtml (works branches, no typeById), updateButtons (works can't melee/fire via the troop buttons), and endRound (skips the fatigue/charge resets). Spawn/select/drag/end-round are all safe; firing the engine and battering targets are the next slice (1b). No engine changes — works/siege/artillery/joust asserts unchanged. -->
+<!-- chainmail-board.html · v0.11.17 · Works engines fire and batter (stage 1b). A selected firing engine + an enemy defense-value target (another works piece now; structures later) enables a "Fire engine" toolbar button: engineFireState measures range token-to-token (engineRangeToTarget), checks in-range (catapult min/max, cannon ≤range) and reload cadence (worksReadyToFire), and on a shot batterTarget removes SIEGE_WEAPONS[batterAs].points from the target's defenseLeft — floored at 0, destroyed at 0 — with a catapult then reloading (readyTurn = turn + worksReloadTurns). Logged via appendTurn; undoable (pushUndo, target lives in state.units). The button shows only when an engine is selected, with a title explaining out-of-range / reloading / bad-target. Firing at TROOPS (figure kills under the hit-area circle / colour sections) stays the panel calculator + deferred Foundry geometry; this slice wires the rules' core batter loop (subtract points per hit, destroy at 0) to real pieces. 3 new batter asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.16</title>
+<title>Chainmail — Battlefield · v0.11.17</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Works pieces on the map</div>
+    <div class="sub">Chainmail HTML Sim · Engine fire + battering</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.16</span>
+    <span class="version-tag">v0.11.17</span>
   </div>
 
   <div class="toolbar">
@@ -245,6 +245,7 @@
     <button id="btn-elect-order" class="gold" hidden>Move winner last</button>
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
+    <button id="btn-fire-engine" disabled hidden>Fire engine</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -524,7 +525,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.16';
+const SIM_VERSION = '0.11.17';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -1688,6 +1689,14 @@ function worksPushSpeed(u) {
   const wt = WORKS_TYPES[u.worksType];
   if (!wt || !wt.push) return 0;
   return wt.push === 'tower' ? siegeTowerSpeed(u.crew) : mantletSpeed(u.crew);
+}
+// Apply a siege weapon's points to a defense-value target (the C.7 batter loop, per piece).
+function batterTarget(target, points) {
+  if (!(target.defenseMax > 0)) return null;
+  target.defenseLeft = Math.max(0, (target.defenseLeft != null ? target.defenseLeft : target.defenseMax) - points);
+  const destroyed = target.defenseLeft <= 0;
+  if (destroyed) target.destroyed = true;
+  return { remaining: target.defenseLeft, destroyed };
 }
 
 /* === D. STATE ========================================================== */
@@ -2868,6 +2877,34 @@ function updateSidebar() {
   }
 }
 
+function engineRangeToTarget(a, d) { return pxToInches(Math.hypot(a.x - d.x, a.y - d.y)); }
+// Shared eligibility for a works engine firing at a defense-value target.
+function engineFireState(a, d) {
+  if (!a || a.kind !== 'works' || !d || a.destroyed || d.destroyed) return null;
+  const wt = WORKS_TYPES[a.worksType];
+  if (!wt || !wt.fires) return null;
+  if (!(d.defenseMax > 0) || a.side === d.side) return { wt, ok: false, reason: 'target' };
+  const f = wt.fires, r = engineRangeToTarget(a, d);
+  const inRange = f.mode === 'catapult'
+    ? (r >= CATAPULTS[f.key].min && r <= CATAPULTS[f.key].max)
+    : (r <= CANNON[f.key].range);
+  const ready = worksReadyToFire(a, state.turn);
+  return { wt, f, r, inRange, ready, ok: inRange && ready };
+}
+function resolveEngineFire() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const es = engineFireState(a, d);
+  if (!es || !es.ok) return;
+  pushUndo('engine-fire');
+  const pts = SIEGE_WEAPONS[es.wt.batterAs].points;
+  const res = batterTarget(d, pts);
+  if (es.f.mode === 'catapult') a.readyTurn = state.turn + worksReloadTurns(a);
+  const tgtName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'engine') : 'target';
+  appendTurn(`${es.wt.name} fires`,
+    `<div class="step">${a.side} ${es.wt.name} → ${tgtName} at ${es.r.toFixed(1)}″ · −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · DESTROYED' : ''}</div>`);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -2889,6 +2926,18 @@ function updateButtons() {
   $('#btn-missile').title =
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
     (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' : '';
+  const es = engineFireState(a, d);
+  const fb = $('#btn-fire-engine');
+  if (fb) {
+    const showFire = !!(a && a.kind === 'works' && WORKS_TYPES[a.worksType]?.fires);
+    fb.hidden = !showFire;
+    fb.disabled = !(es && es.ok);
+    fb.title = !showFire || !es ? '' :
+      es.reason === 'target' ? 'Target must be an enemy engine/structure with a defense value' :
+      !es.inRange ? `Out of range (${es.r.toFixed(1)}″)` :
+      !es.ready ? `Reloading until turn ${a.readyTurn}` :
+      `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
+  }
   updateResolverPane();
 }
 
@@ -5554,6 +5603,7 @@ $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
+$('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const split = !!a && atHalfMovePause(a) && canSplitMoveFire(a);
@@ -6218,6 +6268,10 @@ renderBoard();
   console.assert(worksReloadTurns({ worksType:'gunHeavy', crew:1 }) === 1 && worksReadyToFire({ worksType:'gunLight' }, 3) === true, 'works: guns fire every turn, always ready');
   console.assert(worksPushSpeed({ worksType:'tower', crew:8 }) === 4 && worksPushSpeed({ worksType:'mantlet', crew:2 }) === 6, 'works: push speed (tower 8 men=4", mantlet 2 men=6")');
   console.assert(WORKS_SPAWNABLE.length === 5 && WORKS_SPAWNABLE.every(w => w.fires), 'works: 5 firing engines spawnable in stage 1');
+  { const t = { defenseMax: 5, defenseLeft: 5 };
+    console.assert(batterTarget(t, 3).remaining === 2 && !t.destroyed, 'batter: -3 on a 5-defense engine leaves 2');
+    console.assert(batterTarget(t, 3).destroyed && t.destroyed && t.defenseLeft === 0, 'batter: a second -3 destroys it (floored at 0)');
+    console.assert(batterTarget({ defenseMax: 0 }, 6) === null, 'batter: a 0-defense piece is not batterable'); }
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
