@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.17 · Works engines fire and batter (stage 1b). A selected firing engine + an enemy defense-value target (another works piece now; structures later) enables a "Fire engine" toolbar button: engineFireState measures range token-to-token (engineRangeToTarget), checks in-range (catapult min/max, cannon ≤range) and reload cadence (worksReadyToFire), and on a shot batterTarget removes SIEGE_WEAPONS[batterAs].points from the target's defenseLeft — floored at 0, destroyed at 0 — with a catapult then reloading (readyTurn = turn + worksReloadTurns). Logged via appendTurn; undoable (pushUndo, target lives in state.units). The button shows only when an engine is selected, with a title explaining out-of-range / reloading / bad-target. Firing at TROOPS (figure kills under the hit-area circle / colour sections) stays the panel calculator + deferred Foundry geometry; this slice wires the rules' core batter loop (subtract points per hit, destroy at 0) to real pieces. 3 new batter asserts. -->
+<!-- chainmail-board.html · v0.11.18 · Fold artillery into the existing combat system. Retired the standalone Artillery calculator panel (the non-intuitive side-column piece): artillery now resolves only through the toolbar, like melee and missiles — select a firing engine, target a defense-value piece, "Fire engine". That button is now phase-aware: gated to the Artillery phase (PHASES already has id:'artillery', p.9 §4, between Counter-move and Missile) when phases are enforced — artilleryOk = !enforce || phaseId === 'artillery', mirrored in updateButtons (disabled with a "Resolve in the Artillery phase" hint) and guarded in resolveEngineFire. Removed: #artillery-panel HTML, toggleArtillery/artSyncCategory/resolveArtilleryPanel, their wiring. The arquebus p.13 band UI is dropped for now (arquebusiers stay the existing missile-table weapon until resolveArquebus is wired into missile fire); the C.6/C.7/C.8 engine layer and all asserts are untouched. Firing at troops (hit-area / colour-section figure kills) remains deferred to the Foundry geometry. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.17</title>
+<title>Chainmail — Battlefield · v0.11.18</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Engine fire + battering</div>
+    <div class="sub">Chainmail HTML Sim · Artillery in the combat system</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.17</span>
+    <span class="version-tag">v0.11.18</span>
   </div>
 
   <div class="toolbar">
@@ -338,45 +338,7 @@
         <div class="field f-works-only"><span class="field-note">* light = small catapult · heavy = large catapult</span></div>
         <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
-      <div class="panel collapsed" id="artillery-panel">
-        <h2 class="collapsible" id="artillery-toggle">Artillery <span class="caret">▾</span></h2>
-        <div class="field"><label>Piece</label><select id="art-cat">
-          <option value="catapult">Catapult</option>
-          <option value="cannon">Cannon</option>
-          <option value="arquebus">Arquebusiers</option>
-        </select></div>
-        <div class="field art-cat-only"><label>Type</label><select id="art-cat-type">
-          <option value="light">Light (15–30″, 2″)</option>
-          <option value="heavy">Heavy (24–48″, 3.5″)</option>
-        </select></div>
-        <div class="field art-cat-only"><label>Crew</label><input type="number" id="art-cat-crew" value="4" min="0" max="8"></div>
-        <div class="field art-cat-only"><label>Scatter ⚄⚅</label>
-          <input type="number" id="art-cat-over" value="3" min="1" max="6" style="width:46px" title="over die">
-          <input type="number" id="art-cat-under" value="3" min="1" max="6" style="width:46px" title="under die"></div>
-        <div class="field art-cannon-only"><label>Type</label><select id="art-cannon-type">
-          <option value="light">Light Field Gun (30″)</option>
-          <option value="heavy">Heavy Field Gun (36″)</option>
-          <option value="bombard">Bombard (42″)</option>
-        </select></div>
-        <div class="field art-cannon-only"><label>Named</label><select id="art-cannon-color">
-          <option value="W">White (short)</option>
-          <option value="B">Black (long)</option>
-        </select></div>
-        <div class="field art-cannon-only"><label>Span ″</label>
-          <input type="number" id="art-cannon-near" value="22" min="0" step="0.5" style="width:46px" title="near edge">
-          <input type="number" id="art-cannon-far" value="30" min="0" step="0.5" style="width:46px" title="far edge"></div>
-        <div class="field art-cannon-only"><label>Variation</label><input type="number" id="art-cannon-var" value="4" min="1" max="6" style="width:46px"></div>
-        <div class="field art-arq-only"><label>Range ″</label><input type="number" id="art-arq-range" value="9" min="0" step="0.5"></div>
-        <div class="field art-arq-only"><label>Shooters</label><input type="number" id="art-arq-shooters" value="10" min="1" max="200"></div>
-        <div class="field art-arq-only"><label>Cover</label><select id="art-arq-cover">
-          <option value="none">None</option>
-          <option value="half">Half (−1)</option>
-          <option value="over">Heavy (−2)</option>
-        </select></div>
-        <div class="field art-arq-only"><label>Rested</label><input type="checkbox" id="art-arq-support"><span class="field-note">+1</span></div>
-        <button id="btn-art-fire" style="width:100%; margin-top:6px">Resolve</button>
-        <div id="art-result" class="art-result"></div>
-      </div>
+
     </aside>
     <aside class="log-panel">
       <div class="panel" id="roster-panel">
@@ -525,7 +487,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.17';
+const SIM_VERSION = '0.11.18';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2892,6 +2854,7 @@ function engineFireState(a, d) {
   return { wt, f, r, inRange, ready, ok: inRange && ready };
 }
 function resolveEngineFire() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'artillery') return;
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   const es = engineFireState(a, d);
@@ -2930,12 +2893,14 @@ function updateButtons() {
   const fb = $('#btn-fire-engine');
   if (fb) {
     const showFire = !!(a && a.kind === 'works' && WORKS_TYPES[a.worksType]?.fires);
+    const artilleryOk = !state.settings.enforcePhases || phaseId === 'artillery';
     fb.hidden = !showFire;
-    fb.disabled = !(es && es.ok);
+    fb.disabled = !(es && es.ok && artilleryOk);
     fb.title = !showFire || !es ? '' :
       es.reason === 'target' ? 'Target must be an enemy engine/structure with a defense value' :
       !es.inRange ? `Out of range (${es.r.toFixed(1)}″)` :
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
+      !artilleryOk ? 'Resolve in the Artillery phase' :
       `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
   }
   updateResolverPane();
@@ -5337,47 +5302,6 @@ function closeSettings() { $('#settings-modal').hidden = true; }
 function openHelp()  { $('#help-modal').hidden = false; }
 function closeHelp() { $('#help-modal').hidden = true; }
 function toggleNewUnit() { $('#new-unit-panel').classList.toggle('collapsed'); }
-function toggleArtillery() { $('#artillery-panel').classList.toggle('collapsed'); }
-function artSyncCategory() {
-  const cat = $('#art-cat').value;
-  document.querySelectorAll('.art-cat-only').forEach(el => el.style.display = cat === 'catapult' ? '' : 'none');
-  document.querySelectorAll('.art-cannon-only').forEach(el => el.style.display = cat === 'cannon' ? '' : 'none');
-  document.querySelectorAll('.art-arq-only').forEach(el => el.style.display = cat === 'arquebus' ? '' : 'none');
-}
-function resolveArtilleryPanel() {
-  const cat = $('#art-cat').value, out = $('#art-result');
-  if (cat === 'catapult') {
-    const type = $('#art-cat-type').value, crew = Number($('#art-cat-crew').value);
-    const over = Number($('#art-cat-over').value), under = Number($('#art-cat-under').value);
-    const t = CATAPULTS[type], tps = catapultTurnsPerShot(type, crew), sc = catapultScatter(over, under);
-    out.innerHTML =
-      `<div class="r"><strong>${t.name}</strong> · ${t.min}–${t.max}″ · ${t.hitArea}″ hit area</div>` +
-      `<div class="r">Rate of fire: 1 shot / ${tps} turn${tps === 1 ? '' : 's'} <small>(${crew} crew)</small></div>` +
-      `<div class="r">Scatter: ${sc.dir === 'on' ? 'lands on the called range' : `${sc.miss}″ ${sc.dir}`} <small>(over ${over} / under ${under})</small></div>` +
-      `<div class="r"><small>All figures under the ${t.hitArea}″ circle are killed; placement is board geometry (Foundry).</small></div>`;
-  } else if (cat === 'cannon') {
-    const type = $('#art-cannon-type').value, color = $('#art-cannon-color').value;
-    const near = Number($('#art-cannon-near').value), far = Number($('#art-cannon-far').value);
-    const lo = Math.min(near, far), hi = Math.max(near, far);
-    const c = CANNON[type], hits = cannonSectionsHitting(type, color, lo, hi), v = cannonVariation(Number($('#art-cannon-var').value));
-    const colorName = color === 'W' ? 'White' : 'Black';
-    out.innerHTML =
-      `<div class="r"><strong>${c.name}</strong> · range ${c.range}″${c.indirect ? ' · may fire indirect' : ''}</div>` +
-      `<div class="r">Variation die ${v.die}: ${v.straight ? 'straight' : 'deviates laterally'}</div>` +
-      `<div class="r">${colorName} sections in ${lo}–${hi}″: ${hits.length ? hits.map(s => `#${s.colorIdx} (${s.start}–${s.end}″)`).join(', ') : '<em>none reach the target</em>'}</div>` +
-      `<div class="r"><small>Every figure the named colour touches is eliminated; lateral placement is board geometry (Foundry).</small></div>`;
-  } else {
-    const range = Number($('#art-arq-range').value), shooters = Number($('#art-arq-shooters').value);
-    const cover = $('#art-arq-cover').value, support = $('#art-arq-support').checked;
-    const res = resolveArquebus({ rangeIn: range, shooters, cover, support, rng: state.rng });
-    if (!res.inRange) { out.innerHTML = `<div class="r"><em>Out of range</em> — arquebusiers reach 18″.</div>`; return; }
-    const modTxt = res.mod ? `, ${res.mod > 0 ? '+' : ''}${res.mod} mod` : '';
-    out.innerHTML =
-      `<div class="r"><strong>${shooters} arquebusiers</strong> at ${range}″ <small>(hit on ${res.hitOn}+${modTxt})</small></div>` +
-      `<div class="r"><strong>${res.kills}</strong> killed <small>(a hit kills any armour)</small></div>`;
-    appendTurn(`Arquebus · ${shooters} @ ${range}″`, `<div class="step">${res.kills} killed — hit on ${res.hitOn}+, mod ${res.mod}</div>`);
-  }
-}
 function onSettingChange(evt) {
   const key = evt.target.dataset.setting;
   if (!key) return;
@@ -5629,10 +5553,6 @@ $('#btn-settings').addEventListener('click', openSettings);
 $('#btn-help').addEventListener('click', openHelp);
 $('#new-unit-toggle').addEventListener('click', toggleNewUnit);
 $('#roster-toggle').addEventListener('click', toggleRoster);
-$('#artillery-toggle').addEventListener('click', toggleArtillery);
-$('#art-cat').addEventListener('change', artSyncCategory);
-$('#btn-art-fire').addEventListener('click', resolveArtilleryPanel);
-artSyncCategory();
 $('#roster-list').addEventListener('click', (e) => {
   const row = e.target.closest('.roster-row');
   if (!row) return;
