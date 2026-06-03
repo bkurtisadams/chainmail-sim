@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.18 · Fold artillery into the existing combat system. Retired the standalone Artillery calculator panel (the non-intuitive side-column piece): artillery now resolves only through the toolbar, like melee and missiles — select a firing engine, target a defense-value piece, "Fire engine". That button is now phase-aware: gated to the Artillery phase (PHASES already has id:'artillery', p.9 §4, between Counter-move and Missile) when phases are enforced — artilleryOk = !enforce || phaseId === 'artillery', mirrored in updateButtons (disabled with a "Resolve in the Artillery phase" hint) and guarded in resolveEngineFire. Removed: #artillery-panel HTML, toggleArtillery/artSyncCategory/resolveArtilleryPanel, their wiring. The arquebus p.13 band UI is dropped for now (arquebusiers stay the existing missile-table weapon until resolveArquebus is wired into missile fire); the C.6/C.7/C.8 engine layer and all asserts are untouched. Firing at troops (hit-area / colour-section figure kills) remains deferred to the Foundry geometry. -->
+<!-- chainmail-board.html · v0.11.20 · Give artillery a range display on the map, mirroring the missile arc-of-fire that bow/javelin units show. A selected firing engine (or all of them when "show all arcs" is on) now draws its reach as a faint side-coloured ring in renderWorks: a filled disc to the gun range for cannon/bombard, and an annulus for catapults — outer ring at max, inner dashed ring at the minimum, with the hollow dead zone inside the minimum left unfilled so it is obvious a catapult cannot fire too close. Engines fire 360° (no firing arc is enforced in the model), so the indicator is a ring rather than a wedge. The selected-engine sidebar also gains a numeric Range line (e.g. 15–30″ or ≤30″) and, when a target is set, a live "To target" distance with in-range / out-of-range / reloading. No engine logic changed; this is purely the reach overlay + readout. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.18</title>
+<title>Chainmail — Battlefield · v0.11.20</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Artillery in the combat system</div>
+    <div class="sub">Chainmail HTML Sim · Artillery reach rings on the map</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.18</span>
+    <span class="version-tag">v0.11.20</span>
   </div>
 
   <div class="toolbar">
@@ -283,10 +283,6 @@
       <div class="panel">
         <h2>Target <span class="swatch" id="target-swatch" style="display:none"></span></h2>
         <div id="target-pane" class="empty">none</div>
-      </div>
-      <div class="panel" id="resolver-pane" hidden>
-        <h2>Resolver</h2>
-        <div id="resolver-trigger"></div>
       </div>
       <div class="panel" id="new-unit-panel">
         <h2 class="collapsible" id="new-unit-toggle">New unit <span class="caret">▾</span></h2>
@@ -487,7 +483,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.18';
+const SIM_VERSION = '0.11.20';
 const PX_PER_INCH = 24;
 const BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table)
 const BOARD_H = 1152; // 48" deep  (4 ft)
@@ -2441,6 +2437,25 @@ function renderWorks(u) {
   let outline = '';
   if (sel) outline = `<rect x="${-s-4}" y="${-s-4}" width="${2*s+8}" height="${2*s+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
   else if (tgt) outline = `<rect x="${-s-4}" y="${-s-4}" width="${2*s+8}" height="${2*s+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+  // Reach display, mirroring the missile arc-of-fire: shown for a selected engine
+  // (or when "show all arcs" is on). Engines fire 360° (no arc enforced), so this
+  // is a ring — a filled disc to max for guns, an annulus (hollow inside the
+  // catapult's minimum dead zone) for catapults. World coords, drawn behind the body.
+  let rangeRing = '';
+  if (wt.fires && (sel || state.settings.arcForAllMissile)) {
+    const f = wt.fires;
+    const rStroke = u.side === 'A' ? 'rgba(58,110,144,0.6)' : 'rgba(156,59,44,0.6)';
+    const rFill   = u.side === 'A' ? 'rgba(58,110,144,0.10)' : 'rgba(156,59,44,0.10)';
+    const ring = (r, sw, dash, op) => `<circle cx="${u.x}" cy="${u.y}" r="${r}" fill="none" stroke="${rStroke}" stroke-width="${sw}" stroke-dasharray="${dash}" opacity="${op}" pointer-events="none"/>`;
+    if (f.mode === 'cannon') {
+      const R = inchesToPx(CANNON[f.key].range);
+      rangeRing = `<circle cx="${u.x}" cy="${u.y}" r="${R}" fill="${rFill}" stroke="none" pointer-events="none"/>` + ring(R, 1, '6 5', 1);
+    } else {
+      const Rx = inchesToPx(CATAPULTS[f.key].max), Rn = inchesToPx(CATAPULTS[f.key].min);
+      const disc = (r) => `M ${u.x - r} ${u.y} a ${r} ${r} 0 1 0 ${2*r} 0 a ${r} ${r} 0 1 0 ${-2*r} 0 Z`;
+      rangeRing = `<path d="${disc(Rx)} ${disc(Rn)}" fill="${rFill}" fill-rule="evenodd" pointer-events="none"/>` + ring(Rx, 1, '6 5', 1) + ring(Rn, 0.9, '3 5', 0.85);
+    }
+  }
   let bar = '';
   if (u.defenseMax > 0) {
     const bw = 30, frac = Math.max(0, u.defenseLeft) / u.defenseMax, by = u.y - s - 9;
@@ -2451,6 +2466,7 @@ function renderWorks(u) {
   const labelY = u.y + s + 13, nm = wt.alt ? `${wt.name} *` : wt.name;
   return `
     <g class="unit-group" data-id="${u.id}" style="cursor:grab">
+      ${rangeRing}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing || 0})">
         <rect x="${-s}" y="${-s}" width="${2*s}" height="${2*s}" rx="3" fill="${sideD}" stroke="${sideC}" stroke-width="1.5"/>
         ${glyph}${tick}${outline}
@@ -2776,14 +2792,30 @@ function updateSidebar() {
     sw.style.background = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
     if (u.kind === 'works') {
       const wt = WORKS_TYPES[u.worksType] || { name: u.worksType };
+      let firesBlock = '';
+      if (wt.fires) {
+        const f = wt.fires;
+        const rangeTxt = f.mode === 'catapult' ? `${CATAPULTS[f.key].min}–${CATAPULTS[f.key].max}″` : `≤ ${CANNON[f.key].range}″`;
+        firesBlock =
+          `<div class="stat"><span class="k">Fires</span><span class="v">${f.mode} · ${f.key}</span></div>` +
+          `<div class="stat"><span class="k">Range</span><span class="v">${rangeTxt}</span></div>` +
+          `<div class="stat"><span class="k">Reload</span><span class="v">${worksReloadTurns(u)} turn${worksReloadTurns(u) > 1 ? 's' : ''}</span></div>`;
+        const tgt = state.units.find(x => x.id === state.targetId && x.id !== u.id);
+        if (tgt) {
+          const es = engineFireState(u, tgt);
+          if (es && es.f)
+            firesBlock += `<div class="stat"><span class="k">To target</span><span class="v" style="color:${es.inRange ? '#3f6f4a' : 'var(--rear)'}">${es.r.toFixed(1)}″ · ${es.inRange ? (es.ready ? 'in range' : 'reloading') : 'out of range'}</span></div>`;
+          else if (es && es.reason === 'target')
+            firesBlock += `<div class="stat"><span class="k">To target</span><span class="v" style="color:var(--ink-soft)">no defense value</span></div>`;
+        }
+      }
       el.innerHTML =
         `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
         `<div class="stat"><span class="k">Kind</span><span class="v">works · engine</span></div>` +
         `<div class="stat"><span class="k">Engine</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
         `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>` +
         (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? ' · DESTROYED' : ''}</span></div>` : '') +
-        (wt.fires ? `<div class="stat"><span class="k">Fires</span><span class="v">${wt.fires.mode} · ${wt.fires.key}</span></div>` +
-                    `<div class="stat"><span class="k">Reload</span><span class="v">${worksReloadTurns(u)} turn${worksReloadTurns(u) > 1 ? 's' : ''}</span></div>` : '') +
+        firesBlock +
         `<div class="stat"><span class="k">Facing</span><span class="v">${(u.facing || 0).toFixed(0)}°</span></div>`;
       continue;
     }
@@ -2898,7 +2930,7 @@ function updateButtons() {
     fb.disabled = !(es && es.ok && artilleryOk);
     fb.title = !showFire || !es ? '' :
       es.reason === 'target' ? 'Target must be an enemy engine/structure with a defense value' :
-      !es.inRange ? `Out of range (${es.r.toFixed(1)}″)` :
+      !es.inRange ? `Out of range (${es.r.toFixed(1)}″ — fires ${es.f.mode === 'catapult' ? `${CATAPULTS[es.f.key].min}–${CATAPULTS[es.f.key].max}` : `0–${CANNON[es.f.key].range}`}″)` :
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
       !artilleryOk ? 'Resolve in the Artillery phase' :
       `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
@@ -2920,8 +2952,8 @@ function updateResolverPane() {
   if (!ok) return;
   $('#resolver-trigger').innerHTML = `<button data-jact="open" style="width:100%">⚔ Joust — ${joustName(a)} vs ${joustName(d)}</button>`;
 }
-const joustName = (u) => `${typeById(u.type).name} (${u.side})`;
-function joustEligibleUnits() { return state.units.filter(u => !u.destroyed); }
+const joustName = (u) => { const T = typeById(u.type); return `${T ? T.name : (WORKS_TYPES[u.worksType]?.name || 'unit')} (${u.side})`; };
+function joustEligibleUnits() { return state.units.filter(u => !u.destroyed && u.kind !== 'works'); }
 function enterJoustMode(preA, preB) {
   const ids = joustEligibleUnits().map(u => u.id);
   let aId = preA || state.joustA || state.selectedId;
@@ -5582,7 +5614,6 @@ $('#board').addEventListener('click', onBoardClick);
 $('#board').addEventListener('wheel', onWheel, { passive: false });
 $('#board').addEventListener('contextmenu', e => e.preventDefault());
 $('#ctx-menu').addEventListener('click', onContextMenuAction);
-$('#resolver-pane').addEventListener('click', onResolverAction);
 $('#joust-mode').addEventListener('click', onJoustModeAction);
 $('#joust-mode').addEventListener('change', onJoustPick);
 $('#btn-joust').addEventListener('click', () => enterJoustMode());
