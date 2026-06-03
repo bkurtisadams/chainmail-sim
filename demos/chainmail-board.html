@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.24 · Mobile siege equipment + wooden-works fire. Siege towers, covered rams, movable mantlets, scaling ladders and abatis are now spawnable works pieces (⚒ in the new-unit picker) that move at push speed: pushable pieces are capped to worksPushSpeed (tower 1″/2 men, cap 4″; mantlet 3″/man, cap 6″) and sit still with no crew, while firing engines and fortifications keep their free setup repositioning. Covered rams batter an adjacent enemy structure for −2 defense/turn through a new Batter (ram) toolbar action (melee-phase-gated, contact-tested), and defenders jam the ram on 2d6 ≥ 9 (disabled). Wooden works (palisade/mantlet/abatis/tower/ram) carry a flammable flag and a burn system: igniteWorks (fantastic fire — dragon/balrog/fire-elemental/wizard-fire/ent-tree — ignites any flammable piece; boiling oil spares the oil-immune peak-roofed ram, p.23/p.39) starts a 5-turn burn that advanceBurn ticks down each turn in endRound until the piece is consumed (destroyed, defense 0). renderWorks/renderStructure draw a flame + BURNING-n marker and the sidebar reports burning / flammable / push / ram / assault state. Ignition triggers from board geometry (dragon-fire or oil overlapping wood) are deferred to the geometry layer; here ignition is a tested primitive. Asserts cover the flammable flags, ignite + oil immunity, the 5-turn burn-out, ram −2/disable, push-speed move allowance, and the five spawnable equipment pieces. -->
+<!-- chainmail-board.html · v0.11.26 · Mobile siege equipment + wooden-works fire. Siege towers, covered rams, movable mantlets, scaling ladders and abatis are now spawnable works pieces (⚒ in the new-unit picker) that move at push speed: pushable pieces are capped to worksPushSpeed (tower 1″/2 men, cap 4″; mantlet 3″/man, cap 6″) and sit still with no crew, while firing engines and fortifications keep their free setup repositioning. Covered rams batter an adjacent enemy structure for −2 defense/turn through a new Batter (ram) toolbar action (melee-phase-gated, contact-tested), and defenders jam the ram on 2d6 ≥ 9 (disabled). Wooden works (palisade/mantlet/abatis/tower/ram) carry a flammable flag and a burn system: igniteWorks (fantastic fire — dragon/balrog/fire-elemental/wizard-fire/ent-tree — ignites any flammable piece; boiling oil spares the oil-immune peak-roofed ram, p.23/p.39) starts a 5-turn burn that advanceBurn ticks down each turn in endRound until the piece is consumed (destroyed, defense 0). renderWorks/renderStructure draw a flame + BURNING-n marker and the sidebar reports burning / flammable / push / ram / assault state. Ignition triggers from board geometry (dragon-fire or oil overlapping wood) are deferred to the geometry layer; here ignition is a tested primitive. Asserts cover the flammable flags, ignite + oil immunity, the 5-turn burn-out, ram −2/disable, push-speed move allowance, and the five spawnable equipment pieces. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.24</title>
+<title>Chainmail — Battlefield · v0.11.26</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,7 +237,7 @@
     <h1>Battlefield</h1>
     <div class="sub">Chainmail HTML Sim · Mobile siege equipment + wooden-works fire</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.24</span>
+    <span class="version-tag">v0.11.26</span>
   </div>
 
   <div class="toolbar">
@@ -1790,6 +1790,28 @@ const ftToPx = (ft) => ftToIn(ft) * PX_PER_INCH;
 // Slice 8F: snap a pixel coordinate to the nearest 1″ grid line (the grid is
 // drawn at multiples of PX_PER_INCH), so movement lands on whole-inch steps.
 const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
+// A fortification's world-axis half-extents (its rotated footprint bounding box).
+function structureHalfExtent(u) {
+  const wt = WORKS_TYPES[u.worksType] || {};
+  const wall = wt.shape === 'wall';
+  const hw = Math.max(7, ftToPx(u.lengthFt || wt.lengthFt || (wall ? 90 : 30)) / 2);
+  const hh = Math.max(5, ftToPx(u.thickFt  || wt.thickFt  || (wall ? 10 : 30)) / 2);
+  const rad = (u.facing || 0) * Math.PI / 180, c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
+  return { halfW: c * hw + s * hh, halfH: s * hw + c * hh };
+}
+// Grid snap: a fortification snaps its footprint EDGES to grid lines so adjacent
+// pieces abut without gaps (Lego-style; a 3″ wall fills exactly 3 cells). Everything
+// else snaps its centre to the nearest line.
+function snapPos(u, px, py) {
+  if (u && u.kind === 'works' && WORKS_TYPES[u.worksType]?.cat === 'structure') {
+    const { halfW, halfH } = structureHalfExtent(u);
+    return {
+      x: Math.round((px - halfW) / PX_PER_INCH) * PX_PER_INCH + halfW,
+      y: Math.round((py - halfH) / PX_PER_INCH) * PX_PER_INCH + halfH,
+    };
+  }
+  return { x: snapToGridPx(px), y: snapToGridPx(py) };
+}
 
 /* --- Movement accounting (Slice 8A) -----------------------------------
    Pure helpers so the per-turn move-allowance logic is testable without the
@@ -2540,6 +2562,21 @@ function burnOverlaySvg(u, topY) {
   return flame + txt;
 }
 
+// Shared defense bar (world coords): a compact fixed-width track + fill with the
+// value drawn above it, haloed (paint-order stroke) so the numbers stay legible
+// over the board at any zoom.
+function defenseBarSvg(cx, topY, max, left) {
+  if (!(max > 0)) return '';
+  const bw = 40, bh = 5, x = cx - bw / 2, frac = Math.max(0, Math.min(1, left / max)), breached = left <= 0;
+  const fill = breached ? 'var(--rear)' : frac <= 0.34 ? '#c2872f' : 'var(--front)';
+  const label = `${Math.max(0, left)}/${max}${breached ? ' · BREACHED' : ''}`;
+  return `<g pointer-events="none">` +
+    `<rect x="${x.toFixed(1)}" y="${topY}" width="${bw}" height="${bh}" rx="2.5" fill="rgba(0,0,0,0.30)"/>` +
+    `<rect x="${x.toFixed(1)}" y="${topY}" width="${(bw * frac).toFixed(1)}" height="${bh}" rx="2.5" fill="${fill}"/>` +
+    `<text x="${cx}" y="${(topY - 5).toFixed(1)}" font-family="sans-serif" font-size="10" font-weight="700" fill="#23201a" stroke="#f4eed4" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke" text-anchor="middle">${label}</text>` +
+    `</g>`;
+}
+
 function renderStructure(u, wt) {
   wt = wt || WORKS_TYPES[u.worksType] || { name: u.worksType || 'wall', shape: 'wall' };
   const sideC = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
@@ -2563,21 +2600,17 @@ function renderStructure(u, wt) {
   let outline = '';
   if (sel) outline = `<rect x="${-hw-4}" y="${-hh-9}" width="${2*hw+8}" height="${2*hh+13}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
   else if (tgt) outline = `<rect x="${-hw-4}" y="${-hh-9}" width="${2*hw+8}" height="${2*hh+13}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
-  let bar = '';
-  if (u.defenseMax > 0) {
-    const bw = Math.max(34, 2 * hw), frac = Math.max(0, u.defenseLeft) / u.defenseMax, by = u.y - hh - 16;
-    bar = `<rect x="${u.x - bw/2}" y="${by}" width="${bw}" height="4" rx="2" fill="rgba(0,0,0,0.22)" pointer-events="none"/>` +
-      `<rect x="${u.x - bw/2}" y="${by}" width="${(bw*frac).toFixed(1)}" height="4" rx="2" fill="${ruined ? 'var(--rear)' : 'var(--front)'}" pointer-events="none"/>` +
-      `<text x="${u.x}" y="${by - 2.5}" font-family="sans-serif" font-size="8" fill="var(--ink-soft)" text-anchor="middle" pointer-events="none">${Math.max(0,u.defenseLeft)}/${u.defenseMax}${ruined ? ' · BREACHED' : ''}</text>`;
-  }
-  const labelY = u.y + hh + 13;
+  const rad = (u.facing || 0) * Math.PI / 180;
+  const halfHWorld = Math.abs(Math.sin(rad)) * hw + Math.abs(Math.cos(rad)) * hh;
+  const bar = defenseBarSvg(u.x, u.y - halfHWorld - 16, u.defenseMax, u.defenseLeft);
+  const labelY = u.y + halfHWorld + 14;
   return `
     <g class="unit-group" data-id="${u.id}" style="cursor:grab">
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing || 0})">
         ${body}${courses}${merlons}${tick}${outline}
       </g>
       ${bar}
-      ${burnOverlaySvg(u, u.y - hh - 20)}
+      ${burnOverlaySvg(u, u.y - halfHWorld - 30)}
       <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${sideD}" text-anchor="middle" pointer-events="none">${u.side} · ${wt.name}</text>
     </g>`;
 }
@@ -2620,13 +2653,7 @@ function renderWorks(u) {
       rangeRing = `<path d="${disc(Rx)} ${disc(Rn)}" fill="${rFill}" fill-rule="evenodd" pointer-events="none"/>` + ring(Rx, 1, '6 5', 1) + ring(Rn, 0.9, '3 5', 0.85);
     }
   }
-  let bar = '';
-  if (u.defenseMax > 0) {
-    const bw = 30, frac = Math.max(0, u.defenseLeft) / u.defenseMax, by = u.y - s - 9;
-    bar = `<rect x="${u.x - bw/2}" y="${by}" width="${bw}" height="4" rx="2" fill="rgba(0,0,0,0.22)" pointer-events="none"/>` +
-      `<rect x="${u.x - bw/2}" y="${by}" width="${(bw*frac).toFixed(1)}" height="4" rx="2" fill="var(--front)" pointer-events="none"/>` +
-      `<text x="${u.x}" y="${by - 2.5}" font-family="sans-serif" font-size="8" fill="var(--ink-soft)" text-anchor="middle" pointer-events="none">${u.defenseLeft}/${u.defenseMax}</text>`;
-  }
+  const bar = defenseBarSvg(u.x, u.y - s - 12, u.defenseMax, u.defenseLeft);
   const labelY = u.y + s + 13, nm = wt.alt ? `${wt.name} *` : wt.name;
   const meta = wt.push ? `push ${worksPushSpeed(u)}″ (${u.crew})` : wt.fires ? `crew ${u.crew}` : (u.disabled ? 'disabled' : '—');
   return `
@@ -2637,7 +2664,7 @@ function renderWorks(u) {
         ${glyph}${tick}${outline}
       </g>
       ${bar}
-      ${burnOverlaySvg(u, u.y - s - 14)}
+      ${burnOverlaySvg(u, u.y - s - 26)}
       <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">${u.side} · ${nm} · ${meta}</text>
     </g>`;
 }
@@ -3544,7 +3571,7 @@ function onBoardMouseMove(evt) {
   // Slice 8F: snap the desired position to the grid first, so movement lands on
   // whole-inch steps. Snapping before the enforce clamp means hard-enforce still
   // wins at the cap (a snapped point past the budget gets pulled back in).
-  if (state.settings.snapToGrid) { nx = snapToGridPx(nx); ny = snapToGridPx(ny); }
+  if (state.settings.snapToGrid) { const sp = snapPos(u, nx, ny); nx = sp.x; ny = sp.y; }
   // Slice 8A: in hard-enforce mode, cap this drag's straight-line distance at
   // the allowance still remaining for the unit this turn (advisory mode never
   // clamps — it only warns via the ruler/pane colour).
@@ -5349,7 +5376,7 @@ function spawnUnit() {
       cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
       formation, customCols, spacing, polearm };
   }
-  if (state.settings.snapToGrid) { u.x = snapToGridPx(u.x); u.y = snapToGridPx(u.y); }
+  if (state.settings.snapToGrid) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
   state.units.push(u);
   state.selectedId = u.id;
   renderBoard();
@@ -5613,7 +5640,7 @@ function onSettingChange(evt) {
   if (key === 'snapToGrid' && state.settings.snapToGrid) {
     // Slice 8F: snap every existing unit so the board is immediately consistent,
     // and reveal the grid so the snapping is visible.
-    for (const u of state.units) { u.x = snapToGridPx(u.x); u.y = snapToGridPx(u.y); }
+    for (const u of state.units) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
     if (!state.showGrid) { state.showGrid = true; $('#btn-grid').textContent = 'Grid: on'; }
     renderBoard();
   }
@@ -6348,6 +6375,13 @@ renderBoard();
   console.assert(snapToGridPx(0)===0 && snapToGridPx(24)===24 && snapToGridPx(100)===96, 'snaps a coordinate to the nearest 1″ grid line');
   console.assert(snapToGridPx(11)===0 && snapToGridPx(13)===24, 'rounds to the nearest line (12px is the halfway point)');
   console.assert(snapToGridPx(37) % PX_PER_INCH === 0 && pxToInches(snapToGridPx(150) - snapToGridPx(30)) === 5, 'snapped points sit on whole inches, so grid-to-grid moves are clean inch distances');
+  { const cur = (o = {}) => ({ kind:'works', worksType:'curtain', lengthFt:90, thickFt:10, facing:0, ...o });
+    const a = snapPos(cur(), 40, 200), b = snapPos(cur(), 110, 200), half = structureHalfExtent(cur()).halfW;
+    console.assert((a.x - half) % PX_PER_INCH === 0, 'lego: a fortification snaps its footprint edge onto a grid line');
+    console.assert(Math.abs((b.x - half) - (a.x + half)) < 1e-6, 'lego: an adjacent curtain abuts the first with no gap (tiles like a brick)');
+    const va = snapPos(cur({ facing:90 }), 200, 40), vb = snapPos(cur({ facing:90 }), 200, 110), vhalf = structureHalfExtent(cur({ facing:90 })).halfH;
+    console.assert(Math.abs((vb.y - vhalf) - (va.y + vhalf)) < 1e-6, 'lego: rotated (vertical) walls abut along their length');
+    console.assert(snapPos({ kind:'mass' }, 100, 100).x === 96, 'snap: non-structures still snap their centre to the nearest line'); }
 
   // Simultaneous missile fire (p.9) — sim mode predicate + phase resolution.
   { const _ep = state.settings.enforcePhases, _pi = state.phaseIdx;
