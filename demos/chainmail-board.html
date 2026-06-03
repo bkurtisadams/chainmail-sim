@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.23 · Give siege structures real-world dimensions and draw them to scale. Each fortification carries lengthFt / thickFt / heightFt (sensible medieval defaults: curtain 90×10×20, rampart 90×20×15, palisade 90×5×12, bastion 30×30×40, gatehouse 40×30×40) — edit to match the AD&D DMG construction tables. A ground-scale constant (GROUND_SCALE_FT_PER_IN = 30: Chainmail mass 1″ = 10 yards = 30 ft) plus ftToPx/ftToIn convert feet to the tabletop. The new-unit panel gains Length and Thickness (ft) inputs for structures, seeded per type and clamped; spawnUnit records the chosen footprint. renderStructure now sizes the stone block from those feet (a 90 ft curtain reads as a long wall, a 30 ft bastion as a square tower) with a small minimum so thin walls stay visible, and the sidebar shows Size (ft and tabletop ″) and Height. Footprints scale with the resizable board, so a fort sits correctly relative to engine reach. No fire/batter logic changed. Asserts cover the ft conversion and that every structure carries dimensions. -->
+<!-- chainmail-board.html · v0.11.24 · Mobile siege equipment + wooden-works fire. Siege towers, covered rams, movable mantlets, scaling ladders and abatis are now spawnable works pieces (⚒ in the new-unit picker) that move at push speed: pushable pieces are capped to worksPushSpeed (tower 1″/2 men, cap 4″; mantlet 3″/man, cap 6″) and sit still with no crew, while firing engines and fortifications keep their free setup repositioning. Covered rams batter an adjacent enemy structure for −2 defense/turn through a new Batter (ram) toolbar action (melee-phase-gated, contact-tested), and defenders jam the ram on 2d6 ≥ 9 (disabled). Wooden works (palisade/mantlet/abatis/tower/ram) carry a flammable flag and a burn system: igniteWorks (fantastic fire — dragon/balrog/fire-elemental/wizard-fire/ent-tree — ignites any flammable piece; boiling oil spares the oil-immune peak-roofed ram, p.23/p.39) starts a 5-turn burn that advanceBurn ticks down each turn in endRound until the piece is consumed (destroyed, defense 0). renderWorks/renderStructure draw a flame + BURNING-n marker and the sidebar reports burning / flammable / push / ram / assault state. Ignition triggers from board geometry (dragon-fire or oil overlapping wood) are deferred to the geometry layer; here ignition is a tested primitive. Asserts cover the flammable flags, ignite + oil immunity, the 5-turn burn-out, ram −2/disable, push-speed move allowance, and the five spawnable equipment pieces. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.23</title>
+<title>Chainmail — Battlefield · v0.11.24</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Structures sized in feet</div>
+    <div class="sub">Chainmail HTML Sim · Mobile siege equipment + wooden-works fire</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.23</span>
+    <span class="version-tag">v0.11.24</span>
   </div>
 
   <div class="toolbar">
@@ -246,6 +246,7 @@
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-fire-engine" disabled hidden>Fire engine</button>
+    <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -504,7 +505,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.23';
+const SIM_VERSION = '0.11.24';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1644,21 +1645,22 @@ const WORKS_TYPES = {
   gunLight: { name: 'Light Field Gun', cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'light' },   batterAs: 'lightFieldGun' },
   gunHeavy: { name: 'Heavy Field Gun', cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'heavy' },   batterAs: 'heavyFieldGun' },
   bombard:  { name: 'Bombard',         cat: 'gun', defense: 5, crewBase: 4, fires: { mode: 'cannon', key: 'bombard' }, batterAs: 'bombard' },
-  tower:    { name: 'Siege Tower',     cat: 'tower',   defense: 0, push: 'tower',   capacity: { drawbridge: 5, top: 3 }, climbPerTurn: 5 },
-  ram:      { name: 'Covered Ram',     cat: 'ram',     defense: 0, push: 'tower',   batters: 2, disableOn2d6: 9 },
-  mantlet:  { name: 'Movable Mantlet', cat: 'mantlet', defense: 3, push: 'mantlet', cover: { full: 3, slitFirers: 1 } },
-  abatis:   { name: 'Abatis',          cat: 'mantlet', defense: 3, push: null,      buildTurns: 3, tearDownTurns: 3 },
-  ladder:   { name: 'Scaling Ladder',  cat: 'ladder',  defense: 0, indestructible: true, climbPerTurn: 3 },
+  tower:    { name: 'Siege Tower',     cat: 'tower',   defense: 0, push: 'tower',   crewBase: 8, flammable: true, capacity: { drawbridge: 5, top: 3 }, climbPerTurn: 5 },
+  ram:      { name: 'Covered Ram',     cat: 'ram',     defense: 0, push: 'tower',   crewBase: 8, flammable: true, batters: 2, disableOn2d6: 9 },
+  mantlet:  { name: 'Movable Mantlet', cat: 'mantlet', defense: 3, push: 'mantlet', crewBase: 2, flammable: true, cover: { full: 3, slitFirers: 1 } },
+  abatis:   { name: 'Abatis',          cat: 'mantlet', defense: 3, push: null,      crewBase: 0, flammable: true, buildTurns: 3, tearDownTurns: 3 },
+  ladder:   { name: 'Scaling Ladder',  cat: 'ladder',  defense: 0, push: null,      crewBase: 1, indestructible: true, climbPerTurn: 3 },
   // Fortifications — immobile defense-value pieces engines batter down (C.7 STRUCTURES).
   // defenseMax is chosen within the structure's range when placed; destroyed at 0.
   curtain:   { name: 'Curtain Wall', cat: 'structure', structure: 'curtain',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 10, heightFt: 20 },
   rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 20, heightFt: 15 },
-  palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 5,  heightFt: 12 },
+  palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0, flammable: true, lengthFt: 90, thickFt: 5,  heightFt: 12 },
   bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
   gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 40, thickFt: 30, heightFt: 40 },
 };
 // Stage 1: firing engines are spawnable; stage 2 adds fortifications as battered targets.
 const WORKS_SPAWNABLE = ['catLight', 'catHeavy', 'gunLight', 'gunHeavy', 'bombard'].map(id => ({ id, ...WORKS_TYPES[id] }));
+const WORKS_EQUIPMENT = ['tower', 'ram', 'mantlet', 'ladder', 'abatis'].map(id => ({ id, ...WORKS_TYPES[id] }));
 const WORKS_STRUCTURES = ['curtain', 'rampart', 'palisade', 'bastion', 'gatehouse'].map(id => ({ id, ...WORKS_TYPES[id], range: structureDefenseRange(WORKS_TYPES[id].structure) }));
 // Catapults reload on a crew-modified cadence (C.6); guns have no multi-turn reload.
 function worksReloadTurns(u) {
@@ -1685,6 +1687,41 @@ function batterTarget(target, points) {
   const destroyed = target.defenseLeft <= 0;
   if (destroyed) target.destroyed = true;
   return { remaining: target.defenseLeft, destroyed };
+}
+// Wooden works ignite from fantastic fire (Dragon, Balrog, Fire Elemental, Wizard
+// fire-ball/lightning, Ent-controlled trees, p.39) or boiling oil (p.23). A struck
+// piece burns BOILING_OIL.woodBurnTurns then is consumed; oil spares the oil-immune
+// (peak-roofed ram), fantastic fire spares nothing flammable. The trigger (who is in
+// flame range) is the geometry layer's job; this is the state primitive it will call.
+const worksIsFlammable = (worksType) => !!(WORKS_TYPES[worksType] && WORKS_TYPES[worksType].flammable);
+function igniteWorks(u, opts = {}) {
+  if (!u || u.destroyed) return { ignited: false, reason: 'gone' };
+  if (!worksIsFlammable(u.worksType)) return { ignited: false, reason: 'not-flammable' };
+  if (u.burning) return { ignited: false, reason: 'already-burning', turnsLeft: u.burning.turnsLeft };
+  const oilKey = u.worksType === 'ram' ? 'peakRoofRam' : u.worksType;
+  if (opts.viaOil && BOILING_OIL.immuneStructures.includes(oilKey)) return { ignited: false, reason: 'oil-immune' };
+  u.burning = { turnsLeft: BOILING_OIL.woodBurnTurns, viaOil: !!opts.viaOil };
+  return { ignited: true, turnsLeft: u.burning.turnsLeft };
+}
+// One turn of burning, ticked in endRound; the piece is consumed (destroyed, defense 0)
+// when the timer reaches zero.
+function advanceBurn(u) {
+  if (!u || !u.burning) return { burning: false };
+  u.burning.turnsLeft -= 1;
+  if (u.burning.turnsLeft <= 0) {
+    u.burning = null;
+    u.destroyed = true;
+    if (u.defenseMax > 0) u.defenseLeft = 0;
+    return { burning: false, burnedOut: true };
+  }
+  return { burning: true, turnsLeft: u.burning.turnsLeft };
+}
+// Covered ram in contact (p.22): defenders jam it on 2d6 >= 9 (disabled); otherwise it
+// removes RAM_DAMAGE_PER_TURN from the target's defense via the C.7 batter loop.
+function resolveRamContact(ram, target, d1, d2) {
+  if (ramDisabled(d1, d2)) { if (ram) ram.disabled = true; return { disabled: true, sum: d1 + d2 }; }
+  const res = batterTarget(target, RAM_DAMAGE_PER_TURN) || { remaining: null, destroyed: false };
+  return { disabled: false, sum: d1 + d2, remaining: res.remaining, destroyed: res.destroyed };
 }
 
 /* === D. STATE ========================================================== */
@@ -1760,7 +1797,7 @@ const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => u.kind === 'works' ? (worksPushSpeed(u) || 1e6) : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -2262,8 +2299,8 @@ function syncKindFields() {
   document.querySelectorAll('.f-works-only').forEach(el => { el.style.display = isWorks ? '' : 'none'; });
   document.querySelectorAll('.f-troop-only').forEach(el => { el.style.display = isWorks ? 'none' : ''; });
   if (isWorks) {
-    fillSelect('#f-works-type', [...WORKS_SPAWNABLE, ...WORKS_STRUCTURES],
-      w => w.cat === 'structure' ? `▸ ${w.name}` : (w.alt ? `${w.name} *` : w.name), 'gunLight');
+    fillSelect('#f-works-type', [...WORKS_SPAWNABLE, ...WORKS_EQUIPMENT, ...WORKS_STRUCTURES],
+      w => w.cat === 'structure' ? `▸ ${w.name}` : w.fires ? (w.alt ? `${w.name} *` : w.name) : `⚒ ${w.name}`, 'gunLight');
     syncWorksType();
   } else if (isIndividual) {
     fillSelect('#f-type', FANTASTIC_TYPES, t => t.name, 'HERO');
@@ -2290,7 +2327,19 @@ function syncWorksType() {
     $('#f-works-thick').value = wt.thickFt || 10;
     if (note) note.textContent = `Defense ${r.min}–${r.max} (siege, p.22) · ${wt.heightFt || 20} ft high. Size in feet at 1″ = 30 ft; edit to your DMG figures.`;
   } else if (note) {
-    note.textContent = '* light = small catapult · heavy = large catapult';
+    if (wt && !wt.fires) {
+      const bits = [];
+      if (wt.push) bits.push(`crew = pushers (${wt.push === 'tower' ? '1″/2 men, cap 4″' : '3″/man, cap 6″'})`);
+      if (wt.cat === 'ram') bits.push('batters −2/turn in contact · disabled on 2d6 ≥ 9');
+      if (wt.cat === 'tower') bits.push(`holds ${wt.capacity.drawbridge}+${wt.capacity.top} · climb ${wt.climbPerTurn}/turn`);
+      if (wt.cat === 'mantlet' && wt.cover) bits.push(`full cover for ${wt.cover.full} · 1 slit firer`);
+      if (wt.cat === 'ladder') bits.push(`indestructible · climb ${wt.climbPerTurn}/turn`);
+      if (wt.buildTurns) bits.push(`build / tear down in ${wt.buildTurns} turns`);
+      if (wt.flammable) bits.push('flammable');
+      note.textContent = bits.join(' · ') || wt.name;
+    } else {
+      note.textContent = '* light = small catapult · heavy = large catapult';
+    }
   }
 }
 $('#f-works-type').addEventListener('change', syncWorksType);
@@ -2481,6 +2530,15 @@ function statusVisual(status) {
   }
 }
 
+// Shared burning indicator (world coords): a small flame + "BURNING n" above a piece.
+function burnOverlaySvg(u, topY) {
+  if (!u.burning) return '';
+  const x = u.x, y = topY;
+  const flame = `<path d="M ${x} ${y-9} C ${x-5} ${y-3}, ${x-3} ${y}, ${x} ${y} C ${x+3} ${y}, ${x+5} ${y-3}, ${x} ${y-9} Z" fill="#e07b2f" stroke="#a8400f" stroke-width="0.8" pointer-events="none"/>`;
+  const txt = `<text x="${x}" y="${y-11}" font-family="sans-serif" font-size="8" font-weight="700" fill="#a8400f" text-anchor="middle" pointer-events="none">BURNING ${u.burning.turnsLeft}</text>`;
+  return flame + txt;
+}
+
 function renderStructure(u, wt) {
   wt = wt || WORKS_TYPES[u.worksType] || { name: u.worksType || 'wall', shape: 'wall' };
   const sideC = u.side === 'A' ? 'var(--side-a)' : 'var(--side-b)';
@@ -2518,6 +2576,7 @@ function renderStructure(u, wt) {
         ${body}${courses}${merlons}${tick}${outline}
       </g>
       ${bar}
+      ${burnOverlaySvg(u, u.y - hh - 20)}
       <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${sideD}" text-anchor="middle" pointer-events="none">${u.side} · ${wt.name}</text>
     </g>`;
 }
@@ -2528,11 +2587,15 @@ function renderWorks(u) {
   const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
   const s = 13;
-  const glyph = wt.cat === 'catapult'
-    ? `<polygon points="0,${-s+4} ${s-5},${s-5} ${-(s-5)},${s-5}" fill="#f3ead4" opacity="0.9"/>`
-    : wt.cat === 'gun'
-      ? `<circle cx="0" cy="0" r="${s-7}" fill="none" stroke="#f3ead4" stroke-width="2"/><line x1="0" y1="0" x2="0" y2="${-s+2}" stroke="#f3ead4" stroke-width="2.5" stroke-linecap="round"/>`
-      : `<rect x="${-s+5}" y="${-s+5}" width="${2*(s-5)}" height="${2*(s-5)}" fill="none" stroke="#f3ead4" stroke-width="1.5"/>`;
+  const F = '#f3ead4';
+  let glyph;
+  if (wt.cat === 'catapult') glyph = `<polygon points="0,${-s+4} ${s-5},${s-5} ${-(s-5)},${s-5}" fill="${F}" opacity="0.9"/>`;
+  else if (wt.cat === 'gun') glyph = `<circle cx="0" cy="0" r="${s-7}" fill="none" stroke="${F}" stroke-width="2"/><line x1="0" y1="0" x2="0" y2="${-s+2}" stroke="${F}" stroke-width="2.5" stroke-linecap="round"/>`;
+  else if (wt.cat === 'tower') glyph = `<rect x="-6" y="-7" width="12" height="15" fill="none" stroke="${F}" stroke-width="1.5"/><rect x="-6" y="-10" width="4" height="3" fill="${F}"/><rect x="2" y="-10" width="4" height="3" fill="${F}"/>`;
+  else if (wt.cat === 'ram') glyph = `<line x1="0" y1="${s-6}" x2="0" y2="${-s+9}" stroke="${F}" stroke-width="2.5"/><polygon points="0,${-s+2} 5,${-s+9} -5,${-s+9}" fill="${F}"/>`;
+  else if (wt.cat === 'mantlet') glyph = `<rect x="-8" y="-4" width="16" height="8" fill="none" stroke="${F}" stroke-width="1.5"/><line x1="0" y1="-4" x2="0" y2="4" stroke="${F}" stroke-width="1.2" stroke-dasharray="2 2"/>`;
+  else if (wt.cat === 'ladder') glyph = `<line x1="-4" y1="${-s+4}" x2="-4" y2="${s-4}" stroke="${F}" stroke-width="1.5"/><line x1="4" y1="${-s+4}" x2="4" y2="${s-4}" stroke="${F}" stroke-width="1.5"/><line x1="-4" y1="-4" x2="4" y2="-4" stroke="${F}" stroke-width="1.2"/><line x1="-4" y1="3" x2="4" y2="3" stroke="${F}" stroke-width="1.2"/>`;
+  else glyph = `<rect x="${-s+5}" y="${-s+5}" width="${2*(s-5)}" height="${2*(s-5)}" fill="none" stroke="${F}" stroke-width="1.5"/>`;
   const tick = `<line x1="0" y1="${-s}" x2="0" y2="${-s-5}" stroke="var(--front)" stroke-width="2.5" stroke-linecap="round"/>`;
   let outline = '';
   if (sel) outline = `<rect x="${-s-4}" y="${-s-4}" width="${2*s+8}" height="${2*s+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
@@ -2564,6 +2627,7 @@ function renderWorks(u) {
       `<text x="${u.x}" y="${by - 2.5}" font-family="sans-serif" font-size="8" fill="var(--ink-soft)" text-anchor="middle" pointer-events="none">${u.defenseLeft}/${u.defenseMax}</text>`;
   }
   const labelY = u.y + s + 13, nm = wt.alt ? `${wt.name} *` : wt.name;
+  const meta = wt.push ? `push ${worksPushSpeed(u)}″ (${u.crew})` : wt.fires ? `crew ${u.crew}` : (u.disabled ? 'disabled' : '—');
   return `
     <g class="unit-group" data-id="${u.id}" style="cursor:grab">
       ${rangeRing}
@@ -2572,7 +2636,8 @@ function renderWorks(u) {
         ${glyph}${tick}${outline}
       </g>
       ${bar}
-      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">${u.side} · ${nm} · crew ${u.crew}</text>
+      ${burnOverlaySvg(u, u.y - s - 14)}
+      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">${u.side} · ${nm} · ${meta}</text>
     </g>`;
 }
 function renderUnit(u) {
@@ -2910,15 +2975,33 @@ function updateSidebar() {
             firesBlock += `<div class="stat"><span class="k">To target</span><span class="v" style="color:var(--ink-soft)">no defense value</span></div>`;
         }
       }
+      const isEquip = !isStruct && !wt.fires;
+      const kindLabel = isStruct ? 'structure' : isEquip ? 'equipment' : 'engine';
+      const crewLabel = wt.push ? 'Pushers' : 'Crew';
+      let equipBlock = '';
+      if (isEquip) {
+        if (wt.push) equipBlock += `<div class="stat"><span class="k">Push speed</span><span class="v">${worksPushSpeed(u)}″/turn</span></div>`;
+        if (wt.cat === 'ram') equipBlock += `<div class="stat"><span class="k">Batters</span><span class="v">−${RAM_DAMAGE_PER_TURN}/turn in contact · disable 2d6 ≥ ${wt.disableOn2d6}</span></div>`;
+        if (wt.cat === 'tower') equipBlock += `<div class="stat"><span class="k">Assault</span><span class="v">holds ${wt.capacity.drawbridge}+${wt.capacity.top} · climb ${wt.climbPerTurn}/turn</span></div>`;
+        if (wt.cat === 'mantlet' && wt.cover) equipBlock += `<div class="stat"><span class="k">Cover</span><span class="v">full for ${wt.cover.full} · 1 slit firer</span></div>`;
+        if (wt.cat === 'ladder') equipBlock += `<div class="stat"><span class="k">Escalade</span><span class="v">indestructible · climb ${wt.climbPerTurn}/turn</span></div>`;
+        if (wt.buildTurns) equipBlock += `<div class="stat"><span class="k">Abatis</span><span class="v">build / tear down in ${wt.buildTurns} turns</span></div>`;
+        if (u.disabled) equipBlock += `<div class="stat"><span class="k">Status</span><span class="v" style="color:var(--rear)">DISABLED</span></div>`;
+      }
+      const burnBlock = u.burning
+        ? `<div class="stat"><span class="k">Burning</span><span class="v" style="color:#a8400f">${u.burning.turnsLeft} turn${u.burning.turnsLeft===1?'':'s'} to ash</span></div>`
+        : (wt.flammable ? `<div class="stat"><span class="k">Flammable</span><span class="v" style="color:var(--ink-soft)">wooden — ignites from oil / dragon / balrog / wizard fire</span></div>` : '');
       el.innerHTML =
         `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
-        `<div class="stat"><span class="k">Kind</span><span class="v">works · ${isStruct ? 'structure' : 'engine'}</span></div>` +
-        `<div class="stat"><span class="k">${isStruct ? 'Structure' : 'Engine'}</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
-        (isStruct ? '' : `<div class="stat"><span class="k">Crew</span><span class="v">${u.crew}</span></div>`) +
+        `<div class="stat"><span class="k">Kind</span><span class="v">works · ${kindLabel}</span></div>` +
+        `<div class="stat"><span class="k">${isStruct ? 'Structure' : isEquip ? 'Equipment' : 'Engine'}</span><span class="v">${wt.name}${wt.alt ? ` <small>(${wt.alt})</small>` : ''}</span></div>` +
+        (isStruct ? '' : `<div class="stat"><span class="k">${crewLabel}</span><span class="v">${u.crew}</span></div>`) +
         (u.defenseMax > 0 ? `<div class="stat"><span class="k">Defense</span><span class="v"${u.defenseLeft <= 0 ? ' style="color:var(--rear)"' : ''}>${Math.max(0,u.defenseLeft)} / ${u.defenseMax}${u.defenseLeft <= 0 ? (isStruct ? ' · BREACHED' : ' · DESTROYED') : ''}</span></div>` : '') +
         (isStruct && structureDefenseRange(wt.structure) ? `<div class="stat"><span class="k">Defense range</span><span class="v">${structureDefenseRange(wt.structure).min}–${structureDefenseRange(wt.structure).max}</span></div>` : '') +
         (isStruct ? `<div class="stat"><span class="k">Size</span><span class="v">${u.lengthFt || wt.lengthFt}×${u.thickFt || wt.thickFt} ft <small>(${ftToIn(u.lengthFt || wt.lengthFt).toFixed(1)}×${ftToIn(u.thickFt || wt.thickFt).toFixed(1)}″)</small></span></div><div class="stat"><span class="k">Height</span><span class="v">${u.heightFt || wt.heightFt || 20} ft</span></div>` : '') +
         firesBlock +
+        equipBlock +
+        burnBlock +
         `<div class="stat"><span class="k">Facing</span><span class="v">${(u.facing || 0).toFixed(0)}°</span></div>`;
       continue;
     }
@@ -3003,6 +3086,35 @@ function resolveEngineFire() {
     `<div class="step">${a.side} ${es.wt.name} → ${tgtName} at ${es.r.toFixed(1)}″ · −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · DESTROYED' : ''}</div>`);
   renderBoard();
 }
+// Eligibility for a covered ram battering an adjacent defense-value target. Contact is
+// approximated by centre-to-centre distance within half the target footprint + 1″; the
+// exact edge test against a rotated footprint is the deferred 2-D geometry layer.
+function ramBatterState(a, d) {
+  if (!a || a.kind !== 'works' || !d || a.destroyed || d.destroyed) return null;
+  const wt = WORKS_TYPES[a.worksType];
+  if (!wt || wt.cat !== 'ram') return null;
+  if (a.disabled) return { wt, ok: false, reason: 'disabled' };
+  if (!(d.defenseMax > 0) || a.side === d.side) return { wt, ok: false, reason: 'target' };
+  const r = engineRangeToTarget(a, d);
+  const pad = (d.kind === 'works' && d.lengthFt) ? ftToIn(Math.max(d.lengthFt, d.thickFt)) / 2 + 1 : 2;
+  const inContact = r <= pad;
+  return { wt, r, inContact, ok: inContact };
+}
+function resolveRamBatter() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'melee') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const rb = ramBatterState(a, d);
+  if (!rb || !rb.ok) return;
+  pushUndo('ram-batter');
+  const roll = roll2d6(state.rng);
+  const res = resolveRamContact(a, d, roll.a, roll.b);
+  const tgtName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'target';
+  appendTurn('Covered ram', res.disabled
+    ? `<div class="step">${a.side} ${rb.wt.name} → ${tgtName}: defenders jam the ram (2d6 = ${res.sum} ≥ ${rb.wt.disableOn2d6}) — <b>DISABLED</b>.</div>`
+    : `<div class="step">${a.side} ${rb.wt.name} → ${tgtName}: −${RAM_DAMAGE_PER_TURN} defense (2d6 = ${res.sum}) · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3037,6 +3149,20 @@ function updateButtons() {
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
       !artilleryOk ? 'Resolve in the Artillery phase' :
       `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
+  }
+  const rb = ramBatterState(a, d);
+  const rbBtn = $('#btn-batter-ram');
+  if (rbBtn) {
+    const showRam = !!(a && a.kind === 'works' && WORKS_TYPES[a.worksType]?.cat === 'ram');
+    const meleePhaseOk = !state.settings.enforcePhases || PHASES[state.phaseIdx].id === 'melee';
+    rbBtn.hidden = !showRam;
+    rbBtn.disabled = !(rb && rb.ok && meleePhaseOk && !a.disabled);
+    rbBtn.title = !showRam || !rb ? '' :
+      rb.reason === 'disabled' ? 'This ram has been disabled' :
+      rb.reason === 'target' ? 'Target must be an enemy structure/engine with a defense value' :
+      !rb.inContact ? `Move the ram into contact (now ${rb.r.toFixed(1)}″ away)` :
+      !meleePhaseOk ? 'Resolve in the Melee phase' :
+      `Batter — removes ${RAM_DAMAGE_PER_TURN}/turn; defenders disable on 2d6 ≥ ${rb.wt.disableOn2d6}`;
   }
   updateResolverPane();
 }
@@ -5206,7 +5332,7 @@ function spawnUnit() {
     }
     u = { ...common, type: null, weapon: null, count: 1, startCount: 1, cols: 1, rows: 1,
       hedgehog: false, formation: null, customCols: null, spacing: 'close', polearm: false,
-      worksType, crew, defenseMax: defMax, defenseLeft: defMax, disabled: false, readyTurn: 0,
+      worksType, crew, defenseMax: defMax, defenseLeft: defMax, disabled: false, readyTurn: 0, burning: null,
       structure: isStruct ? wt.structure : null, lengthFt, thickFt, heightFt };
   } else {
     const count = Math.max(1, parseInt($('#f-count').value, 10) || 20);
@@ -5663,7 +5789,7 @@ function endRound() {
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   for (const u of state.units) {
-    if (u.kind === 'works') { u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
+    if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
     if (state.settings.applyFatigue) {
       if (u.acted.moved) {
@@ -5701,6 +5827,7 @@ $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
+$('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const split = !!a && atHalfMovePause(a) && canSplitMoveFire(a);
@@ -6389,6 +6516,26 @@ renderBoard();
   console.assert(WORKS_STRUCTURES.length === 5 && WORKS_STRUCTURES.every(s => s.cat === 'structure' && s.range && !s.fires), 'works: 5 fortifications spawnable, each a non-firing target with a defense range');
   console.assert(ftToPx(30) === PX_PER_INCH && ftToIn(90) === 3, 'ground scale: 30 ft = 1″ (1″ = 10 yards)');
   console.assert(WORKS_STRUCTURES.every(s => s.lengthFt > 0 && s.thickFt > 0 && s.heightFt > 0), 'works: structures carry footprint dimensions in feet');
+  // Mobile siege equipment + wooden-works fire (v0.11.24)
+  console.assert(WORKS_EQUIPMENT.length === 5 && WORKS_EQUIPMENT.every(w => w.cat !== 'structure' && !w.fires), 'works: 5 mobile equipment pieces spawnable, none firing engines');
+  console.assert(['palisade','mantlet','abatis','tower','ram'].every(worksIsFlammable) && !worksIsFlammable('curtain') && !worksIsFlammable('bastion') && !worksIsFlammable('ladder'), 'fire: wooden works flammable; stone/earth & ladder are not');
+  { const tower = { worksType:'tower', burning:null };
+    console.assert(igniteWorks(tower).ignited && tower.burning.turnsLeft === BOILING_OIL.woodBurnTurns, 'fire: a siege tower ignites for the full burn timer');
+    console.assert(!igniteWorks(tower).ignited, 'fire: an already-burning piece does not re-ignite'); }
+  console.assert(!igniteWorks({ worksType:'curtain', burning:null }).ignited, 'fire: a stone curtain cannot be set alight');
+  console.assert(!igniteWorks({ worksType:'ram', burning:null }, { viaOil:true }).ignited && igniteWorks({ worksType:'ram', burning:null }).ignited, 'fire: oil spares the peak-roofed ram but dragon/balrog fire ignites it');
+  { const pal = { worksType:'palisade', burning:null, defenseMax:10, defenseLeft:10 };
+    igniteWorks(pal);
+    for (let i = 0; i < BOILING_OIL.woodBurnTurns - 1; i++) console.assert(advanceBurn(pal).burning, 'fire: palisade keeps burning before the timer runs out');
+    const last = advanceBurn(pal);
+    console.assert(last.burnedOut && pal.destroyed && pal.defenseLeft === 0 && !pal.burning, 'fire: after 5 turns the palisade is consumed (destroyed, defense 0)'); }
+  { const ram = { disabled:false }, wall = { defenseMax:25, defenseLeft:25 };
+    console.assert(resolveRamContact(ram, wall, 4, 5).disabled && ram.disabled, 'ram: 2d6 = 9 jams the ram (disabled)');
+    const r2 = resolveRamContact({}, wall, 3, 4);
+    console.assert(!r2.disabled && r2.remaining === 25 - RAM_DAMAGE_PER_TURN, 'ram: an undisabled ram removes 2 defense/turn'); }
+  console.assert(moveAllowanceOf({ kind:'works', worksType:'tower', crew:8 }) === 4 && moveAllowanceOf({ kind:'works', worksType:'tower', crew:0 }) === 0, 'move: a pushed tower is capped to push speed (8 men = 4″, 0 men = immobile)');
+  console.assert(moveAllowanceOf({ kind:'works', worksType:'mantlet', crew:2 }) === 6, 'move: a mantlet with 2 pushers moves 6″');
+  console.assert(moveAllowanceOf({ kind:'works', worksType:'gunLight', crew:4 }) === 1e6 && moveAllowanceOf({ kind:'works', worksType:'curtain' }) === 1e6, 'move: non-pushed engines/structures keep free setup repositioning');
 
   // Jousting (Appendix C + p.26)
   console.assert(resolveJoust({ aim:'Helm', position:4, rng:always(1) }).code === 'H', 'joust: Helm x4 = H');
