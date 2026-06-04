@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.54 · Fortification display cleanup. Structures (walls/towers/gates/buildings) previously painted a floating defence bar + number ABOVE and a type name BELOW, anchored at the ends of long rotated pieces — so a stacked wall line collided badly. Now each structure carries a thin condition STRIP along its body (inside the rotation, so it can never float into a neighbour) showing relative defence by length+colour, and the full readout (bar + exact number + "Side · Name") appears only for the SELECTED or TARGETED structure. The redundant green facing tick is removed: the crenellations (5 on a curtain wall, 3 on a square tower, none on round towers/buildings) and the gate/building door already mark the defended front, which is what "facing" means for a structure (the side attackers escalade). Engines (catapults/guns/rams/etc.) are unchanged — their facing tick is a real firing-direction cue. -->
+<!-- chainmail-board.html · v0.11.55 · Half-square snap + structure edge-snapping + tidied piece sizes. (1) The grid-snap lattice is now HALF a square (15 ft / 12px) instead of a full square (30 ft / 24px): finer placement for individuals at figure scale, and — because a mass unit's centre lands on a half-square boundary whenever its frontage is an EVEN number of figures — clean centring for formed bodies of any count. Every old whole-square point is still on the finer lattice, so large blocks lose nothing. (2) When grid-snap is ON, a dragged STRUCTURE (wall/tower/gate) released within a square of another structure's END snaps edge-to-edge: its facing locks to the neighbour's (nearest of N, N+90, N+180, N+270 — crisp straight runs AND 90° corners) and its near end abuts the neighbour's end, so fort pieces click together Lego-style with no gaps. Engines and troop units are unaffected; structures only snap to other structures. (3) Tidied off-module sizes so the kit tiles cleanly: round tower 25→30 ft, square tower 28→30 ft, gatehouse 40→60 ft long (30 ft deep unchanged). Footprints remain purely cosmetic — defence value still comes from the rulebook's per-structure range, not dimensions. FAITHFUL OMISSION: edge-snap aligns to orthogonal runs/corners only; oblique (non-90°) wall junctions are placed by hand. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.54</title>
+<title>Chainmail — Battlefield · v0.11.55</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
+    <div class="sub">Chainmail HTML Sim · Half-square snap &amp; structure edge-snapping</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.54</span>
+    <span class="version-tag">v0.11.55</span>
   </div>
 
   <div class="toolbar">
@@ -520,7 +520,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.54';
+const SIM_VERSION = '0.11.55';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1688,9 +1688,9 @@ const WORKS_TYPES = {
   rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 20, heightFt: 15 },
   palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0, flammable: true, lengthFt: 90, thickFt: 5,  heightFt: 12 },
   bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', round: true, crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
-  roundTower:{ name: 'Round Tower',  cat: 'structure', structure: 'bastion',   shape: 'tower', round: true, crewBase: 0, lengthFt: 25, thickFt: 25, heightFt: 40 },
-  gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 40, thickFt: 30, heightFt: 40 },
-  squareTower:{name: 'Square Tower', cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 28, thickFt: 28, heightFt: 40 },
+  roundTower:{ name: 'Round Tower',  cat: 'structure', structure: 'bastion',   shape: 'tower', round: true, crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
+  gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 60, thickFt: 30, heightFt: 40 },
+  squareTower:{name: 'Square Tower', cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
   gate:      { name: 'Gate',         cat: 'structure', structure: 'gatehouse', shape: 'wall',  gateMark: true, defenseDefault: 30, crewBase: 0, lengthFt: 30, thickFt: 10, heightFt: 20 },
   stoneBuild:{ name: 'Stone Building',  cat: 'structure', structure: 'curtain', shape: 'building', crewBase: 0, lengthFt: 50, thickFt: 35, heightFt: 20 },
   woodBuild: { name: 'Wooden Building', cat: 'structure', structure: 'wooden',  shape: 'building', crewBase: 0, flammable: true, lengthFt: 45, thickFt: 30, heightFt: 15 },
@@ -1849,7 +1849,12 @@ const ftToIn = (ft) => ft / GROUND_SCALE_FT_PER_IN;
 const ftToPx = (ft) => ftToIn(ft) * PX_PER_INCH;
 // Slice 8F: snap a pixel coordinate to the nearest 1″ grid line (the grid is
 // drawn at multiples of PX_PER_INCH), so movement lands on whole-inch steps.
-const snapToGridPx = (p) => Math.round(p / PX_PER_INCH) * PX_PER_INCH;
+// Snap lattice is HALF a grid square (15 ft / 12px), not a full square: finer
+// placement for individuals at figure scale, and clean centring for formed bodies
+// of any frontage (an even figure-count puts the centre on a half-square line).
+// Every whole-square point is still on this lattice, so big blocks lose nothing.
+const SNAP_STEP_PX = PX_PER_INCH / 2;
+const snapToGridPx = (p) => Math.round(p / SNAP_STEP_PX) * SNAP_STEP_PX;
 // A fortification's world-axis half-extents (its rotated footprint bounding box).
 function structureHalfExtent(u) {
   const wt = WORKS_TYPES[u.worksType] || {};
@@ -1859,6 +1864,50 @@ function structureHalfExtent(u) {
   const rad = (u.facing || 0) * Math.PI / 180, c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
   return { halfW: c * hw + s * hh, halfH: s * hw + c * hh };
 }
+// World positions of a wall/tower's two ends, along its long axis (local +x rotated
+// by facing → world (cos f, sin f)). Used by edge-snapping to abut pieces end-to-end.
+function structureEnds(u) {
+  const wt = WORKS_TYPES[u.worksType] || {};
+  const hw = Math.max(7, ftToPx(u.lengthFt || wt.lengthFt || 90) / 2);
+  const r = (u.facing || 0) * Math.PI / 180, cx = Math.cos(r), sx = Math.sin(r);
+  return [{ x: u.x + cx * hw, y: u.y + sx * hw }, { x: u.x - cx * hw, y: u.y - sx * hw }];
+}
+// Lego-snap: when a structure is dropped within a square of another structure's END,
+// lock its facing to the neighbour's (nearest of N, N+90, N+180, N+270 — straight runs
+// AND right-angle corners) and abut its near end to that end, so fort pieces click
+// together with no gaps. Structures snap only to other structures; returns true if snapped.
+function structureEdgeSnap(u) {
+  const isStruct = (o) => o.kind === 'works' && WORKS_TYPES[o.worksType]?.cat === 'structure';
+  if (!isStruct(u)) return false;
+  const others = state.units.filter(o => o.id !== u.id && isStruct(o));
+  if (!others.length) return false;
+  const dEnds = structureEnds(u);
+  let best = null;
+  for (const o of others) {
+    for (const oe of structureEnds(o)) {
+      for (const de of dEnds) {
+        const dist = Math.hypot(de.x - oe.x, de.y - oe.y);
+        if (!best || dist < best.dist) best = { dist, o, oe };
+      }
+    }
+  }
+  if (!best || best.dist > PX_PER_INCH) return false;   // only grab within one square (30 ft)
+  const nf = ((best.o.facing || 0) % 360 + 360) % 360;
+  let f = nf, bd = 999;
+  for (let k = 0; k < 4; k++) {
+    const c = (nf + 90 * k) % 360;
+    const d = Math.abs(((u.facing || 0) - c + 540) % 360 - 180);
+    if (d < bd) { bd = d; f = c; }
+  }
+  const wt = WORKS_TYPES[u.worksType] || {}, hw = Math.max(7, ftToPx(u.lengthFt || wt.lengthFt || 90) / 2);
+  const r = f * Math.PI / 180, Lx = Math.cos(r), Ly = Math.sin(r);
+  const cands = [{ x: best.oe.x + Lx * hw, y: best.oe.y + Ly * hw }, { x: best.oe.x - Lx * hw, y: best.oe.y - Ly * hw }];
+  const pick = cands.reduce((a, b) => Math.hypot(b.x - u.x, b.y - u.y) < Math.hypot(a.x - u.x, a.y - u.y) ? b : a);
+  u.x = Math.max(0, Math.min(BOARD_W, pick.x));
+  u.y = Math.max(0, Math.min(BOARD_H, pick.y));
+  u.facing = f;
+  return true;
+}
 // Grid snap: a fortification snaps its footprint EDGES to grid lines so adjacent
 // pieces abut without gaps (Lego-style; a 3″ wall fills exactly 3 cells). Everything
 // else snaps its centre to the nearest line.
@@ -1866,8 +1915,8 @@ function snapPos(u, px, py) {
   if (u && u.kind === 'works' && WORKS_TYPES[u.worksType]?.cat === 'structure') {
     const { halfW, halfH } = structureHalfExtent(u);
     return {
-      x: Math.round((px - halfW) / PX_PER_INCH) * PX_PER_INCH + halfW,
-      y: Math.round((py - halfH) / PX_PER_INCH) * PX_PER_INCH + halfH,
+      x: Math.round((px - halfW) / SNAP_STEP_PX) * SNAP_STEP_PX + halfW,
+      y: Math.round((py - halfH) / SNAP_STEP_PX) * SNAP_STEP_PX + halfH,
     };
   }
   return { x: snapToGridPx(px), y: snapToGridPx(py) };
@@ -4317,6 +4366,7 @@ function onBoardMouseUp() {
   if (state.dragging) {
     const u = state.units.find(x => x.id === state.dragging.unitId);
     if (u) {
+      if (state.settings.snapToGrid) structureEdgeSnap(u);   // structures click together edge-to-edge on drop
       const distPx = Math.hypot(u.x - state.dragging.originX, u.y - state.dragging.originY);
       if (distPx > 0.5) {
         // Slice 8A / T2b: charge the turn budget the PATH COST of this drag — base
@@ -7368,9 +7418,9 @@ renderBoard();
   console.assert(rs.toMoveA===1 && rs.toMoveB===1, 'roster: only units with move budget left count as "to move"');
 
   // Snap to grid (Slice 8F).
-  console.assert(snapToGridPx(0)===0 && snapToGridPx(24)===24 && snapToGridPx(100)===96, 'snaps a coordinate to the nearest 1″ grid line');
-  console.assert(snapToGridPx(11)===0 && snapToGridPx(13)===24, 'rounds to the nearest line (12px is the halfway point)');
-  console.assert(snapToGridPx(37) % PX_PER_INCH === 0 && pxToInches(snapToGridPx(150) - snapToGridPx(30)) === 5, 'snapped points sit on whole inches, so grid-to-grid moves are clean inch distances');
+  console.assert(snapToGridPx(0)===0 && snapToGridPx(24)===24 && snapToGridPx(100)===96, 'snaps a coordinate to the nearest half-inch (15-ft) lattice point');
+  console.assert(snapToGridPx(5)===0 && snapToGridPx(7)===12, 'rounds to the nearest half-inch line (6px is the halfway point)');
+  console.assert(snapToGridPx(37) % SNAP_STEP_PX === 0 && pxToInches(snapToGridPx(150) - snapToGridPx(30)) === 5, 'snapped points sit on the half-inch lattice, so grid-to-grid moves stay clean inch distances');
   { const cur = (o = {}) => ({ kind:'works', worksType:'curtain', lengthFt:90, thickFt:10, facing:0, ...o });
     const a = snapPos(cur(), 40, 200), b = snapPos(cur(), 110, 200), half = structureHalfExtent(cur()).halfW;
     console.assert((a.x - half) % PX_PER_INCH === 0, 'lego: a fortification snaps its footprint edge onto a grid line');
