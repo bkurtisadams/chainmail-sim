@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.30 · Ignition triggers. Fire now actually sets wooden works alight in play. A dragon's breath cone ignites every flammable enemy works piece whose centre falls under it (reusing the tested pointInBreathCone), and a Balrog's immolation sets flammable enemy works within reach alight (footprint-pad contact, as the ram/creature batter use) — including when there is no troop target, so a Balrog can simply torch a tower or palisade. Both route through a new igniteFlammableWorks(test) board helper that scans state.units and calls the existing igniteWorks primitive (already-burning and non-flammable pieces are skipped; the 5-turn burn then ticks down in endRound as before). Side filtering is the caller's job — fire is aimed offensively, so only enemy works catch. Combined with the Balrog's batter-inflame from v0.11.29, the burn system now has dragon, Balrog-immolate, and Balrog-batter triggers; wizard fire-ball/lightning and boiling-oil placement remain for later slices. Asserts cover the cone/footprint scan lighting only flammable enemy works and not re-lighting a burning piece. -->
+<!-- chainmail-board.html · v0.11.32 · Giant boulders move to the missile path. The Giant's ranged rock-throw is off the Batter (creature) button (now contact-only structural battering): a Giant hurls a boulder via the Fire missiles button as a thrown small-catapult attack — ≤20″, −2 to an enemy structure's defense — and shows the forward firing arc like other missile units (giantBoulderState + resolveGiantBoulder, missile phase, once per turn). It batters defense-value pieces only, matching the sim's catapults; against troops the button stays inert until catapult-vs-troops exists. The arc render now keys off GIANT as well as u.weapon, and the boulder resolution is kept separate from the troop-missile tables. Batter (creature) keeps the contact −X (Earth Elemental −6, Balrog −4, Giant −3, Troll/Ent −2). Asserts cover contact-only battering and the boulder's range / arc / target / side gating. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.30</title>
+<title>Chainmail — Battlefield · v0.11.32</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Fire ignites wooden works</div>
+    <div class="sub">Chainmail HTML Sim · Giant boulder throw (missile)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.30</span>
+    <span class="version-tag">v0.11.32</span>
   </div>
 
   <div class="toolbar">
@@ -506,7 +506,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.30';
+const SIM_VERSION = '0.11.32';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2775,9 +2775,10 @@ function renderUnit(u) {
 
   // Arc of fire (missile-armed) — render for selected unit, or all missile units when the setting is on
   let arc = '';
-  const showArc = u.weapon && !u.hedgehog && (sel || state.settings.arcForAllMissile);
+  const isBoulderThrower = u.type === 'GIANT';
+  const showArc = (u.weapon || isBoulderThrower) && !u.hedgehog && (sel || state.settings.arcForAllMissile);
   if (showArc) {
-    const radius = inchesToPx(WEAPON_RANGES[u.weapon]) || inchesToPx(18);
+    const radius = inchesToPx(u.weapon ? (WEAPON_RANGES[u.weapon] || 18) : GIANT_ROCK_RANGE_IN);
     const arcStroke = u.side === 'A' ? 'rgba(58,110,144,0.65)' : 'rgba(156,59,44,0.65)';
     const arcFill   = u.side === 'A' ? 'rgba(58,110,144,0.12)' : 'rgba(156,59,44,0.12)';
     if (isHorseman(u)) {
@@ -3193,34 +3194,58 @@ function resolveRamBatter() {
     : `<div class="step">${a.side} ${rb.wt.name} → ${tgtName}: −${RAM_DAMAGE_PER_TURN} defense (2d6 = ${res.sum}) · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
   renderBoard();
 }
-// A fantastic creature battering a structure: in contact it removes its FANTASTIC_BATTER
-// points (melee phase); a Giant out of contact but within range hurls a rock as a small
-// catapult (−2, artillery phase). Contact reuses the ram's footprint-pad reach.
+// A fantastic creature battering a structure in contact removes its FANTASTIC_BATTER
+// points per turn (melee phase). A Giant's ranged rock-throw is handled separately as a
+// thrown boulder on the missile path (giantBoulderState). Contact reuses the ram's pad.
 function creatureBatterState(a, d) {
   if (!a || a.kind === 'works' || !d || a.destroyed || d.destroyed) return null;
-  const pts = FANTASTIC_BATTER[a.type], isGiant = a.type === 'GIANT';
-  if (pts == null && !isGiant) return null;
+  const pts = FANTASTIC_BATTER[a.type];
+  if (pts == null) return null;
   if (!(d.defenseMax > 0) || a.side === d.side) return { ok: false, reason: 'target' };
   const r = engineRangeToTarget(a, d);
   const pad = (d.kind === 'works' && d.lengthFt) ? ftToIn(Math.max(d.lengthFt, d.thickFt)) / 2 + 1 : 2;
-  if (r <= pad && pts != null) return { ok: true, mode: 'contact', points: pts, r };
-  if (isGiant && r <= GIANT_ROCK_RANGE_IN) return { ok: true, mode: 'rock', points: SIEGE_WEAPONS.smallCatapult.points, r };
-  return { ok: false, reason: pts != null ? 'reach' : 'rock-range', r };
+  return r <= pad ? { ok: true, points: pts, r } : { ok: false, reason: 'reach', r };
+}
+// A Giant hurls a boulder as a small catapult (p.35): a thrown ranged attack, ≤20″,
+// that batters an enemy structure for −2. Routed through the missile button + firing
+// arc (giants show the arc like other missile units); resolution stays separate.
+function giantBoulderState(a, d) {
+  if (!a || a.type !== 'GIANT' || !d || a.destroyed || d.destroyed) return null;
+  if (!(d.defenseMax > 0) || a.side === d.side) return { ok: false, reason: 'target' };
+  const r = engineRangeToTarget(a, d);
+  if (r > GIANT_ROCK_RANGE_IN) return { ok: false, reason: 'range', r };
+  if (!inFiringArc(a, d)) return { ok: false, reason: 'arc', r };
+  return { ok: true, r };
 }
 function resolveCreatureBatter() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   const cb = creatureBatterState(a, d);
   if (!cb || !cb.ok) return;
-  const phase = cb.mode === 'contact' ? 'melee' : 'artillery';
-  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== phase) return;
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'melee') return;
   pushUndo('creature-batter');
   const res = applyCreatureBatter(a.type, d, cb.points);
   const cName = typeById(a.type)?.name || 'creature';
   const tName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure';
-  const verb = cb.mode === 'rock' ? 'hurls a boulder at' : 'batters';
   appendTurn('Fantastic siege',
-    `<div class="step">${a.side} ${cName} ${verb} ${tName}: −${cb.points} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}${res.inflamed ? ' · set ALIGHT' : ''}</div>`);
+    `<div class="step">${a.side} ${cName} batters ${tName}: −${cb.points} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}${res.inflamed ? ' · set ALIGHT' : ''}</div>`);
+  renderBoard();
+}
+function resolveGiantBoulder() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const gb = giantBoulderState(a, d);
+  if (!gb || !gb.ok) return;
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
+  if (a.acted && a.acted.fired) return;          // one boulder per turn (thrown)
+  pushUndo('giant-boulder');
+  const pts = SIEGE_WEAPONS.smallCatapult.points;
+  const res = batterTarget(d, pts) || { remaining: null, destroyed: false };
+  a.acted.fired = true;
+  a.shotsThisTurn = (a.shotsThisTurn || 0) + 1;
+  const tName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure';
+  appendTurn('Giant hurls a boulder',
+    `<div class="step">${a.side} Giant hurls a boulder at ${tName} (${gb.r.toFixed(1)}″) — −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
   renderBoard();
 }
 function updateButtons() {
@@ -3240,10 +3265,17 @@ function updateButtons() {
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
   $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d));
   const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d);
-  $('#btn-missile').disabled = !missileEnabled;
+  const gb = giantBoulderState(a, d);
+  const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile'));
+  $('#btn-missile').disabled = !(missileEnabled || boulderReady);
   $('#btn-missile').title =
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
-    (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' : '';
+    (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' :
+    (!missileEnabled && boulderReady) ? `Hurl a boulder — −${SIEGE_WEAPONS.smallCatapult.points} to the ${d && d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure'} (≤${GIANT_ROCK_RANGE_IN}″)` :
+    (!missileEnabled && a && a.type === 'GIANT' && gb && !gb.ok) ?
+      (gb.reason === 'target' ? 'A Giant hurls boulders at an enemy structure — shift-click one' :
+       gb.reason === 'range' ? `Too far to hurl a boulder (now ${gb.r.toFixed(1)}″, max ${GIANT_ROCK_RANGE_IN}″)` :
+       gb.reason === 'arc' ? 'Boulder target is outside the firing arc — rotate to bear' : '') : '';
   const es = engineFireState(a, d);
   const fb = $('#btn-fire-engine');
   if (fb) {
@@ -3275,17 +3307,14 @@ function updateButtons() {
   const cb = creatureBatterState(a, d);
   const cbBtn = $('#btn-batter-creature');
   if (cbBtn) {
-    const showCb = !!(a && a.kind !== 'works' && (FANTASTIC_BATTER[a.type] != null || a.type === 'GIANT'));
-    const wantPhase = cb && cb.ok ? (cb.mode === 'contact' ? 'melee' : 'artillery') : null;
-    const phaseOk = !state.settings.enforcePhases || !wantPhase || phaseId === wantPhase;
+    const showCb = !!(a && a.kind !== 'works' && FANTASTIC_BATTER[a.type] != null);
+    const meleePhaseOk = !state.settings.enforcePhases || phaseId === 'melee';
     cbBtn.hidden = !showCb;
-    cbBtn.disabled = !(cb && cb.ok && phaseOk);
+    cbBtn.disabled = !(cb && cb.ok && meleePhaseOk);
     cbBtn.title = !showCb || !cb ? '' :
       cb.reason === 'target' ? 'Target must be an enemy structure/engine with a defense value' :
       cb.reason === 'reach' ? `Move into contact to batter (now ${cb.r.toFixed(1)}″ away)` :
-      cb.reason === 'rock-range' ? `Too far to hurl a rock (now ${cb.r.toFixed(1)}″, max ${GIANT_ROCK_RANGE_IN}″)` :
-      !phaseOk ? `Resolve in the ${wantPhase === 'melee' ? 'Melee' : 'Artillery'} phase` :
-      cb.mode === 'rock' ? `Hurl a rock — removes ${cb.points} defense (small catapult, ≤${GIANT_ROCK_RANGE_IN}″)` :
+      !meleePhaseOk ? 'Resolve in the Melee phase' :
       `Batter — removes ${cb.points} defense/turn${STRUCTURE_INFLAMERS.has(a.type) ? ' and sets wood alight' : ''}`;
   }
   updateResolverPane();
@@ -5977,6 +6006,9 @@ $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); rende
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const gb = giantBoulderState(a, d);
+  if (gb && gb.ok && (!a.acted || !a.acted.fired)) { resolveGiantBoulder(); renderTurnUI(); return; }
   const split = !!a && atHalfMovePause(a) && canSplitMoveFire(a);
   const firedBefore = !!(a && a.acted && a.acted.fired);
   const leg1 = a ? (a.movedThisTurn || 0) : 0;
@@ -6726,6 +6758,17 @@ renderBoard();
     console.assert(r.remaining === 36 && !r.inflamed && !stone.burning, 'fantastic siege: a Balrog cannot ignite a stone wall'); }
   console.assert(applyCreatureBatter('HERO', { defenseMax:30, defenseLeft:30 }, FANTASTIC_BATTER.HERO) === null, 'fantastic siege: a non-siege creature (no points) cannot batter');
   console.assert(SIEGE_WEAPONS.smallCatapult.points === 2, 'fantastic siege: a Giant out of contact hurls a rock as a small catapult (−2)');
+  // Batter (creature) is contact-only; the Giant's ranged rock is a thrown boulder.
+  { const wall = (x) => ({ kind:'works', worksType:'curtain', side:'B', x, y:240, defenseMax:33, defenseLeft:33, lengthFt:90, thickFt:10 });
+    const giant = (x, facing=0) => ({ kind:'individual', type:'GIANT', side:'A', x, y:240, facing });
+    console.assert(creatureBatterState(giant(240), wall(241)).ok === true, 'creature batter: a Giant in contact batters (−3)');
+    console.assert(creatureBatterState(giant(240 + inchesToPx(10)), wall(240)).reason === 'reach', 'creature batter: a Giant 10″ away is out of contact (no ranged rock here)');
+    // boulder: giant at (240,240) facing 0 (north = −y); target ahead is in arc
+    console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'B', x:240, y:240 - inchesToPx(10), defenseMax:33, defenseLeft:33 }).ok === true, 'boulder: enemy structure 10″ ahead, in arc → ok');
+    console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'B', x:240, y:240 - inchesToPx(25), defenseMax:33, defenseLeft:33 }).reason === 'range', 'boulder: beyond 20″ → out of range');
+    console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'B', x:240 + inchesToPx(5), y:240, defenseMax:33, defenseLeft:33 }).reason === 'arc', 'boulder: target to the flank → outside the firing arc');
+    console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'A', x:240, y:240 - inchesToPx(5), defenseMax:33, defenseLeft:33 }).reason === 'target', 'boulder: a friendly structure is not a target');
+    console.assert(giantBoulderState(giant(240), { kind:'mass', type:'HF', side:'B', x:240, y:240 - inchesToPx(5) }).reason === 'target', 'boulder: troops have no defense value (anti-structure only)'); }
   console.assert(moveAllowanceOf({ kind:'works', worksType:'tower', crew:8 }) === 4 && moveAllowanceOf({ kind:'works', worksType:'tower', crew:0 }) === 0, 'move: a pushed tower is capped to push speed (8 men = 4″, 0 men = immobile)');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'mantlet', crew:2 }) === 6, 'move: a mantlet with 2 pushers moves 6″');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'gunLight', crew:4 }) === 1e6 && moveAllowanceOf({ kind:'works', worksType:'curtain' }) === 1e6, 'move: non-pushed engines/structures keep free setup repositioning');
