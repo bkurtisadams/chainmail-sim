@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.34 · More fortifications. Adds a building footprint (shape 'building') with Stone Building (curtain band 25–40) and Wooden Building (wooden band 5–15, flammable so the fire rules bite), and surfaces the table's aliases as their own placeable pieces: Round Tower and a now-round Bastion (bastion band 40–60, drawn as an ellipse), Square Tower (gatehouse band 30–45), and a Gate (gatehouse band, shape 'wall' with a portcullis mark, defenseDefault 30 — the low-end breach point). All map onto the existing C.7 bands; no invented defense numbers. renderStructure now branches on shape: buildings drop the crenellations for a ridge line + door, round towers draw an ellipse with an inner ring, gates mark a door in the wall, and wooden pieces take a warmer timber tone. New defenseDefault drives the spawn defense slider. Asserts cover each piece's band, the flammable/round/gate flags, and picker membership. -->
+<!-- chainmail-board.html · v0.11.35 · Move the New-unit Spawn button into the panel header so it can't be scrolled out of view. The full-width '+ Spawn at center' button at the panel foot is replaced by a compact gold '+ Spawn' button pinned to the right of the 'New unit ▾' title, sitting at the panel's top edge regardless of how many Kind-specific field rows are shown. Its click is stopPropagation'd so it spawns without toggling the collapsible panel, and it hides when the panel is collapsed. spawnUnit logic is unchanged. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.34</title>
+<title>Chainmail — Battlefield · v0.11.35</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -227,6 +227,8 @@
     justify-content: space-between; }
   .panel h2.collapsible .caret { font-size: 9px; transition: transform 0.15s ease; opacity: 0.55; }
   .panel.collapsed h2 .caret { transform: rotate(-90deg); }
+  .panel h2.collapsible .spawn-btn { padding: 4px 10px; font-size: 11px; letter-spacing: 1.2px; border-radius: 4px; }
+  .panel.collapsed h2 .spawn-btn { display: none; }
   .panel.collapsed > *:not(h2) { display: none; }
   button#btn-help { padding: 8px 11px; }
 </style>
@@ -235,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Buildings, towers &amp; gates</div>
+    <div class="sub">Chainmail HTML Sim · Spawn button in header</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.34</span>
+    <span class="version-tag">v0.11.35</span>
   </div>
 
   <div class="toolbar">
@@ -287,7 +289,7 @@
         <div id="target-pane" class="empty">none</div>
       </div>
       <div class="panel" id="new-unit-panel">
-        <h2 class="collapsible" id="new-unit-toggle">New unit <span class="caret">▾</span></h2>
+        <h2 class="collapsible" id="new-unit-toggle"><span>New unit <span class="caret">▾</span></span><button id="btn-spawn" class="gold spawn-btn" title="Spawn the unit at board centre">+ Spawn</button></h2>
         <div class="field"><label>Side</label><select id="f-side">
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
@@ -337,7 +339,6 @@
         <div class="field f-works-only f-works-struct"><label>Length (ft)</label><input type="number" id="f-works-length" value="90" min="5" max="600" step="5"></div>
         <div class="field f-works-only f-works-struct"><label>Thickness (ft)</label><input type="number" id="f-works-thick" value="10" min="2" max="200" step="1"></div>
         <div class="field f-works-only"><span class="field-note" id="f-works-note">* light = small catapult · heavy = large catapult</span></div>
-        <button id="btn-spawn" style="width:100%; margin-top: 6px">+ Spawn at center</button>
       </div>
 
     </aside>
@@ -506,7 +507,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.34';
+const SIM_VERSION = '0.11.35';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6122,7 +6123,7 @@ $('#btn-phase-back').addEventListener('click', phaseBack);
 $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
-$('#btn-spawn').addEventListener('click', spawnUnit);
+$('#btn-spawn').addEventListener('click', (e) => { e.stopPropagation(); spawnUnit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
