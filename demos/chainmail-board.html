@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.62 · Unified footprint-gap range checks (bugfix). The v0.11.61 melee gate introduced an oriented-rectangle support function, but the missile-range and edge-gap checks still used the older max(w,h)/2 circular footprint radius — which subtracts HALF A UNIT'S WIDEST DIMENSION in every direction, so a wide formed line was treated as a big circle and could fire (or be reached) far past its true range: a 10-figure javelin line (6″ range) lit the fire button out to ~13″ centre-to-centre. Factor a single footprintGapPx(a,b) — the edge-to-edge gap along the line joining the centres, from each footprint's oriented support — and route the melee gate, missile range (inMissileRange), and edge-gap helper (edgeGapInches, which feeds charge contact-reach and the 1″ free-paralysis / Wraith-touch checks) all through it. Now every proximity gate agrees and is orientation-aware: the javelin line fires only to ~6″ from its front edge, and melee/missile no longer disagree. Displayed range stays centre-to-centre. No rules change — this aligns the existing range tests with the geometry the melee slice already used. The measure tool was investigated and is correct as-is (no change). -->
+<!-- chainmail-board.html · v0.11.63 · Heavy crossbow +1 to missile fire die rolls (COMBAT-RAW-AUDIT, finishing the rate-of-fire section). The shot-count tiers (archers/longbows fire twice when held and unmeleed, once when moved; crossbows never double), the every-other-turn heavy-crossbow/arquebus cadence, and the moved-over-half "beat your opponent's opposed d6 to loose" gate were already implemented and tested; this adds the remaining clause from p.12 — "[Heavy Crossbowmen] add 1 to Missile Fire die rolls." It is data-driven: a missileBonus:1 flag on the heavy_crossbow weapon definition, read via missileDieBonus(u), and applied in BOTH resolution paths — folded into the 2d6 total for an individual heavy-crossbowman (resolveIndividualMissile) and added to the firing d6 before the low/high band lookup for a massed heavy-crossbow unit (resolveMassMissile), so a heavier bolt shifts more results into the higher kill column. Both resolvers take the new argument as an optional default-0 parameter, so every existing call and test is unaffected. FAITHFUL SIMPLIFICATION: the +1 is scoped to heavy crossbow per RAW (the arquebus, governed by the separate p.13 gunpowder rules, does not get it); the "no reloading when a heavy crossbow moved over half" nuance remains approximated by the every-other-turn cadence, as before. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.62</title>
+<title>Chainmail — Battlefield · v0.11.63</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Unified footprint-gap range checks</div>
+    <div class="sub">Chainmail HTML Sim · Heavy crossbow +1 missile bonus</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.62</span>
+    <span class="version-tag">v0.11.63</span>
   </div>
 
   <div class="toolbar">
@@ -541,7 +541,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.62';
+const SIM_VERSION = '0.11.63';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1268,7 +1268,7 @@ const RANGED_WEAPONS_INDIV = Object.freeze([
     rows:['5-6-7','5-6-7','5-6-7','5-6-8','6-7-9','8-9-0','9-1-/','1-2-/','7-9-2','9-1-/'] },
   { id:'composite',      name:'Composite Bow',  range:24, indirectAllowed:true,
     rows:['5-6-7','5-6-7','5-6-7','5-7-8','6-8-0','8-0-1','9-2-/','1-/-/','7-0-2','0-2-/'] },
-  { id:'heavy_crossbow', name:'Heavy Crossbow', range:24, indirectAllowed:false, halfRoF:true,
+  { id:'heavy_crossbow', name:'Heavy Crossbow', range:24, indirectAllowed:false, halfRoF:true, missileBonus:1,
     rows:['4-5-6','4-6-7','4-6-7','5-7-8','6-8-9','7-9-0','8-0-1','0-1-2','7-9-2','9-1-/'] },
   { id:'arquebus',       name:'Arquebus',       range:18, indirectAllowed:false, halfRoF:true,
     rows:['5-6-8','5-6-8','5-6-8','5-6-8','6-7-8','6-8-9','7-9-0','8-0-2','6-9-1','8-0-2'] },
@@ -1290,7 +1290,7 @@ function rangeBand(distance, range) {
   if (distance <= 2 * t) return 'medium';
   return 'max';
 }
-function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, indirect = false, rng }) {
+function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, bonus = 0, indirect = false, rng }) {
   let effRange = weapon.range;
   let effArmor = armorIdx;
   let arrowProof = false;
@@ -1307,9 +1307,9 @@ function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, indir
   const target = row[BAND_INDEX[band]];
   if (target === null) return { ok:true, band, target:null, kill:false, reason:'no kill possible at this range/armor' };
   const dice = roll2d6(rng);
-  const total = dice.sum - cover;
+  const total = dice.sum - cover + bonus;
   return {
-    ok:true, band, target, dice, cover, total,
+    ok:true, band, target, dice, cover, bonus, total,
     kill: total >= target, effRange, effArmor, indirect,
   };
 }
@@ -1427,7 +1427,7 @@ function findFiringBand(count, bands) {
   for (const b of bands) if (count >= b.range[0] && count <= b.range[1]) return b;
   return bands[bands.length - 1];
 }
-function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=false, rng }) {
+function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=false, dieBonus=0, rng }) {
   let group = armorGroup, bumped = false;
   if (indirect) {
     const next = INDIRECT_BUMP[group];
@@ -1439,11 +1439,12 @@ function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=fal
   const results = []; let total = 0;
   for (const s of subs) {
     const die = d6(rng);
+    const adjDie = die + dieBonus;   // heavy crossbow +1 to the fire die (p.12)
     const band = findFiringBand(s, tab.firingBands);
     if (!band) { results.push({ count:s, die, kills:0, reason:'below minimum band' }); continue; }
-    const isLow = die >= tab.dieBands[0][0] && die <= tab.dieBands[0][1];
+    const isLow = adjDie >= tab.dieBands[0][0] && adjDie <= tab.dieBands[0][1];
     const kills = isLow ? band.low : band.high;
-    results.push({ count:s, die, isLow, band, kills });
+    results.push({ count:s, die, dieBonus, isLow, band, kills });
     total += kills;
   }
   return { armorGroup:group, indirectApplied:bumped, groups:results,
@@ -5906,6 +5907,9 @@ function markFired(u) {
   u.shotsThisTurn = (u.shotsThisTurn || 0) + 1;
   u.lastFiredTurn = state.turn;
 }
+// Heavy crossbow adds +1 to its missile fire die rolls (p.12). Read off the
+// weapon definition so any future per-weapon bonus stays data-driven.
+const missileDieBonus = (u) => (u && rangedWeaponById(u.weapon)?.missileBonus) || 0;
 
 // Moved-over-½ fire gate (p.11–12). A missile unit (thrown weapons excepted)
 // that moved MORE than half its NORMAL move this turn — charging excluded —
@@ -6054,7 +6058,7 @@ function onResolveMissile() {
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
   if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
-  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
   const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
@@ -6149,7 +6153,7 @@ function onIndivMissile(a, d) {
   const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const coverPenalty = indirect ? 0 : coverDiceMinus(dCover);
   const r = resolveIndividualMissile({
-    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, indirect, rng: state.rng,
+    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, bonus: missileDieBonus(a), indirect, rng: state.rng,
   });
 
   const tags = [];
@@ -6264,7 +6268,7 @@ function onMassMissileAtIndiv(a, d) {
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
   if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
-  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, rng: state.rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), rng: state.rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
   const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
