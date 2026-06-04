@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.33 · Catapults gain anti-personnel hit-area fire (p.12). A catapult may now target enemy troops/individuals within range and a 45° arc: resolveEngineFire branches on engineFireState.mode — 'batter' for defense-value targets (unchanged) or 'antipersonnel' for troops. resolveCatapultAntipersonnel rolls the optional scatter (two dice via catapultScatter; scatterImpact shifts the impact along the firing line — overshoot long, undershoot short, tie on), drops the 2″/3½″ Hit Area, and kills every uncovered figure of any unit wholly or partially under it (figuresUnderCircle), friend or foe; substantial overhead cover negates per unit. The 45° arc is now enforced for all catapult fire and drawn as ±45° boundary lines on the range display, with a hit-area preview at the aimed target and a faded impact circle (renderCatapultHit, cleared at end of round). Guns stay structure-only. Asserts cover scatterImpact, figuresUnderCircle, and the catapult range/arc/mode gating. -->
+<!-- chainmail-board.html · v0.11.34 · More fortifications. Adds a building footprint (shape 'building') with Stone Building (curtain band 25–40) and Wooden Building (wooden band 5–15, flammable so the fire rules bite), and surfaces the table's aliases as their own placeable pieces: Round Tower and a now-round Bastion (bastion band 40–60, drawn as an ellipse), Square Tower (gatehouse band 30–45), and a Gate (gatehouse band, shape 'wall' with a portcullis mark, defenseDefault 30 — the low-end breach point). All map onto the existing C.7 bands; no invented defense numbers. renderStructure now branches on shape: buildings drop the crenellations for a ridge line + door, round towers draw an ellipse with an inner ring, gates mark a door in the wall, and wooden pieces take a warmer timber tone. New defenseDefault drives the spawn defense slider. Asserts cover each piece's band, the flammable/round/gate flags, and picker membership. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.33</title>
+<title>Chainmail — Battlefield · v0.11.34</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Catapult hit-area fire</div>
+    <div class="sub">Chainmail HTML Sim · Buildings, towers &amp; gates</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.33</span>
+    <span class="version-tag">v0.11.34</span>
   </div>
 
   <div class="toolbar">
@@ -506,7 +506,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.33';
+const SIM_VERSION = '0.11.34';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1657,13 +1657,18 @@ const WORKS_TYPES = {
   curtain:   { name: 'Curtain Wall', cat: 'structure', structure: 'curtain',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 10, heightFt: 20 },
   rampart:   { name: 'Rampart',      cat: 'structure', structure: 'rampart',   shape: 'wall',  crewBase: 0, lengthFt: 90, thickFt: 20, heightFt: 15 },
   palisade:  { name: 'Palisade',     cat: 'structure', structure: 'wooden',    shape: 'wall',  crewBase: 0, flammable: true, lengthFt: 90, thickFt: 5,  heightFt: 12 },
-  bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
+  bastion:   { name: 'Bastion',      cat: 'structure', structure: 'bastion',   shape: 'tower', round: true, crewBase: 0, lengthFt: 30, thickFt: 30, heightFt: 40 },
+  roundTower:{ name: 'Round Tower',  cat: 'structure', structure: 'bastion',   shape: 'tower', round: true, crewBase: 0, lengthFt: 25, thickFt: 25, heightFt: 40 },
   gatehouse: { name: 'Gatehouse',    cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 40, thickFt: 30, heightFt: 40 },
+  squareTower:{name: 'Square Tower', cat: 'structure', structure: 'gatehouse', shape: 'tower', crewBase: 0, lengthFt: 28, thickFt: 28, heightFt: 40 },
+  gate:      { name: 'Gate',         cat: 'structure', structure: 'gatehouse', shape: 'wall',  gateMark: true, defenseDefault: 30, crewBase: 0, lengthFt: 30, thickFt: 10, heightFt: 20 },
+  stoneBuild:{ name: 'Stone Building',  cat: 'structure', structure: 'curtain', shape: 'building', crewBase: 0, lengthFt: 50, thickFt: 35, heightFt: 20 },
+  woodBuild: { name: 'Wooden Building', cat: 'structure', structure: 'wooden',  shape: 'building', crewBase: 0, flammable: true, lengthFt: 45, thickFt: 30, heightFt: 15 },
 };
 // Stage 1: firing engines are spawnable; stage 2 adds fortifications as battered targets.
 const WORKS_SPAWNABLE = ['catLight', 'catHeavy', 'gunLight', 'gunHeavy', 'bombard'].map(id => ({ id, ...WORKS_TYPES[id] }));
 const WORKS_EQUIPMENT = ['tower', 'ram', 'mantlet', 'ladder', 'abatis'].map(id => ({ id, ...WORKS_TYPES[id] }));
-const WORKS_STRUCTURES = ['curtain', 'rampart', 'palisade', 'bastion', 'gatehouse'].map(id => ({ id, ...WORKS_TYPES[id], range: structureDefenseRange(WORKS_TYPES[id].structure) }));
+const WORKS_STRUCTURES = ['curtain', 'rampart', 'palisade', 'gate', 'gatehouse', 'squareTower', 'bastion', 'roundTower', 'stoneBuild', 'woodBuild'].map(id => ({ id, ...WORKS_TYPES[id], range: structureDefenseRange(WORKS_TYPES[id].structure) }));
 // Catapults reload on a crew-modified cadence (C.6); guns have no multi-turn reload.
 function worksReloadTurns(u) {
   const wt = WORKS_TYPES[u.worksType];
@@ -2426,7 +2431,7 @@ function syncWorksType() {
   if (isStruct) {
     const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
     const di = $('#f-works-defense');
-    di.min = r.min; di.max = r.max; di.value = Math.round((r.min + r.max) / 2);
+    di.min = r.min; di.max = r.max; di.value = Math.max(r.min, Math.min(r.max, wt.defenseDefault != null ? wt.defenseDefault : Math.round((r.min + r.max) / 2)));
     $('#f-works-length').value = wt.lengthFt || 90;
     $('#f-works-thick').value = wt.thickFt || 10;
     if (note) note.textContent = `Defense ${r.min}–${r.max} (siege, p.22) · ${wt.heightFt || 20} ft high. Size in feet at 1″ = 30 ft; edit to your DMG figures.`;
@@ -2664,19 +2669,30 @@ function renderStructure(u, wt) {
   const sideD = u.side === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   const sel = state.selectedId === u.id, tgt = state.targetId === u.id;
   const wall = wt.shape === 'wall';
-  const lengthFt = u.lengthFt || wt.lengthFt || (wall ? 90 : 30);
-  const thickFt  = u.thickFt  || wt.thickFt  || (wall ? 10 : 30);
+  const building = wt.shape === 'building';
+  const round = !!wt.round;
+  const lengthFt = u.lengthFt || wt.lengthFt || (wall ? 90 : building ? 40 : 30);
+  const thickFt  = u.thickFt  || wt.thickFt  || (wall ? 10 : building ? 30 : 30);
   const hw = Math.max(7, ftToPx(lengthFt) / 2), hh = Math.max(5, ftToPx(thickFt) / 2);
-  const stone = '#8d857a', stoneD = '#615a51';
+  const wood = wt.structure === 'wooden';
   const ruined = u.defenseMax > 0 && u.defenseLeft <= 0;
-  // crenellations along the front (top) edge
-  const n = wall ? 5 : 3, mw = (2 * hw) / (n * 2 - 1);
+  const stone  = ruined ? '#5c554c' : wood ? '#9a7b52' : '#8d857a';
+  const stoneD = wood ? '#6b5436' : '#615a51';
+  // crenellations along the front (top) edge — walls 5, square towers 3, none on round towers/buildings
+  const n = wall ? 5 : (round || building) ? 0 : 3, mw = n ? (2 * hw) / (n * 2 - 1) : 0;
   let merlons = '';
   for (let i = 0; i < n; i++) merlons += `<rect x="${(-hw + i * 2 * mw).toFixed(1)}" y="${-hh - 4}" width="${mw.toFixed(1)}" height="5" fill="${stoneD}"/>`;
+  const door = (w) => `<rect x="${(-w/2).toFixed(1)}" y="${(-hh).toFixed(1)}" width="${w}" height="${Math.min(2*hh, w*1.4).toFixed(1)}" rx="1" fill="${stoneD}" opacity="0.9"/>`;
   const courses = wall
-    ? `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${stoneD}" stroke-width="0.8" opacity="0.6"/>`
+    ? `<line x1="${-hw}" y1="0" x2="${hw}" y2="0" stroke="${stoneD}" stroke-width="0.8" opacity="0.6"/>` + (wt.gateMark ? door(Math.min(2*hh, hw)) : '')
+    : building
+    ? `<line x1="${(-hw*0.85).toFixed(1)}" y1="0" x2="${(hw*0.85).toFixed(1)}" y2="0" stroke="${stoneD}" stroke-width="1" opacity="0.5"/>${door(7)}`
+    : round
+    ? `<circle cx="0" cy="0" r="${(Math.min(hw, hh) * 0.5).toFixed(1)}" fill="none" stroke="${stoneD}" stroke-width="0.9" opacity="0.5"/>`
     : `<line x1="${-hw}" y1="${(-hh/3).toFixed(1)}" x2="${hw}" y2="${(-hh/3).toFixed(1)}" stroke="${stoneD}" stroke-width="0.8" opacity="0.5"/><line x1="${-hw}" y1="${(hh/3).toFixed(1)}" x2="${hw}" y2="${(hh/3).toFixed(1)}" stroke="${stoneD}" stroke-width="0.8" opacity="0.5"/>`;
-  const body = `<rect x="${-hw}" y="${-hh}" width="${2*hw}" height="${2*hh}" rx="2" fill="${ruined ? '#5c554c' : stone}" stroke="${sideC}" stroke-width="2"${ruined ? ' stroke-dasharray="4 3"' : ''}/>`;
+  const body = round
+    ? `<ellipse cx="0" cy="0" rx="${hw}" ry="${hh}" fill="${stone}" stroke="${sideC}" stroke-width="2"${ruined ? ' stroke-dasharray="4 3"' : ''}/>`
+    : `<rect x="${-hw}" y="${-hh}" width="${2*hw}" height="${2*hh}" rx="${building ? 3 : 2}" fill="${stone}" stroke="${sideC}" stroke-width="2"${ruined ? ' stroke-dasharray="4 3"' : ''}/>`;
   const tick = `<line x1="0" y1="${-hh}" x2="0" y2="${-hh-6}" stroke="var(--front)" stroke-width="2.5" stroke-linecap="round"/>`;
   let outline = '';
   if (sel) outline = `<rect x="${-hw-4}" y="${-hh-9}" width="${2*hw+8}" height="${2*hh+13}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
@@ -5597,7 +5613,7 @@ function spawnUnit() {
     let crew, defMax, lengthFt = null, thickFt = null, heightFt = null;
     if (isStruct) {
       const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
-      defMax = Math.max(r.min, Math.min(r.max, parseInt($('#f-works-defense').value, 10) || Math.round((r.min + r.max) / 2)));
+      defMax = Math.max(r.min, Math.min(r.max, parseInt($('#f-works-defense').value, 10) || wt.defenseDefault || Math.round((r.min + r.max) / 2)));
       crew = 0;
       lengthFt = Math.max(5, Math.min(600, parseInt($('#f-works-length').value, 10) || wt.lengthFt || 90));
       thickFt  = Math.max(2, Math.min(200, parseInt($('#f-works-thick').value, 10) || wt.thickFt || 10));
@@ -6856,6 +6872,13 @@ renderBoard();
 
   // Siege structures as battered defense-value pieces
   console.assert(structureDefenseRange('curtain').min === 25 && structureDefenseRange('bastion').max === 60, 'structures expose the C.7 defense ranges');
+  // New pieces map onto the canonical bands (p.22) — no invented defense numbers.
+  console.assert(WORKS_TYPES.stoneBuild.shape === 'building' && structureDefenseRange(WORKS_TYPES.stoneBuild.structure).max === 40, 'stone building: building shape on the curtain band (25–40)');
+  console.assert(WORKS_TYPES.woodBuild.flammable === true && structureDefenseRange(WORKS_TYPES.woodBuild.structure).max === 15, 'wooden building: flammable, wooden band (5–15)');
+  console.assert(WORKS_TYPES.roundTower.round === true && structureDefenseRange(WORKS_TYPES.roundTower.structure).min === 40, 'round tower: round shape on the bastion band (40–60)');
+  console.assert(structureDefenseRange(WORKS_TYPES.squareTower.structure).max === 45 && structureDefenseRange(WORKS_TYPES.gate.structure).max === 45, 'square tower and gate share the gatehouse band (30–45)');
+  console.assert(WORKS_TYPES.gate.defenseDefault === 30 && WORKS_TYPES.gate.gateMark === true, 'gate: defaults to the low end of its band (the breach point)');
+  console.assert(['gate','squareTower','roundTower','stoneBuild','woodBuild'].every(id => WORKS_STRUCTURES.some(s => s.id === id)), 'the new pieces are offered in the structure picker');
   { const wall = { defenseMax: 30, defenseLeft: 30 };
     console.assert(batterTarget(wall, 3).remaining === 27, 'a light gun (-3) chips a 30-defense wall to 27');
     for (let i = 0; i < 9; i++) batterTarget(wall, 3);
