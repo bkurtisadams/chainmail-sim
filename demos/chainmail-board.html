@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.43 · Fix flank/rear in mixed (individual-vs-mass) melee. onResolveMixed built its attacker params with keys fightingFromEdge / attackingRear, but resolveMassMelee reads attacker.flank / attacker.rear (via effectiveAttackerClass and the rear no-return branch) — so an individual hitting a mass unit's flank or rear, or a mass hitting an individual's, got NO flank class-up and NO rear no-return, silently. (The log section already referenced melee.attacker.flankBumpToBonus, attackerParams.flank||rear, and melee.defender.noReturn, so those notes never fired either.) Renamed the two keys to flank:(edge left|right) and rear:(edge rear), matching the mass-vs-mass path. Also applied reformingFlankEdge here so a reforming mass meleed by an individual is correctly flanked (p.10) — closing the omission flagged in v0.11.42. Wiring fix; resolveMassMelee unchanged. -->
+<!-- chainmail-board.html · v0.11.44 · Road move bonus (p.10), gap 2 of the movement-rules cleanup. The p.10 MOVE table's ROAD BONUS column gave only mounted/wheeled types extra inches on a road; foot get none. Adds a 'road' terrain type (brown strip, moveMult 1, charge-able) to TERRAIN_TYPES/TERRAIN_ORDER, a ROAD_BONUS table (Heavy Horse +3, Medium Horse +6, Light Horse +6, Mounted Knights +3 as Heavy Horse), and roadBonusOf(u), which adds the bonus to moveAllowanceOf's normal-move branch when the unit BEGAN the turn on a road (new turnStartX/turnStartY, reset in endRound like turnStartFacing). The bonus flows through effectiveMoveAllowance → remaining budget → the drag/nudge clamp and the sidebar "Move used" line (now annotated "+N road"). baseMoveAllowanceOf is untouched, so facing/formation costs and the half-move line stay on the plain type move; a declared charge uses the charge column (no road bonus). FAITHFUL SIMPLIFICATIONS: foot get no road bonus (per the table); catapults/cannons (+3) and wagons (+6) are deferred since works move by push-speed, a separate model; mounted individuals get no bonus (the table is for mass bodies); and "began the turn on a road" doesn't verify the whole path stays on the road. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.43</title>
+<title>Chainmail — Battlefield · v0.11.44</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Mixed-melee flank/rear fix</div>
+    <div class="sub">Chainmail HTML Sim · Road move bonus</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.43</span>
+    <span class="version-tag">v0.11.44</span>
   </div>
 
   <div class="toolbar">
@@ -518,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.43';
+const SIM_VERSION = '0.11.44';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -540,8 +540,9 @@ const TERRAIN_TYPES = Object.freeze({
   river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full',      wIn: 22, hIn: 3 },
   pond:   { label: 'Pond',          fill: '#4f7c9c', moveMult: 0.5, noCharge: true,                      wIn: 7,  hIn: 6 },
   gulley: { label: 'Gulley',        fill: '#9c8757', moveMult: 1,   noCharge: true,                      wIn: 11, hIn: 3 },
+  road:   { label: 'Road',          fill: '#8a6f4a', moveMult: 1,   noCharge: false, road: true,          wIn: 30, hIn: 2 },
 });
-const TERRAIN_ORDER = ['hill', 'wooded', 'marshy', 'rough', 'ditch', 'stream', 'river', 'pond', 'gulley'];
+const TERRAIN_ORDER = ['hill', 'wooded', 'marshy', 'rough', 'ditch', 'stream', 'river', 'pond', 'gulley', 'road'];
 
 /* === A. RNG ============================================================ */
 function mulberry32(seed) {
@@ -1873,8 +1874,23 @@ function snapPos(u, px, py) {
    accumulates straight-line drag/nudge distance and resets each round. */
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
+// Road move bonus (p.10 ROAD column): mounted/wheeled types only; foot get none.
+// MK (Mounted Knights) ride as Heavy Horse (+3). Catapults/cannons (+3) and
+// wagons (+6) are deferred — works move by push-speed, a separate model.
+const ROAD_BONUS = { HH: 3, MH: 6, LH: 6, MK: 3 };
+const roadBonusType = (u) => (u.kind === 'mass') ? (ROAD_BONUS[u.type] || 0) : 0;
+const onRoadAt = (x, y) => terrainTypesAt(x, y).some(t => t.road);
+// Granted when the unit BEGAN the turn on a road (turnStartX/Y); stable for the
+// whole turn. Doesn't verify the whole path stays on the road (simplification).
+function roadBonusOf(u) {
+  const b = roadBonusType(u);
+  if (!b) return 0;
+  const x = (u.turnStartX != null) ? u.turnStartX : u.x;
+  const y = (u.turnStartY != null) ? u.turnStartY : u.y;
+  return onRoadAt(x, y) ? b : 0;
+}
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u)));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -3257,7 +3273,7 @@ function updateSidebar() {
         : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
-      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″ · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
+      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : ''} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
       (u.halfMovePaused ? `<div class="stat"><span class="k">Half-move</span><span class="v" style="color:#46707d">PAUSED — resume to take 2nd leg</span></div>` : '') +
       (u.splitFired ? `<div class="stat"><span class="k">Split-fire</span><span class="v" style="color:#46707d">fired mid-move · 2nd leg ≤ ½ (cap ${effectiveMoveAllowance(u).toFixed(1)}″)</span></div>` : '') +
       (turnedDeg > 0.5 ? `<div class="stat"><span class="k">Turned</span><span class="v">${turnedDeg.toFixed(0)}° · ${facingTierLabel(u)} · ${faceCostIn.toFixed(1)}″</span></div>` : '') +
@@ -5910,6 +5926,7 @@ function spawnUnit() {
       formation, customCols, spacing, polearm };
   }
   if (state.settings.snapToGrid) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
+  u.turnStartX = u.x; u.turnStartY = u.y;   // road-bonus baseline (p.10)
   state.units.push(u);
   state.selectedId = u.id;
   renderBoard();
@@ -6378,7 +6395,7 @@ function endRound() {
   state.turn += 1;
   state.lastCatapultHit = null;
   for (const u of state.units) {
-    if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
+    if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; u.turnStartX = u.x; u.turnStartY = u.y; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
     if (u.reform) u.acted.moved = true;   // a reforming turn is active (counts toward fatigue/streak)
     if (state.settings.applyFatigue) {
@@ -6400,6 +6417,7 @@ function endRound() {
     u.halfMovePaused = false;   // checkpoints reset with the new move
     u.splitFired = false; u.splitLeg1 = 0;
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
+    u.turnStartX = u.x; u.turnStartY = u.y;   // road-bonus baseline for the new turn (p.10)
     advanceReform(u);   // p.10: spend this turn toward a multi-turn formation change; complete when done
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
@@ -7208,6 +7226,22 @@ renderBoard();
   console.assert(effectiveAttackerClass('HF', { flank: true }) === 'AF', 'mixed: flank key bumps HF→AF');
   console.assert(effectiveAttackerClass('HF', { rear: true }) === 'AF', 'mixed: rear key bumps HF→AF');
   console.assert(classBumpsToBonus('AF', { flank: true }) === true, 'mixed: AF (no higher class) flank → +1/die instead');
+
+  // Road move bonus (p.10): mounted/wheeled types only, granted when begun on a road
+  { const savedTerrain = state.terrain;
+    state.terrain = [{ id: -1, type: 'road', x: 100, y: 100, w: inchesToPx(30), h: inchesToPx(8) }];
+    const lh  = { kind: 'mass', type: 'LH', turnStartX: 100, turnStartY: 100 };          // light horse on the road
+    const hh  = { kind: 'mass', type: 'HH', turnStartX: 100, turnStartY: 100 };
+    const hf  = { kind: 'mass', type: 'HF', turnStartX: 100, turnStartY: 100 };          // foot: no bonus
+    const off = { kind: 'mass', type: 'LH', turnStartX: 5000, turnStartY: 5000 };        // off the road
+    console.assert(roadBonusOf(lh) === 6 && roadBonusOf(hh) === 3, 'road: light horse +6, heavy horse +3 on a road');
+    console.assert(roadBonusOf(hf) === 0, 'road: foot get no road bonus (p.10)');
+    console.assert(roadBonusOf(off) === 0, 'road: a unit not on a road gets no bonus');
+    console.assert(moveAllowanceOf(lh) === baseMoveAllowanceOf(lh) + 6, 'road: the bonus folds into the move allowance');
+    const charging = { kind: 'mass', type: 'LH', charged: true, turnStartX: 100, turnStartY: 100 };
+    console.assert(moveAllowanceOf(charging) === chargeAllowanceOf(charging), 'road: a declared charge uses the charge column, no road bonus');
+    console.assert(baseMoveAllowanceOf(lh) === MOVE_ALLOWANCE['LH'], 'road: baseMoveAllowanceOf (facing/formation/half-move) is untouched');
+    state.terrain = savedTerrain; }
 
   // Screen-fixed badge/label clearance tracks orientation (not worst-case max)
   { const wide = { w: 240, h: 28 };  // a 10-wide line
