@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.27 · Mantlet cover. A movable mantlet now screens friendly troops from missile fire: when a shooter looses at a target, effectiveCoverVs checks for a friendly mantlet sitting on the shooter's side of the target (within MANTLET_COVER_NEAR_IN of it and within MANTLET_COVER_HALF_IN of the line of fire) and, if found, grants hard cover — folded into the same path as woods so mass fire is halved and individual fire loses 2 dice (mantletShields is the pure geometric test; abatis, which carries no cover value, does not screen). Wired into all three missile resolvers (mass→mass, mass→individual, individual). The 3-covered-figures / 1-slit-firer cap from p.22 is not modeled yet — the whole target is covered for now. Asserts cover the mantlet screen geometry (on-line, off-line, behind, too-far) and the friendly-vs-enemy distinction. -->
+<!-- chainmail-board.html · v0.11.28 · Hide the Type dropdown for Works. The unit Type select (troop / fantastic types) only applies to mass and individual units, so it now carries f-troop-only and is hidden when Kind is Works — the piece is chosen from its own Engine / Structure dropdown, and the Type value was already ignored when spawning works. Consistency fix matching how the mass-only and individual-only fields hide; no engine logic changed. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.27</title>
+<title>Chainmail — Battlefield · v0.11.28</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Mantlet missile cover</div>
+    <div class="sub">Chainmail HTML Sim · Works unit panel fix</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.27</span>
+    <span class="version-tag">v0.11.28</span>
   </div>
 
   <div class="toolbar">
@@ -295,7 +295,7 @@
           <option value="individual">Individual</option>
           <option value="works">Works (engine)</option>
         </select></div>
-        <div class="field"><label>Type</label><select id="f-type"></select></div>
+        <div class="field f-troop-only"><label>Type</label><select id="f-type"></select></div>
         <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
         <div class="field f-mass-only"><label>Formation</label><select id="f-form">
           <option value="line">Line</option>
@@ -505,7 +505,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.27';
+const SIM_VERSION = '0.11.28';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
