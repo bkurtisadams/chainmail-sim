@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.60 · Built-in preset maps. A new "Maps ▾" picker in the toolbar (beside Load) loads ready-made battlefields. A preset is just an in-app save object in the same shape Save produces, so it loads through the existing loadScenario() — same validation, the same hydrator that backfills volatile per-turn fields, and the same confirm-before-replacing-a-non-empty-board guard. Three starter maps, all authored in code in tabletop inches on the 8×4 board: Open Field (a clean canvas), River Crossing (a river across the table with a road crossing and wooded banks), and The Fortified Hill (curtain walls, corner round towers and a gatehouse abutted edge-to-edge on rising ground, with flanking woods). The set is intentionally small and terrain/fortification-only — these are canvases to deploy your own forces onto; each map is JSON in the single file, so users build their own libraries via Save/Load. FUTURE: troop-bearing scenario presets are best authored in-app and exported (exported units carry derived footprint/strength fields the loader does not recompute), then embedded here. No rules impact. -->
+<!-- chainmail-board.html · v0.11.61 · Close-to-striking-range melee gate (COMBAT-RAW-AUDIT). Melee may now only be declared when the two units are actually in striking range. The contact test is rebuilt: mass bodies and works pieces use the 1″ control-zone as base contact (p.16 — troops "control the space 1″ on either side"), while a single man reaches 3″ (p.25 — "two figures within melee range (3″)"); the gate uses the larger of the two combatants' ranges. The reach is now footprint-orientation-aware — an edge-to-edge gap measured along the line joining the centres via an oriented-rectangle support function — so a formed line fights front-to-front across its shallow depth rather than the old orientation-blind circular max(w,h)/2 radius, which let mass units melee from well beyond contact. This tightens mass melee to true base contact and feeds every consumer of inMeleeContact (the Resolve-melee gate, the engagement overlay, charge contact-reach, and the meleesPending end-of-turn check). FAITHFUL SIMPLIFICATION: contact is gauged centre-line edge gap on the footprint bounding rectangle, not a full per-figure base-to-base test; the 3″ draw-in of nearby units to an existing melee (p.16 §3) remains a later slice. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.60</title>
+<title>Chainmail — Battlefield · v0.11.61</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Built-in preset maps</div>
+    <div class="sub">Chainmail HTML Sim · Close-to-striking-range melee gate</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.60</span>
+    <span class="version-tag">v0.11.61</span>
   </div>
 
   <div class="toolbar">
@@ -541,13 +541,18 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.60';
+const SIM_VERSION = '0.11.61';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
 const BOARD_MIN_IN = 24, BOARD_MAX_IN = 600;   // playing-area clamp (2 ft … 50 ft)
 const ZOOM_MIN_VIEW_IN = 8;   // most zoomed-in: 8 tabletop inches span the board view (board-size-independent, so large boards still zoom in)
-const MELEE_RANGE_IN = 3; // inches of contact, per rules
+const MELEE_RANGE_IN = 3;   // man-to-man melee range — "two figures within melee range (3″)" (p.25)
+const MASS_CONTACT_IN = 1;  // mass/works base contact — troops "control the space 1″ on either side" (p.16)
+// Striking range a unit reaches into melee: 3″ for a single man (man-to-man),
+// 1″ base contact for a formed body or a works piece. The gate (inMeleeContact)
+// takes the larger of the two combatants' ranges.
+const meleeRangeIn = (u) => (u && u.kind === 'individual') ? MELEE_RANGE_IN : MASS_CONTACT_IN;
 
 // Terrain (p.9–10). Effects are RAW flags; T1 wires moveMult (50% slow) and
 // noCharge. blocksFormed (wooded) / blocksHeavy (marshy) and the stream/river
@@ -2145,12 +2150,30 @@ function inFiringArc(firer, target) {
   return isHorseman(firer) ? (b <= 45) : (Math.abs(b) <= 45);
 }
 
-// Approximate contact: center-to-center distance ≤ MELEE_RANGE + half-widths.
+// Oriented half-extent of a unit's footprint in world direction (ux,uy) — the
+// support distance from its centre to the footprint edge along that line. The
+// footprint is the unitBounds rectangle (w = frontage along local +x, h = depth
+// along local +y) rotated by `facing`; under SVG rotate(f), local +x maps to
+// world (cos f, sin f) and local +y to (−sin f, cos f). So the rectangle's reach
+// along (ux,uy) is the sum of each half-axis projected onto it. Orientation-aware:
+// a wide thin line reaches far across its frontage, little across its depth.
+function footprintSupport(u, ux, uy) {
+  const b = unitBounds(u);
+  const f = (u.facing || 0) * Math.PI / 180, cf = Math.cos(f), sf = Math.sin(f);
+  return (b.w / 2) * Math.abs(cf * ux + sf * uy) + (b.h / 2) * Math.abs(-sf * ux + cf * uy);
+}
+// Melee contact (p.16 mass control-zone, p.25 man-to-man range): the two units
+// are in striking range when the edge-to-edge gap between their footprints —
+// measured along the line joining their centres — is within the larger of the
+// two combatants' melee ranges (3″ for a man, 1″ base contact for a formed body).
+// Footprint-orientation-aware, so a line fights front-to-front at its shallow
+// depth, not at the old circular max(w,h)/2 radius.
 function inMeleeContact(a, b) {
-  const range = inchesToPx(MELEE_RANGE_IN);
-  const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
-  const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
-  return dist(a, b) <= range + aMax + bMax;
+  const range = inchesToPx(Math.max(meleeRangeIn(a), meleeRangeIn(b)));
+  const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d, uy = dy / d;
+  const gap = d - footprintSupport(a, ux, uy) - footprintSupport(b, ux, uy);
+  return gap <= range;
 }
 // One melee per turn (p.8 turn sequence — "Melees are resolved" is a single
 // step). A unit that has meleed this turn may not melee again until next turn;
