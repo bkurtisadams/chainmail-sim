@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.59 · Save / load board + 8×4 default table. SAVE/LOAD: new toolbar Save and Load buttons export and re-import the whole board as a JSON file (works from file://). The save is full-state — it reuses the undo snapshot, so units, engines, terrain, engagements, turn/phase/initiative, the RNG seed and the log all round-trip and a load resumes exactly where you left off; board dimensions and a format/version stamp are added on top. Load validates the file, confirms before replacing a non-empty board, sets the board size first (positions depend on it), runs every piece through a hydrator that fills any fields newer than the save with current defaults (so older saves still load, with a soft version notice), then clears undo/redo and any edit/measure/terrain mode. FUTURE: a "fresh scenario" save variant (units reset to full strength, turn/log/engagements cleared) is noted in the code as a follow-up. BOARD: default playing area is now 8×4 ft (96×48", boardWIn 72→96) per Chainmail p.5 (length ≥ 8ʹ, width 4–7ʹ); existing saved settings keep their stored size until changed. -->
+<!-- chainmail-board.html · v0.11.60 · Built-in preset maps. A new "Maps ▾" picker in the toolbar (beside Load) loads ready-made battlefields. A preset is just an in-app save object in the same shape Save produces, so it loads through the existing loadScenario() — same validation, the same hydrator that backfills volatile per-turn fields, and the same confirm-before-replacing-a-non-empty-board guard. Three starter maps, all authored in code in tabletop inches on the 8×4 board: Open Field (a clean canvas), River Crossing (a river across the table with a road crossing and wooded banks), and The Fortified Hill (curtain walls, corner round towers and a gatehouse abutted edge-to-edge on rising ground, with flanking woods). The set is intentionally small and terrain/fortification-only — these are canvases to deploy your own forces onto; each map is JSON in the single file, so users build their own libraries via Save/Load. FUTURE: troop-bearing scenario presets are best authored in-app and exported (exported units carry derived footprint/strength fields the loader does not recompute), then embedded here. No rules impact. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.59</title>
+<title>Chainmail — Battlefield · v0.11.60</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Save / load board (JSON)</div>
+    <div class="sub">Chainmail HTML Sim · Built-in preset maps</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.59</span>
+    <span class="version-tag">v0.11.60</span>
   </div>
 
   <div class="toolbar">
@@ -281,6 +281,7 @@
     <button id="btn-save" class="secondary" title="Save the board (units, engines, terrain, turn state) to a JSON file">Save</button>
     <button id="btn-load" class="secondary" title="Load a board from a JSON file">Load</button>
     <input id="file-load" type="file" accept="application/json,.json" hidden>
+    <select id="map-preset" title="Load a built-in map" style="height:26px; padding:2px 6px; font:inherit;"><option value="">Maps ▾</option></select>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
@@ -540,7 +541,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.59';
+const SIM_VERSION = '0.11.60';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4717,6 +4718,99 @@ function onLoadFile(evt) {
   };
   reader.readAsText(file);
 }
+
+// --- Built-in preset maps ------------------------------------------------
+// A preset is just an in-app save object (same shape as a Save file), so it
+// loads through loadScenario() — same validation, hydration and hygiene. Maps
+// are authored compactly here in tabletop inches; pieces omit the volatile
+// per-turn fields, which loadScenario's hydrator fills. Keep the set small and
+// curated — each map is JSON living in the single file; users build their own
+// libraries via Save/Load. (Troop-bearing scenarios are best authored in-app
+// and exported, since exported units carry derived footprint/strength fields.)
+const _IN = PX_PER_INCH;
+function _presetStruct(side, worksType, xIn, yIn, facing, opts = {}) {
+  const wt = WORKS_TYPES[worksType] || {};
+  const r = structureDefenseRange(wt.structure) || { min: 1, max: 60 };
+  return {
+    side, kind: 'works', x: xIn * _IN, y: yIn * _IN, facing,
+    type: null, weapon: null, count: 1, startCount: 1, cols: 1, rows: 1,
+    hedgehog: false, formation: null, customCols: null, spacing: 'close', polearm: false,
+    worksType, crew: 0,
+    defenseMax: opts.defenseMax ?? (wt.defenseDefault || Math.round((r.min + r.max) / 2)),
+    defenseLeft: opts.defenseMax ?? (wt.defenseDefault || Math.round((r.min + r.max) / 2)),
+    disabled: false, readyTurn: 0, burning: null, structure: wt.structure || null,
+    lengthFt: opts.lengthFt ?? (wt.lengthFt || 90),
+    thickFt: opts.thickFt ?? (wt.thickFt || 10),
+    heightFt: wt.heightFt || 20,
+  };
+}
+const _presetRect = (type, xIn, yIn, wIn, hIn, rot = 0) => ({ type, x: xIn * _IN, y: yIn * _IN, w: wIn * _IN, h: hIn * _IN, rot });
+const _presetLine = (type, ptsIn, widthIn) => {
+  const r = { type, pts: ptsIn.map(p => ({ x: p[0] * _IN, y: p[1] * _IN })) };
+  if (widthIn != null) r.widthIn = widthIn;
+  return r;
+};
+function _makePreset(units, terrain, wIn, hIn) {
+  let n = 1;
+  for (const u of units) u.id = n++;
+  for (const t of terrain) t.id = 'tr' + (n++);
+  return {
+    format: 'chainmail-board', simVersion: SIM_VERSION, savedAt: null,
+    board: { wIn, hIn },
+    state: {
+      units, engagements: [], terrain,
+      selectedId: null, targetId: null, ctxUnitId: null,
+      nextId: n, turn: 1, phaseIdx: 0, firstMover: 'A',
+      initiativeRoll: null, rngSeed: (Date.now() >>> 0) || 1, logHtml: '',
+    },
+  };
+}
+const PRESETS = [
+  {
+    key: 'open', name: 'Open Field',
+    desc: 'A bare 8×4 ft table — a clean canvas to deploy on.',
+    build: () => _makePreset([], [], 96, 48),
+  },
+  {
+    key: 'river', name: 'River Crossing',
+    desc: 'A river across the table with a road crossing and wooded banks.',
+    build: () => _makePreset([], [
+      _presetLine('river', [[0, 22], [30, 25], [56, 23], [96, 26]]),
+      _presetLine('road', [[48, 2], [48, 46]]),
+      _presetRect('wooded', 18, 12, 12, 8),
+      _presetRect('wooded', 73, 35, 13, 8),
+      _presetRect('hill', 81, 14, 14, 10),
+    ], 96, 48),
+  },
+  {
+    key: 'fort', name: 'The Fortified Hill',
+    desc: 'A walled position with corner towers and a gatehouse on rising ground.',
+    build: () => {
+      const f = 180;   // merlons face down-board, toward an attacker on the south edge
+      return _makePreset([
+        _presetStruct('B', 'roundTower', 43.5, 22, f),
+        _presetStruct('B', 'curtain',    45.5, 22, f),
+        _presetStruct('B', 'gatehouse',  48,   22, f),
+        _presetStruct('B', 'curtain',    50.5, 22, f),
+        _presetStruct('B', 'roundTower', 52.5, 22, f),
+      ], [
+        _presetRect('hill', 48, 15, 44, 26),
+        _presetRect('wooded', 22, 36, 12, 8),
+        _presetRect('wooded', 74, 36, 12, 8),
+        _presetRect('rough', 48, 38, 14, 6),
+      ], 96, 48);
+    },
+  },
+];
+function onPresetPick(evt) {
+  const key = evt.target.value;
+  evt.target.selectedIndex = 0;   // snap the select back to the "Maps ▾" label
+  if (!key) return;
+  const preset = PRESETS.find(p => p.key === key);
+  if (!preset) return;
+  if (state.units.length && !confirm(`Load the "${preset.name}" map? This replaces the current board.`)) return;
+  loadScenario(preset.build());
+}
 // Snapshot the pre-action state. Consecutive same-target nudge/rotate runs
 // collapse (one undo reverses the whole run). Any push clears the redo stack.
 function pushUndo(tag) {
@@ -7059,6 +7153,12 @@ $('#btn-reset').addEventListener('click', resetBoard);
 $('#btn-save').addEventListener('click', saveScenario);
 $('#btn-load').addEventListener('click', () => $('#file-load').click());
 $('#file-load').addEventListener('change', onLoadFile);
+for (const p of PRESETS) {
+  const o = document.createElement('option');
+  o.value = p.key; o.textContent = p.name; o.title = p.desc;
+  $('#map-preset').appendChild(o);
+}
+$('#map-preset').addEventListener('change', onPresetPick);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
 $('#board').addEventListener('mouseup',   onBoardMouseUp);
