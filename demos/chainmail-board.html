@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.32 · Giant boulders move to the missile path. The Giant's ranged rock-throw is off the Batter (creature) button (now contact-only structural battering): a Giant hurls a boulder via the Fire missiles button as a thrown small-catapult attack — ≤20″, −2 to an enemy structure's defense — and shows the forward firing arc like other missile units (giantBoulderState + resolveGiantBoulder, missile phase, once per turn). It batters defense-value pieces only, matching the sim's catapults; against troops the button stays inert until catapult-vs-troops exists. The arc render now keys off GIANT as well as u.weapon, and the boulder resolution is kept separate from the troop-missile tables. Batter (creature) keeps the contact −X (Earth Elemental −6, Balrog −4, Giant −3, Troll/Ent −2). Asserts cover contact-only battering and the boulder's range / arc / target / side gating. -->
+<!-- chainmail-board.html · v0.11.33 · Catapults gain anti-personnel hit-area fire (p.12). A catapult may now target enemy troops/individuals within range and a 45° arc: resolveEngineFire branches on engineFireState.mode — 'batter' for defense-value targets (unchanged) or 'antipersonnel' for troops. resolveCatapultAntipersonnel rolls the optional scatter (two dice via catapultScatter; scatterImpact shifts the impact along the firing line — overshoot long, undershoot short, tie on), drops the 2″/3½″ Hit Area, and kills every uncovered figure of any unit wholly or partially under it (figuresUnderCircle), friend or foe; substantial overhead cover negates per unit. The 45° arc is now enforced for all catapult fire and drawn as ±45° boundary lines on the range display, with a hit-area preview at the aimed target and a faded impact circle (renderCatapultHit, cleared at end of round). Guns stay structure-only. Asserts cover scatterImpact, figuresUnderCircle, and the catapult range/arc/mode gating. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.32</title>
+<title>Chainmail — Battlefield · v0.11.33</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Giant boulder throw (missile)</div>
+    <div class="sub">Chainmail HTML Sim · Catapult hit-area fire</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.32</span>
+    <span class="version-tag">v0.11.33</span>
   </div>
 
   <div class="toolbar">
@@ -506,7 +506,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.32';
+const SIM_VERSION = '0.11.33';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2281,6 +2281,37 @@ function figuresWithinFootprint(source, target) {
   return Math.min(n, target.count);
 }
 
+// Count a unit's figures wholly or partially under a circular hit area centred at
+// (cx,cy) with the given pixel radius (p.12 catapult Hit Area). "Partially under" →
+// a figure counts when its cell comes within radius + half a figure-cell.
+function figuresUnderCircle(target, cx, cy, radiusPx) {
+  if (!target || target.destroyed) return 0;
+  if (target.kind === 'individual') return Math.hypot(target.x - cx, target.y - cy) <= radiusPx ? 1 : 0;
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  const cols = target.cols, f = (target.facing || 0) * Math.PI / 180;
+  const cos = Math.cos(f), sin = Math.sin(f), reach = radiusPx + pip / 2;
+  let n = 0;
+  for (let i = 0; i < target.count; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+    const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+    const wx = target.x + lx * cos - ly * sin;
+    const wy = target.y + lx * sin + ly * cos;
+    if (Math.hypot(wx - cx, wy - cy) <= reach) n++;
+  }
+  return Math.min(n, target.count);
+}
+
+// Where a called shot actually lands after the optional scatter (p.12): the miss is
+// taken along the firing line — overshoot pushes past the aim point, undershoot falls
+// short, a tie lands on the called spot.
+function scatterImpact(ax, ay, tx, ty, sc) {
+  if (!sc || sc.dir === 'on' || !sc.miss) return { x: tx, y: ty };
+  const dx = tx - ax, dy = ty - ay, len = Math.hypot(dx, dy) || 1;
+  const off = inchesToPx(sc.miss) * (sc.dir === 'over' ? 1 : -1);
+  return { x: tx + (dx / len) * off, y: ty + (dy / len) * off };
+}
+
 function inMissileRange(firer, target) {
   if (!firer.weapon) return { ok:false, reason:'no weapon' };
   const indirect = effectiveIndirect(firer, target);
@@ -2436,7 +2467,7 @@ function renderBoard() {
     renderTerrain() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -2700,7 +2731,19 @@ function renderWorks(u) {
     } else {
       const Rx = inchesToPx(CATAPULTS[f.key].max), Rn = inchesToPx(CATAPULTS[f.key].min);
       const disc = (r) => `M ${u.x - r} ${u.y} a ${r} ${r} 0 1 0 ${2*r} 0 a ${r} ${r} 0 1 0 ${-2*r} 0 Z`;
-      rangeRing = `<path d="${disc(Rx)} ${disc(Rn)}" fill="${rFill}" fill-rule="evenodd" pointer-events="none"/>` + ring(Rx, 1, '6 5', 1) + ring(Rn, 0.9, '3 5', 0.85);
+      const fac = (u.facing || 0) * Math.PI / 180;
+      const edge = (off) => { const ang = fac + off, sx = Math.sin(ang), cyd = -Math.cos(ang);
+        return `<line x1="${u.x + Rn*sx}" y1="${u.y + Rn*cyd}" x2="${u.x + Rx*sx}" y2="${u.y + Rx*cyd}" stroke="${rStroke}" stroke-width="1" stroke-dasharray="4 4" pointer-events="none"/>`; };
+      rangeRing = `<path d="${disc(Rx)} ${disc(Rn)}" fill="${rFill}" fill-rule="evenodd" pointer-events="none"/>`
+        + ring(Rx, 1, '6 5', 1) + ring(Rn, 0.9, '3 5', 0.85) + edge(-Math.PI/4) + edge(Math.PI/4);
+      // Hit-area preview at the aimed troop target (pre-scatter), so the kill radius is visible.
+      if (sel) {
+        const tgt = state.units.find(x => x.id === state.targetId);
+        if (tgt && tgt.kind !== 'works' && tgt.side !== u.side && !tgt.destroyed) {
+          const r2 = inchesToPx(CATAPULTS[f.key].hitArea / 2);
+          rangeRing += `<circle cx="${tgt.x}" cy="${tgt.y}" r="${r2}" fill="${rFill}" stroke="${rStroke}" stroke-width="1.2" stroke-dasharray="3 3" pointer-events="none"/>`;
+        }
+      }
     }
   }
   const bar = defenseBarSvg(u.x, u.y - s - 12, u.defenseMax, u.defenseLeft);
@@ -2923,6 +2966,15 @@ function renderUnit(u) {
   `;
 }
 
+function renderCatapultHit() {
+  const h = state.lastCatapultHit;
+  if (!h) return '';
+  const col  = h.side === 'A' ? 'rgba(58,110,144,0.9)'  : 'rgba(156,59,44,0.9)';
+  const fill = h.side === 'A' ? 'rgba(58,110,144,0.16)' : 'rgba(156,59,44,0.16)';
+  return `<circle cx="${h.x}" cy="${h.y}" r="${h.rPx}" fill="${fill}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 3" pointer-events="none"/>`
+       + `<circle cx="${h.x}" cy="${h.y}" r="2.2" fill="${col}" pointer-events="none"/>`;
+}
+
 function renderOverlay() {
   // Engagement arrow when both selected and in melee contact
   if (state.selectedId && state.targetId && state.selectedId !== state.targetId) {
@@ -3142,13 +3194,18 @@ function engineFireState(a, d) {
   if (!a || a.kind !== 'works' || !d || a.destroyed || d.destroyed) return null;
   const wt = WORKS_TYPES[a.worksType];
   if (!wt || !wt.fires) return null;
-  if (!(d.defenseMax > 0) || a.side === d.side) return { wt, ok: false, reason: 'target' };
-  const f = wt.fires, r = engineRangeToTarget(a, d);
-  const inRange = f.mode === 'catapult'
+  if (a.side === d.side) return { wt, ok: false, reason: 'target' };
+  const f = wt.fires, isCatapult = f.mode === 'catapult', isStructure = d.defenseMax > 0;
+  // A catapult may also drop its hit area on troops; guns stay structure-only for now.
+  if (!isStructure && !(isCatapult && d.kind !== 'works')) return { wt, f, ok: false, reason: 'target' };
+  const r = engineRangeToTarget(a, d);
+  const inRange = isCatapult
     ? (r >= CATAPULTS[f.key].min && r <= CATAPULTS[f.key].max)
     : (r <= CANNON[f.key].range);
+  const inArc = isCatapult ? inFiringArc(a, d) : true;   // 45° L/R for all catapult fire (p.12)
   const ready = worksReadyToFire(a, state.turn);
-  return { wt, f, r, inRange, ready, ok: inRange && ready };
+  const mode = isStructure ? 'batter' : 'antipersonnel';
+  return { wt, f, r, inRange, inArc, ready, mode, ok: inRange && inArc && ready };
 }
 function resolveEngineFire() {
   if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'artillery') return;
@@ -3157,13 +3214,60 @@ function resolveEngineFire() {
   const es = engineFireState(a, d);
   if (!es || !es.ok) return;
   pushUndo('engine-fire');
+  if (es.f.mode === 'catapult') a.readyTurn = state.turn + worksReloadTurns(a);
+  if (es.mode === 'antipersonnel') { resolveCatapultAntipersonnel(a, d, es); renderBoard(); return; }
   const pts = SIEGE_WEAPONS[es.wt.batterAs].points;
   const res = batterTarget(d, pts);
-  if (es.f.mode === 'catapult') a.readyTurn = state.turn + worksReloadTurns(a);
   const tgtName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'engine') : 'target';
   appendTurn(`${es.wt.name} fires`,
     `<div class="step">${a.side} ${es.wt.name} → ${tgtName} at ${es.r.toFixed(1)}″ · −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · DESTROYED' : ''}</div>`);
   renderBoard();
+}
+// Catapult hit area vs troops (p.12): roll the optional scatter, drop the circle, and
+// kill every uncovered figure of any unit wholly or partially under it — friend or foe.
+function resolveCatapultAntipersonnel(a, d, es) {
+  const o = d6(state.rng), un = d6(state.rng);
+  const sc = catapultScatter(o, un);
+  const impact = scatterImpact(a.x, a.y, d.x, d.y, sc);
+  const radiusPx = inchesToPx(CATAPULTS[es.f.key].hitArea / 2);
+  state.lastCatapultHit = { x: impact.x, y: impact.y, rPx: radiusPx, side: a.side };
+  const scatterTxt = sc.dir === 'on' ? 'on target' : `${sc.dir}shoot ${sc.miss}″`;
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  let html = `<div class="step">${a.side} ${es.wt.name} calls ${es.r.toFixed(1)}″ at ${d.side} ${nm(d)} · scatter ${o}/${un} → ${scatterTxt} · ${CATAPULTS[es.f.key].hitArea}″ hit area</div>`;
+  let struck = false, anyUnder = false;
+  for (const t of state.units.slice()) {
+    if (t.destroyed || t.kind === 'works') continue;
+    const n = figuresUnderCircle(t, impact.x, impact.y, radiusPx);
+    if (n <= 0) continue;
+    anyUnder = true;
+    if (effectiveCover(t) !== 'none') {
+      html += `<div class="step" style="color:var(--ink-soft)">${t.side} ${nm(t)}: ${n} under the area, spared by overhead cover</div>`;
+      continue;
+    }
+    struck = true;
+    const friendly = t.side === a.side ? ' · friendly fire!' : '';
+    if (t.kind === 'individual') {
+      t.destroyed = true;
+      html += `<div class="verdict v-rout">${t.side} ${nm(t)} crushed by the hit area${friendly}</div>`;
+      cleanupEngagementsForUnit(t.id);
+      if (t.id === state.selectedId) state.selectedId = null;
+      if (t.id === state.targetId) state.targetId = null;
+      continue;
+    }
+    applyCasualties(t, n);
+    capParalysisToCount(t);
+    if (t.destroyed) {
+      html += `<div class="verdict v-rout">${t.side} ${nm(t)} wiped out by the hit area${friendly}</div>`;
+      cleanupEngagementsForUnit(t.id);
+      if (t.id === state.selectedId) state.selectedId = null;
+      if (t.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="step">${t.side} ${nm(t)}: <b>${n}</b> killed${friendly} → ${t.count}/${t.startCount}</div>`;
+    }
+  }
+  if (!struck && !anyUnder) html += `<div class="verdict v-noeffect">the rock lands clear — no figures under the hit area</div>`;
+  else if (!struck) html += `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
+  appendTurn(`${es.wt.name} fires`, html);
 }
 // Eligibility for a covered ram battering an adjacent defense-value target. Contact is
 // approximated by centre-to-centre distance within half the target footprint + 1″; the
@@ -3284,10 +3388,12 @@ function updateButtons() {
     fb.hidden = !showFire;
     fb.disabled = !(es && es.ok && artilleryOk);
     fb.title = !showFire || !es ? '' :
-      es.reason === 'target' ? 'Target must be an enemy engine/structure with a defense value' :
+      es.reason === 'target' ? (es.f && es.f.mode === 'catapult' ? 'Target an enemy structure, or enemy troops for a hit-area shot' : 'Target must be an enemy engine/structure with a defense value') :
       !es.inRange ? `Out of range (${es.r.toFixed(1)}″ — fires ${es.f.mode === 'catapult' ? `${CATAPULTS[es.f.key].min}–${CATAPULTS[es.f.key].max}` : `0–${CANNON[es.f.key].range}`}″)` :
+      es.inArc === false ? `Outside the 45° arc — rotate the ${es.wt.name} to bear` :
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
       !artilleryOk ? 'Resolve in the Artillery phase' :
+      es.mode === 'antipersonnel' ? `Drop the ${CATAPULTS[es.f.key].hitArea}″ hit area on ${d ? d.side + ' ' : ''}troops at ${es.r.toFixed(1)}″ — kills figures under it (scatter applies)` :
       `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
   }
   const rb = ramBatterState(a, d);
@@ -5963,6 +6069,7 @@ function endRound() {
   pushUndo('endRound');
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
+  state.lastCatapultHit = null;
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
@@ -6670,6 +6777,34 @@ renderBoard();
   console.assert(catapultScatter(5, 3).dir === 'over' && catapultScatter(5, 3).miss === 5, 'catapult scatter: over wins, miss 5"');
   console.assert(catapultScatter(2, 4).dir === 'under' && catapultScatter(2, 4).miss === 4, 'catapult scatter: under wins, miss 4"');
   console.assert(catapultScatter(3, 3).dir === 'on' && catapultScatter(3, 3).miss === 0, 'catapult scatter: tie lands on range');
+  // scatterImpact: miss runs along the firing line — overshoot past the aim, undershoot short.
+  { const i1 = scatterImpact(0, 240, inchesToPx(20), 240, { dir:'over',  miss:5 });
+    const i2 = scatterImpact(0, 240, inchesToPx(20), 240, { dir:'under', miss:5 });
+    const i3 = scatterImpact(0, 240, inchesToPx(20), 240, { dir:'on',    miss:0 });
+    console.assert(Math.abs(i1.x - inchesToPx(25)) < 1e-6, 'scatter: overshoot 5" lands 25" out along the line');
+    console.assert(Math.abs(i2.x - inchesToPx(15)) < 1e-6, 'scatter: undershoot 5" falls short at 15"');
+    console.assert(Math.abs(i3.x - inchesToPx(20)) < 1e-6, 'scatter: a tie lands on the called range'); }
+  // figuresUnderCircle: figures wholly/partially under the hit area are counted.
+  { const ind = { kind:'individual', x:240, y:240 };
+    console.assert(figuresUnderCircle(ind, 240, 240, inchesToPx(1)) === 1, 'hit area: a lone figure under the circle counts');
+    console.assert(figuresUnderCircle(ind, 240 + inchesToPx(5), 240, inchesToPx(1)) === 0, 'hit area: a figure well outside is not counted');
+    const block = { kind:'mass', type:'HF', x:240, y:240, facing:0, count:9, cols:3, rows:3 };
+    console.assert(figuresUnderCircle(block, 240, 240, inchesToPx(6)) === 9, 'hit area: a wide circle covers the whole block');
+    console.assert(figuresUnderCircle(block, 240 + inchesToPx(40), 240, inchesToPx(1)) === 0, 'hit area: a far circle catches none'); }
+  // engineFireState: a catapult drops its hit area on troops within range + 45° arc; structures still batter.
+  { const cat = (facing=0) => ({ kind:'works', worksType:'catLight', side:'A', x:240, y:480, facing, crew:4 });
+    const foe = (x, y) => ({ kind:'mass', type:'HF', side:'B', x, y, count:6, cols:3, rows:2 });
+    const wall = (x, y) => ({ kind:'works', worksType:'curtain', side:'B', x, y, defenseMax:33, defenseLeft:33 });
+    const _t = state.turn; state.turn = 5;
+    const ap = engineFireState(cat(), foe(240, 480 - inchesToPx(20)));     // 20" ahead (15–30 band), in arc
+    console.assert(ap && ap.ok && ap.mode === 'antipersonnel', 'engine: catapult vs troops in range/arc is an anti-personnel shot');
+    const near = engineFireState(cat(), foe(240, 480 - inchesToPx(10)));   // 10" < 15" minimum
+    console.assert(near && !near.ok && !near.inRange, 'engine: troops inside the minimum range are out of range');
+    const flank = engineFireState(cat(), foe(240 + inchesToPx(20), 480));  // due east of a north-facing catapult
+    console.assert(flank && !flank.ok && flank.inArc === false, 'engine: a target on the flank is outside the 45° arc');
+    const bat = engineFireState(cat(), wall(240, 480 - inchesToPx(20)));
+    console.assert(bat && bat.ok && bat.mode === 'batter', 'engine: a structure target still resolves as battering');
+    state.turn = _t; }
   console.assert(arquebusHitOn(3) === 2 && arquebusHitOn(9) === 4 && arquebusHitOn(15) === 5 && arquebusHitOn(20) === null, 'arquebus bands 2/4/5, none beyond 18"');
   console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, rng: always(4) }).kills === 1, 'arquebus: die 4 at 9" (need 4) hits');
   console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, cover: 'half', rng: always(4) }).kills === 0, 'arquebus half cover (-1): die 4 -> 3 misses');
