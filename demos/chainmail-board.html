@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.39 · Restore man-to-man character creation (p.25-26, Appendix B). The Individual kind had been narrowed to fantastic figures only (its Type picker fed FANTASTIC_TYPES), so the base man-to-man combatant — a single man defined by weapon class × armor — could no longer be spawned even though the whole resolver (WEAPONS_MTM/ARMOR_MTM/mtmResolveRound/onResolveMtm) and the indiv weapon/armor/mounted form fields were intact. This re-adds it: a new MTM_TYPES base list (Man-at-arms + Viking Berserker, the only named special men in the rules) and the eight fantasy races (Elf/Orc/Hobbit/Sprite/Dwarf/Gnome/Goblin/Kobold, which have no Fantasy Combat Table row and so duel man-to-man) are now selectable as individuals via a grouped Type dropdown (Men / Fantasy races / Fantastic). All are added to MORTAL_TYPES so man-vs-man, man-vs-race, and race-vs-race resolve on the Melee Table; a mortal vs a big monster still falls to onResolveFantasy, which already prints a clean "no fantasy entry" message. Adds a Leader flag (+1 to all his dice, p.26) wired into mtmBlowModifier and the escalade path, and the Berserker's -2 attack (typeId attackMod) with its armor forced to leather+shield on spawn. FAITHFUL OMISSIONS: Berserker charge-on-sight / fight-to-death behaviors, racial specials (vision, light penalty, elf magic-weapon dice, dwarf half-kills, invisibility, obedience) remain deferred as for the mass game; leader +1 is wired into the man-to-man path, not the Fantasy Combat Table; man/race vs non-mortal creature is unmodeled (RAW: creature melees as N men). -->
+<!-- chainmail-board.html · v0.11.40 · Formation-change cost (p.10), gap 1 of the movement-rules cleanup. reshapeUnit previously only flipped acted.moved (a binary flag) and never charged the move budget, so the p.10 costs — line↔column = 1 move, column↔square = 1, line↔square = 2 (squares/hedgehog foot-only) — were neither deducted nor differentiated. Now formationChangeCostMoves(from,to) returns the table value (hedgehog treated as a square-type), formationChangeCostIn converts it to inches at the unit's base move allowance, and reshapeUnit adds that to movedThisTurn and — when Hard-enforce move allowance is on — refuses a reshape that would overrun the remaining budget (logging a 'Formation change refused' notice, mirroring the charge-refused path). Advisory mode still reshapes but the cost shows in 'Move used' so the OVER warning fires. FAITHFUL READING: the p.11 'double/half all penalties' discipline modifier is applied to FACING (where it's printed); formation costs follow the flat p.10 table. FAITHFUL OMISSION: 'units caught in melee during a formation change count as flanked' (p.10) is a combat nuance, not modeled here. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.39</title>
+<title>Chainmail — Battlefield · v0.11.40</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Man-to-man character creation restored</div>
+    <div class="sub">Chainmail HTML Sim · Formation-change cost enforced</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.39</span>
+    <span class="version-tag">v0.11.40</span>
   </div>
 
   <div class="toolbar">
@@ -517,7 +517,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.39';
+const SIM_VERSION = '0.11.40';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4474,13 +4474,30 @@ function canReshape(u, target) {
   if (target === 'hedgehog' && (u.type !== 'SP' || u.count < 10)) return false;
   return true;
 }
+// Formation-change cost (p.10): line↔column = 1 move, column↔square = 1,
+// line↔square = 2. Squares — and the hedgehog, a square-type — are foot only.
+// Cost is in *moves*, converted to inches at the unit's base move allowance.
+// (The p.11 "double/half all penalties" discipline note is read as applying to
+// FACING, where it's printed; formation costs follow the flat p.10 table.)
+function formationChangeCostMoves(from, to) {
+  const sq = f => (f === 'square' || f === 'hedgehog') ? 'square' : f;
+  const a = sq(from), b = sq(to);
+  if (a === b) return 0;
+  if ((a === 'line' && b === 'square') || (a === 'square' && b === 'line')) return 2;
+  return 1;  // line↔column, column↔square
+}
+const formationChangeCostIn = (u, target) => formationChangeCostMoves(u.formation || 'line', target) * baseMoveAllowanceOf(u);
 function reshapeUnit(u, target) {
-  if (!canReshape(u, target)) return false;
+  if (!canReshape(u, target)) return { ok: false, reason: 'invalid' };
+  const costIn = formationChangeCostIn(u, target);
+  if (state.settings.enforceMovement && remainingMoveIn(u) < costIn - 1e-9)
+    return { ok: false, reason: 'budget', costIn, remIn: remainingMoveIn(u) };
   const dims = formationDims(target, u.count);
   u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
   u.formation = target;
-  u.acted.moved = true; // formation change costs 1 move per p.10
-  return true;
+  u.movedThisTurn = (u.movedThisTurn || 0) + costIn;  // p.10: a formation change costs movement
+  u.acted.moved = true;
+  return { ok: true, costIn };
 }
 
 /* Engagement state (slice 6e) ---------------------------------------- */
@@ -6018,7 +6035,11 @@ function onContextMenuAction(evt) {
     return;
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
-    reshapeUnit(u, target);
+    const res = reshapeUnit(u, target);
+    if (res && !res.ok && res.reason === 'budget') {
+      appendTurn(`Formation change refused`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) can't form ${target} — it costs ${res.costIn.toFixed(1)}″ of movement (p.10) but only ${res.remIn.toFixed(1)}″ remain this turn.</div>`);
+    }
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
   } else if (act === 'delete') {
@@ -7076,6 +7097,23 @@ renderBoard();
     console.assert(mtmBlowModifier({ ...base, striker: { attackMod: -2 } }) === -2, 'mtm: a berserker takes −2 on attack (p.26)');
     console.assert(mtmBlowModifier({ ...base, round: 1, striker: { mounted: true, leader: true }, target: {} }) === 3, 'mtm: mounted-vs-foot round 1 (+2) plus leader (+1) = +3');
     console.assert(mtmBlowModifier({ ...base, striker: {} }) === 0, 'mtm: a plain footman has no modifier'); }
+
+  // Formation-change cost (p.10)
+  console.assert(formationChangeCostMoves('line', 'column') === 1 && formationChangeCostMoves('column', 'line') === 1, 'formation: line↔column = 1 move');
+  console.assert(formationChangeCostMoves('column', 'square') === 1, 'formation: column→square = 1 move');
+  console.assert(formationChangeCostMoves('line', 'square') === 2 && formationChangeCostMoves('square', 'line') === 2, 'formation: line↔square = 2 moves');
+  console.assert(formationChangeCostMoves('line', 'line') === 0, 'formation: no change = 0');
+  console.assert(formationChangeCostMoves('square', 'hedgehog') === 0, 'formation: square↔hedgehog (both square-type) = 0');
+  console.assert(formationChangeCostMoves('line', 'hedgehog') === 2 && formationChangeCostMoves('column', 'hedgehog') === 1, 'formation: hedgehog costs as a square (line 2, column 1)');
+  { const sp = { kind: 'mass', type: 'HF', formation: 'line', count: 20, cols: 20, rows: 1, movedThisTurn: 0, acted: {} };
+    const save = state.settings.enforceMovement;
+    state.settings.enforceMovement = true;
+    sp.movedThisTurn = baseMoveAllowanceOf(sp) - 1;          // almost spent
+    console.assert(reshapeUnit(sp, 'square').reason === 'budget', 'formation: hard-enforce refuses a reshape that overruns the budget');
+    sp.movedThisTurn = 0;
+    const r = reshapeUnit(sp, 'column');
+    console.assert(r.ok && Math.abs(sp.movedThisTurn - baseMoveAllowanceOf(sp)) < 1e-9, 'formation: a permitted reshape charges 1 move to movedThisTurn');
+    state.settings.enforceMovement = save; }
   console.assert(mineFoiled(10) && !mineFoiled(15), 'siege: counter-mine within 12" foils the mine');
   console.assert(MINE.breechWidthIn === 6 && BREECH.widthIn === 6, 'siege: a mined / battered breech is 6" wide');
 
