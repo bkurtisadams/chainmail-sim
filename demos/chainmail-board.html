@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.40 · Formation-change cost (p.10), gap 1 of the movement-rules cleanup. reshapeUnit previously only flipped acted.moved (a binary flag) and never charged the move budget, so the p.10 costs — line↔column = 1 move, column↔square = 1, line↔square = 2 (squares/hedgehog foot-only) — were neither deducted nor differentiated. Now formationChangeCostMoves(from,to) returns the table value (hedgehog treated as a square-type), formationChangeCostIn converts it to inches at the unit's base move allowance, and reshapeUnit adds that to movedThisTurn and — when Hard-enforce move allowance is on — refuses a reshape that would overrun the remaining budget (logging a 'Formation change refused' notice, mirroring the charge-refused path). Advisory mode still reshapes but the cost shows in 'Move used' so the OVER warning fires. FAITHFUL READING: the p.11 'double/half all penalties' discipline modifier is applied to FACING (where it's printed); formation costs follow the flat p.10 table. FAITHFUL OMISSION: 'units caught in melee during a formation change count as flanked' (p.10) is a combat nuance, not modeled here. -->
+<!-- chainmail-board.html · v0.11.41 · Fix badge/label placement on wide or rotated units. The screen-fixed M/F/X action badges (above) and the side·type·count label (below) were offset by Math.max(b.w, b.h)/2 — the worst-case footprint dimension — so a wide line (or any long unit) flung the badges to the top of the board and the label far below it, looking detached and "unchanged" by a reshape/rotate. They now offset by unitScreenHalfHeight(b, facing) = (|w·sinθ| + |h·cosθ|)/2, the true screen-space vertical half-extent of the footprint after rotate(facing): a line facing up/down clears by h/2, the same line rotated 90° clears by w/2, and diagonals fall between. Pure helper, unit-tested. Rendering-only; no rules/data change. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.40</title>
+<title>Chainmail — Battlefield · v0.11.41</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Formation-change cost enforced</div>
+    <div class="sub">Chainmail HTML Sim · Badge/label placement fix</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.40</span>
+    <span class="version-tag">v0.11.41</span>
   </div>
 
   <div class="toolbar">
@@ -517,7 +517,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.40';
+const SIM_VERSION = '0.11.41';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1973,6 +1973,14 @@ function unitBounds(u) {
   const h = u.rows * pip + (u.rows - 1) * gap + 2 * pad;
   return { w, h, pip, gap, pad, fig };
 }
+// Screen-space vertical half-extent of a unit's footprint after rotate(facing),
+// so screen-fixed badges (above) and the label (below) hug the actual top/bottom
+// in any orientation — instead of the old worst-case max(w,h)/2 that flung them
+// off a wide line. SVG rotate maps a corner's screen-y to lx·sinθ + ly·cosθ.
+function unitScreenHalfHeight(b, facingDeg) {
+  const th = (facingDeg || 0) * Math.PI / 180;
+  return (Math.abs(b.w * Math.sin(th)) + Math.abs(b.h * Math.cos(th))) / 2;
+}
 
 // Which edge of `defender` is `attacker` hitting, based on geometry.
 function engagementEdge(attacker, defender) {
@@ -2908,7 +2916,7 @@ function renderUnit(u) {
   // Action status badges (above the unit, screen-fixed orientation)
   const acted = u.acted || { moved:false, fired:false, fought:false };
   const allSpent = acted.moved && acted.fired && acted.fought;
-  const badgeY = u.y - Math.max(b.w, b.h)/2 - 8;
+  const badgeY = u.y - unitScreenHalfHeight(b, u.facing) - 8;
   const badgeData = [
     { label:'M', used: acted.moved  },
     { label:'F', used: acted.fired  },
@@ -2939,7 +2947,7 @@ function renderUnit(u) {
   const sv = statusVisual(u.status || 'ready');
   const fatigueOpacity = u.fatigued ? 0.85 : 1;
   const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity * (idleNow ? 0.4 : 1);
-  const labelY = u.y + Math.max(b.w, b.h)/2 + 14;
+  const labelY = u.y + unitScreenHalfHeight(b, u.facing) + 14;
   let badgeRow = 0;
   const chargeBadgeStr = u.charged
     ? (() => {
@@ -7114,6 +7122,14 @@ renderBoard();
     const r = reshapeUnit(sp, 'column');
     console.assert(r.ok && Math.abs(sp.movedThisTurn - baseMoveAllowanceOf(sp)) < 1e-9, 'formation: a permitted reshape charges 1 move to movedThisTurn');
     state.settings.enforceMovement = save; }
+
+  // Screen-fixed badge/label clearance tracks orientation (not worst-case max)
+  { const wide = { w: 240, h: 28 };  // a 10-wide line
+    console.assert(Math.abs(unitScreenHalfHeight(wide, 0)   - 14) < 1e-6, 'render: line facing up → clearance = h/2');
+    console.assert(Math.abs(unitScreenHalfHeight(wide, 180) - 14) < 1e-6, 'render: line facing down → clearance = h/2');
+    console.assert(Math.abs(unitScreenHalfHeight(wide, 90)  - 120) < 1e-6, 'render: line rotated 90° → clearance = w/2');
+    const diag = unitScreenHalfHeight(wide, 45);
+    console.assert(diag > 14 && diag < 120, 'render: 45° clearance sits between h/2 and w/2'); }
   console.assert(mineFoiled(10) && !mineFoiled(15), 'siege: counter-mine within 12" foils the mine');
   console.assert(MINE.breechWidthIn === 6 && BREECH.widthIn === 6, 'siege: a mined / battered breech is 6" wide');
 
