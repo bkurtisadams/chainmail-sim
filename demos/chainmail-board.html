@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.50 · Road bonus now requires facing ALONG the road, plus a terrain readout. The road bonus (p.9) represents a body marching along a road, so a unit straddling it crossways (e.g. a line drawn across a road) shouldn't get it: roadAlignedAt gates the bonus on the unit's facing being within 45° of the road's long-axis direction (roadAxisDegAt, rotation-aware). The unit-info panel gains an "On terrain" line listing what the unit's centre is over (or "open ground"), and the Move-used line now shows "(on road · face along it for +N)" when a mounted unit sits on a road but faces across it — so the bonus state is never a mystery. Unchanged: only horse get a bonus (HH +3, MH/LH +6) per the p.9 table; foot, works, and individuals get none; the bonus is still evaluated at the current position (drag origin during a drag). NOTE: roads/rivers are still axis-rect strips; a freehand/polyline "chalk & ribbon" representation is under discussion as a larger follow-up. -->
+<!-- chainmail-board.html · v0.11.51 · Mounted road bonus (house rule, OFF by default — not RAW). The p.9 ROAD column only lists horse, so a mounted hero/wizard (an individual with the Mounted flag) gets no road bonus by the rules as written. New setting "Mounted figures get the road bonus" (state.settings.mountedRoadBonus, default false): when ON, any unit with the existing Mounted flag that isn't already a horse type earns the Heavy-Horse bonus (+3, MOUNTED_ROAD_BONUS) — still subject to the same on-a-road-and-facing-along-it gate from v0.11.50. roadBonusType is the only logic change; the Mounted checkbox, its melee/charge/facing effects, and the sidebar "Mounted: yes" line already existed. With the setting off, behaviour is unchanged from RAW (mounted flag ignored for movement). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.50</title>
+<title>Chainmail — Battlefield · v0.11.51</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -239,7 +239,7 @@
     <h1>Battlefield</h1>
     <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.50</span>
+    <span class="version-tag">v0.11.51</span>
   </div>
 
   <div class="toolbar">
@@ -505,6 +505,7 @@
       <label><input type="checkbox" data-setting="enforceMovement"> Hard-enforce move allowance — clamp drags &amp; nudges at the remaining limit</label>
       <label><input type="checkbox" data-setting="enforcePhases"> Enforce turn phases — restrict movement/combat to the move/counter-move sequence (p.9)</label>
       <label><input type="checkbox" data-setting="snapToGrid"> Snap to grid — clamp unit centres to the 1″ grid while moving (turn the grid on with <b>g</b>)</label>
+      <label><input type="checkbox" data-setting="mountedRoadBonus"> Mounted figures get the road bonus — <i>house rule, not RAW</i>: a Mounted individual marches as Heavy Horse (+3) on a road</label>
       <p>Each unit's distance moved this turn is tracked against its type's
          allowance (the drag ruler and the unit pane show it). Off (default) is
          <b>advisory</b>: you can move freely and the sim only warns when a unit
@@ -519,7 +520,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.50';
+const SIM_VERSION = '0.11.51';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1827,6 +1828,7 @@ const state = {
     enforceMovement: false,   // Slice 8A: false = advisory (warn past allowance); true = hard-enforce (clamp drags/nudges at the remaining allowance). Off by default so the freeform play-aid still works.
     enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
     snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
+    mountedRoadBonus: false,  // House rule (NOT RAW): mounted individuals get the Heavy-Horse road bonus (+3). p.9 lists horse only.
     boardWIn: 72,             // playing-area width in tabletop inches (resizable; clamped 24–600)
     boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
   },
@@ -1875,11 +1877,19 @@ function snapPos(u, px, py) {
    accumulates straight-line drag/nudge distance and resets each round. */
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
-// Road move bonus (p.10 ROAD column): mounted/wheeled types only; foot get none.
-// MK (Mounted Knights) ride as Heavy Horse (+3). Catapults/cannons (+3) and
-// wagons (+6) are deferred — works move by push-speed, a separate model.
+// Road move bonus (p.9 ROAD column): horse types only — HH +3, MH/LH +6; foot get
+// none. MK (Mounted Knights) ride as Heavy Horse (+3). Catapults/cannons (+3) and
+// wagons (+6) are deferred (works move by push-speed). A mounted individual gets the
+// Heavy-Horse bonus ONLY under the optional, non-RAW mountedRoadBonus house rule.
 const ROAD_BONUS = { HH: 3, MH: 6, LH: 6, MK: 3 };
-const roadBonusType = (u) => (u.kind === 'mass') ? (ROAD_BONUS[u.type] || 0) : 0;
+const MOUNTED_ROAD_BONUS = 3;   // house rule only: a mounted figure marches as Heavy Horse
+function roadBonusType(u) {
+  if (u.kind === 'works') return 0;
+  const raw = (u.kind === 'mass') ? (ROAD_BONUS[u.type] || 0) : 0;
+  if (raw) return raw;
+  if (state.settings.mountedRoadBonus && u.mounted) return MOUNTED_ROAD_BONUS;
+  return 0;
+}
 const onRoadAt = (x, y) => terrainTypesAt(x, y).some(t => t.road);
 // World direction (deg) of the road strip under a point — its long axis — or null.
 function roadAxisDegAt(x, y) {
@@ -7422,6 +7432,18 @@ renderBoard();
     const charging = { kind: 'mass', type: 'LH', charged: true, x: 100, y: 100, facing: 90 };
     console.assert(moveAllowanceOf(charging) === chargeAllowanceOf(charging), 'road: a declared charge uses the charge column, no road bonus');
     console.assert(baseMoveAllowanceOf(lh) === MOVE_ALLOWANCE['LH'], 'road: baseMoveAllowanceOf (facing/formation/half-move) is untouched');
+    // Mounted road bonus — house rule, gated by the setting (not RAW)
+    const savedMRB = state.settings.mountedRoadBonus;
+    const hero = { kind: 'individual', type: 'HERO', mounted: true, x: 100, y: 100, facing: 90 };   // mounted hero, marching along
+    const footHero = { kind: 'individual', type: 'HERO', mounted: false, x: 100, y: 100, facing: 90 };
+    state.settings.mountedRoadBonus = false;
+    console.assert(roadBonusOf(hero) === 0, 'road: with the house rule OFF (RAW), a mounted hero gets no road bonus');
+    state.settings.mountedRoadBonus = true;
+    console.assert(roadBonusOf(hero) === 3, 'road: with the house rule ON, a mounted hero marches as Heavy Horse (+3)');
+    console.assert(roadBonusOf(footHero) === 0, 'road: an unmounted individual never gets the bonus');
+    console.assert(roadBonusOf({ ...hero, facing: 0 }) === 0, 'road: a mounted hero facing across the road still gets none');
+    console.assert(roadBonusOf(lh) === 6, 'road: the house rule does not change RAW horse bonuses');
+    state.settings.mountedRoadBonus = savedMRB;
     state.terrain = savedTerrain; }
 
   // Screen-fixed badge/label clearance tracks orientation (not worst-case max)
