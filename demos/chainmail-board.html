@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.29 · Fantastic-creature siege batter (p.39). A selected fantastic creature with an enemy fortification targeted gets a Batter (creature) action: in contact it removes its structural points per turn (FANTASTIC_BATTER — Earth Elemental −6, Balrog −4, Giant −3, Troll/Ent −2; melee phase), and a Giant out of contact but within GIANT_ROCK_RANGE_IN (20″) instead hurls a rock as a small catapult (−2; artillery phase). A Balrog that batters a flammable target also sets it alight (STRUCTURE_INFLAMERS → igniteWorks), giving the first in-play ignition trigger. applyCreatureBatter is the pure resolver (reuses batterTarget + the C.8 burn system); creatureBatterState/resolveCreatureBatter gate the button and pick the mode by contact. The sim's single ELEMENTAL is read as the earth elemental; the table's Ogre (no such type) and Wizard fire-ball/lightning −3 (a ranged spell) are left for a later spell slice. Asserts cover the point values, Giant/Elemental battering, Balrog batter+inflame, stone-immune-to-flame, and a non-siege creature being unable to batter. -->
+<!-- chainmail-board.html · v0.11.30 · Ignition triggers. Fire now actually sets wooden works alight in play. A dragon's breath cone ignites every flammable enemy works piece whose centre falls under it (reusing the tested pointInBreathCone), and a Balrog's immolation sets flammable enemy works within reach alight (footprint-pad contact, as the ram/creature batter use) — including when there is no troop target, so a Balrog can simply torch a tower or palisade. Both route through a new igniteFlammableWorks(test) board helper that scans state.units and calls the existing igniteWorks primitive (already-burning and non-flammable pieces are skipped; the 5-turn burn then ticks down in endRound as before). Side filtering is the caller's job — fire is aimed offensively, so only enemy works catch. Combined with the Balrog's batter-inflame from v0.11.29, the burn system now has dragon, Balrog-immolate, and Balrog-batter triggers; wizard fire-ball/lightning and boiling-oil placement remain for later slices. Asserts cover the cone/footprint scan lighting only flammable enemy works and not re-lighting a burning piece. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.29</title>
+<title>Chainmail — Battlefield · v0.11.30</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Fantastic siege batter</div>
+    <div class="sub">Chainmail HTML Sim · Fire ignites wooden works</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.29</span>
+    <span class="version-tag">v0.11.30</span>
   </div>
 
   <div class="toolbar">
@@ -506,7 +506,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.29';
+const SIM_VERSION = '0.11.30';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -5313,6 +5313,19 @@ function onMassMissileAtIndiv(a, d) {
   renderBoard();
 }
 
+// Ignite every flammable, not-yet-burning works piece that passes test(w) — e.g. under a
+// dragon's breath cone or within a Balrog's reach. Side filtering is the caller's job (fire
+// is aimed offensively, so callers pass an enemy-side check). Returns the names ignited.
+function igniteFlammableWorks(test, opts = {}) {
+  const lit = [];
+  for (const w of state.units) {
+    if (w.destroyed || w.kind !== 'works' || w.burning || !worksIsFlammable(w.worksType)) continue;
+    if (!test(w)) continue;
+    if (igniteWorks(w, opts).ignited) lit.push(WORKS_TYPES[w.worksType]?.name || 'works');
+  }
+  return lit;
+}
+
 // Dragon breath (p.34). Source must be a DRAGON; the cone projects along the
 // dragon→target vector. Every figure of the target unit under the cone dies,
 // except Dragon/Super Hero/Wizard/Elemental, who save on 2d6 ≥ 7. Three breaths
@@ -5392,6 +5405,9 @@ function onResolveDragonBreath(dragon) {
     }
     if (d.destroyed && d.id === state.targetId) state.targetId = null;
   }
+
+  const litW = igniteFlammableWorks(w => w.side !== dragon.side && pointInBreathCone(dragon.x, dragon.y, ux, uy, w.x, w.y).hit);
+  if (litW.length) html += `<div class="step" style="color:#a8400f">the breath sets ${litW.join(', ')} alight — burns ${BOILING_OIL.woodBurnTurns} turns</div>`;
 
   dragon.breathsUsed = used + 1;
   dragon.acted.fired = true;
@@ -5581,14 +5597,18 @@ function onContextMenuAction(evt) {
     }
   } else if (act === 'immolate') {
     const tgt = state.units.find(x => x.id === state.targetId);
+    const litW = igniteFlammableWorks(w => w.side !== u.side && engineRangeToTarget(u, w) <= ((w.lengthFt ? ftToIn(Math.max(w.lengthFt, w.thickFt)) / 2 + 1 : 2)));
+    const litNote = litW.length ? `<div class="step" style="color:#a8400f">the Balrog's flames set ${litW.join(', ')} alight</div>` : '';
     if (!tgt || tgt.destroyed || tgt.side === u.side) {
-      appendTurn(`Immolation — no target`, `<div class="step">Shift-click an enemy unit, move the Balrog into contact, then immolate.</div>`);
+      appendTurn(litW.length ? `Immolation` : `Immolation — no target`,
+        litW.length ? litNote : `<div class="step">Shift-click an enemy unit, move the Balrog into contact, then immolate.</div>`);
     } else if (tgt.kind === 'individual') {
-      appendTurn(`Immolation — n/a`, `<div class="step">${typeById(tgt.type).name} isn't a normal rank-and-file unit — hero/fantastic flame saves aren't modeled yet.</div>`);
+      appendTurn(`Immolation — n/a`, `<div class="step">${typeById(tgt.type).name} isn't a normal rank-and-file unit — hero/fantastic flame saves aren't modeled yet.</div>` + litNote);
     } else {
       const n = figuresWithinFootprint(u, tgt);
       if (n <= 0) {
-        appendTurn(`Immolation — out of reach`, `<div class="step">No ${typeById(tgt.type).name} figures fall within the Balrog's flames — move it onto the formation first.</div>`);
+        appendTurn(litW.length ? `Immolation` : `Immolation — out of reach`,
+          litW.length ? litNote : `<div class="step">No ${typeById(tgt.type).name} figures fall within the Balrog's flames — move it onto the formation first.</div>`);
       } else {
         applyCasualties(tgt, n);
         capParalysisToCount(tgt);
@@ -5601,6 +5621,7 @@ function onContextMenuAction(evt) {
         } else {
           body += `<div class="step">${typeById(tgt.type).name} now ${tgt.count}/${tgt.startCount}</div>`;
         }
+        body += litNote;
         appendTurn(`Immolation · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`, body);
       }
     }
@@ -6069,6 +6090,19 @@ renderBoard();
   console.assert(pointInBreathCone(0,0,1,0, -inchesToPx(2), 0).hit === false, 'behind the mouth is a miss');
   console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.4)).hit === true, 'within far half-width is hit');
   console.assert(pointInBreathCone(0,0,1,0, inchesToPx(9), inchesToPx(1.6)).hit === false, 'outside far half-width is a miss');
+  // Ignition triggers (v0.11.30): a cone/footprint scan lights only flammable enemy works.
+  { const saved = state.units;
+    state.units = [
+      { id:'iw1', kind:'works', worksType:'tower',   side:'B', x:inchesToPx(5),  y:0, burning:null },                                  // flammable enemy, in cone
+      { id:'iw2', kind:'works', worksType:'tower',   side:'B', x:inchesToPx(12), y:0, burning:null },                                  // beyond the 9″ cone
+      { id:'iw3', kind:'works', worksType:'curtain', side:'B', x:inchesToPx(5),  y:0, burning:null, defenseMax:30, defenseLeft:30 },   // stone — not flammable
+      { id:'iw4', kind:'works', worksType:'tower',   side:'A', x:inchesToPx(5),  y:0, burning:null },                                  // friendly — caller's side filter skips it
+    ];
+    const lit = igniteFlammableWorks(w => w.side !== 'A' && pointInBreathCone(0,0,1,0, w.x, w.y).hit);
+    console.assert(lit.length === 1 && state.units[0].burning && !state.units[1].burning && !state.units[2].burning && !state.units[3].burning,
+      'ignite: a cone lights only the flammable enemy works under it (not stone, out-of-cone, or friendly)');
+    console.assert(igniteFlammableWorks(w => w.side !== 'A' && pointInBreathCone(0,0,1,0, w.x, w.y).hit).length === 0, 'ignite: an already-burning piece is not re-lit on a second pass');
+    state.units = saved; }
   console.assert(DRAGON_FIRE_SAVE_TYPES.has('WIZARD') && !DRAGON_FIRE_SAVE_TYPES.has('HERO'), 'breath save: wizard yes, hero no');
 
   // --- Resolver coverage with forced dice. forDie(n) makes d6 → n, so we can
