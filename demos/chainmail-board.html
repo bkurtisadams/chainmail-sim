@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.44 · Road move bonus (p.10), gap 2 of the movement-rules cleanup. The p.10 MOVE table's ROAD BONUS column gave only mounted/wheeled types extra inches on a road; foot get none. Adds a 'road' terrain type (brown strip, moveMult 1, charge-able) to TERRAIN_TYPES/TERRAIN_ORDER, a ROAD_BONUS table (Heavy Horse +3, Medium Horse +6, Light Horse +6, Mounted Knights +3 as Heavy Horse), and roadBonusOf(u), which adds the bonus to moveAllowanceOf's normal-move branch when the unit BEGAN the turn on a road (new turnStartX/turnStartY, reset in endRound like turnStartFacing). The bonus flows through effectiveMoveAllowance → remaining budget → the drag/nudge clamp and the sidebar "Move used" line (now annotated "+N road"). baseMoveAllowanceOf is untouched, so facing/formation costs and the half-move line stay on the plain type move; a declared charge uses the charge column (no road bonus). FAITHFUL SIMPLIFICATIONS: foot get no road bonus (per the table); catapults/cannons (+3) and wagons (+6) are deferred since works move by push-speed, a separate model; mounted individuals get no bonus (the table is for mass bodies); and "began the turn on a road" doesn't verify the whole path stays on the road. -->
+<!-- chainmail-board.html · v0.11.45 · Hill direction (p.8, p.10), gap 3 of the movement-rules cleanup. RAW: "hill slows movement 50%, prevents all charge moves, but movement downhill is at normal speed" and "movement uphill equals two normal moves per uphill move." The sim charged hills a flat 0.5× (double cost) in BOTH directions; now a hill slows only UPHILL. A hill rect's centre is treated as the crest: terrainMoveMultAlong(x,y,ux,uy) gives 0.5 when a step heads toward the crest (climbing) and 1 (normal) downhill or along a contour, so crossing a hill costs double up to the crest then normal down the far side. pathMoveCost samples this with the move's heading; the flat terrainMoveMultAt / terrainCostMultAt helpers are unchanged (worst-case uphill, still used by tests). Only the 'hill' type is directional (flagged hill:true) — woods/marsh/ditch are "as hill" for the 50% slow + no-charge but are flat obstacles, so they slow regardless of direction. Charges remain barred on hills both ways ("prevents all charge moves"); the noCharge gate is untouched. FAITHFUL SIMPLIFICATION: the crest is the rect centre, so a hill is modelled as a cone — fine for a single mound, approximate for a long ridge. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.44</title>
+<title>Chainmail — Battlefield · v0.11.45</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Road move bonus</div>
+    <div class="sub">Chainmail HTML Sim · Hill direction (uphill slows)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.44</span>
+    <span class="version-tag">v0.11.45</span>
   </div>
 
   <div class="toolbar">
@@ -518,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.44';
+const SIM_VERSION = '0.11.45';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -531,7 +531,7 @@ const MELEE_RANGE_IN = 3; // inches of contact, per rules
 // crossing costs are T2. Fills are translucent so the grid and units read
 // through. wIn/hIn are the default footprint dropped on placement.
 const TERRAIN_TYPES = Object.freeze({
-  hill:   { label: 'Hill',          fill: '#cda86a', moveMult: 0.5, noCharge: true,                      wIn: 12, hIn: 8 },
+  hill:   { label: 'Hill',          fill: '#cda86a', moveMult: 0.5, noCharge: true, hill: true,           wIn: 12, hIn: 8 },
   wooded: { label: 'Woods',         fill: '#5f7d4f', moveMult: 0.5, noCharge: true, blocksFormed: true, softCover: true, blocksIndirect: true, wIn: 10, hIn: 8 },
   marshy: { label: 'Marsh',         fill: '#7a8a5a', moveMult: 0.5, noCharge: true, blocksHeavy: true,   wIn: 9,  hIn: 7 },
   ditch:  { label: 'Ditch/Rampart', fill: '#a98b5a', moveMult: 0.5, noCharge: true,                      wIn: 14, hIn: 3 },
@@ -2147,6 +2147,24 @@ function terrainMoveMultAt(x, y) {
   for (const t of terrainTypesAt(x, y)) if (t.moveMult < m) m = t.moveMult;
   return m;
 }
+// Direction-aware move multiplier along a step heading (ux,uy normalized). A
+// hill slows only UPHILL — toward its crest (rect centre); downhill or along a
+// contour is normal (p.8: "movement downhill is at normal speed"; p.10: "uphill
+// equals two normal moves"). Other terrain uses its flat moveMult either way.
+function terrainMoveMultAlong(x, y, ux, uy) {
+  let m = 1;
+  for (const r of state.terrain) {
+    if (!inTerrainRect(x, y, r)) continue;
+    const t = TERRAIN_TYPES[r.type]; if (!t) continue;
+    let mult = t.moveMult;
+    if (t.hill) {
+      const toward = (r.x - x) * ux + (r.y - y) * uy;   // > 0 ⇒ climbing toward the crest
+      mult = toward > 0 ? t.moveMult : 1;
+    }
+    if (mult < m) m = mult;
+  }
+  return m;
+}
 // First no-charge terrain type under a point, else null (for the charge gate).
 function terrainNoChargeAt(x, y) {
   return terrainTypesAt(x, y).find(t => t.noCharge) || null;
@@ -2256,6 +2274,7 @@ function crossingRegionsAt(x, y) {
 function pathMoveCost(ox, oy, dx, dy, u, budgetIn = Infinity) {
   const lenPx = Math.hypot(dx, dy);
   if (lenPx < 1e-6) return { cost: 0, scale: 1 };
+  const ux = dx / lenPx, uy = dy / lenPx;   // step heading, for direction-aware hill cost
   const steps = Math.max(2, Math.ceil(lenPx / 4));   // ~4px ≈ 0.17″ sampling, matches moveBlockScale
   const stepIn = pxToInches(lenPx) / steps;
   const fullMove = baseMoveAllowanceOf(u);
@@ -2263,7 +2282,7 @@ function pathMoveCost(ox, oy, dx, dy, u, budgetIn = Infinity) {
   let prev = crossingRegionsAt(ox, oy);
   for (let i = 1; i <= steps; i++) {
     const t = i / steps, mid = t - 0.5 / steps;
-    let inc = stepIn * terrainCostMultAt(ox + dx * mid, oy + dy * mid);
+    let inc = stepIn / terrainMoveMultAlong(ox + dx * mid, oy + dy * mid, ux, uy);
     const here = crossingRegionsAt(ox + dx * t, oy + dy * t);
     for (const [id, pen] of here) if (!prev.has(id)) inc += (pen === 'full') ? fullMove : pen;
     prev = here;
@@ -6798,9 +6817,15 @@ renderBoard();
     console.assert(terrainRegionAt(100, 100) !== null && terrainRegionAt(1000, 1000) === null, 'terrain: region hit-test by point');
     console.assert(Math.abs(effectiveMoveAllowance({ type:'LF', x:100, y:100 }) - 12) < 1e-9, 'T2b: effectiveMoveAllowance no longer scales by centre terrain — slow is charged per-inch as path cost');
     console.assert(terrainCostMultAt(100, 100) === 2 && terrainCostMultAt(1000, 1000) === 1, 'T2b: cost factor is 2× inside the hill, 1× on clear ground');
-    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }).cost - 10) < 1e-6, 'T2b: a 5″ path wholly inside the hill costs 10 budget-inches (2×)');
+    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }).cost - 7.5) < 1e-6, 'hill: a 5″ path crossing the crest costs 7.5 (2.5″ uphill ×2 + 2.5″ downhill ×1)');
     console.assert(Math.abs(pathMoveCost(1000, 1000, 120, 0, { type:'LF' }).cost - 5) < 1e-6, 'T2b: a 5″ path on clear ground costs 5');
-    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }, 6).scale - 0.6) < 1e-6, 'T2b: a 6-budget clamp on the hill reaches 60% of a 5″ vector (3″)');
+    console.assert(Math.abs(pathMoveCost(40, 100, 120, 0, { type:'LF' }, 6).scale - 0.7) < 1e-6, 'hill: a 6-budget clamp crossing the crest reaches 70% of the 5″ vector (costlier up, cheaper down)');
+    // Hill direction (p.8/p.10): uphill (toward the crest) slows 50%; downhill/contour normal
+    console.assert(terrainMoveMultAlong(40, 100, 1, 0) === 0.5, 'hill: heading toward the crest is uphill (0.5×)');
+    console.assert(terrainMoveMultAlong(160, 100, 1, 0) === 1, 'hill: heading away past the crest is downhill (normal)');
+    console.assert(terrainMoveMultAlong(40, 100, 0, 1) === 1, 'hill: heading along the contour is not uphill (normal)');
+    console.assert(Math.abs(pathMoveCost(40, 100, 60, 0, { type:'LF' }).cost - 5) < 1e-6, 'hill: a 2.5″ pure-uphill path to the crest costs 5 (2×)');
+    console.assert(Math.abs(pathMoveCost(100, 100, 60, 0, { type:'LF' }).cost - 2.5) < 1e-6, 'hill: a 2.5″ pure-downhill path from the crest costs 2.5 (normal)');
     // T2: woods stops formed bodies (mass); individuals pass; an in-woods start isn't trapped.
     state.terrain = [{ id:'tw', type:'wooded', x:400, y:100, w:240, h:192 }];   // woods rect 280–520 px in x
     const mass = { kind:'mass', type:'HF' }, indiv = { kind:'individual', type:'HERO' };
