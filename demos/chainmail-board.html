@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.26 · Mobile siege equipment + wooden-works fire. Siege towers, covered rams, movable mantlets, scaling ladders and abatis are now spawnable works pieces (⚒ in the new-unit picker) that move at push speed: pushable pieces are capped to worksPushSpeed (tower 1″/2 men, cap 4″; mantlet 3″/man, cap 6″) and sit still with no crew, while firing engines and fortifications keep their free setup repositioning. Covered rams batter an adjacent enemy structure for −2 defense/turn through a new Batter (ram) toolbar action (melee-phase-gated, contact-tested), and defenders jam the ram on 2d6 ≥ 9 (disabled). Wooden works (palisade/mantlet/abatis/tower/ram) carry a flammable flag and a burn system: igniteWorks (fantastic fire — dragon/balrog/fire-elemental/wizard-fire/ent-tree — ignites any flammable piece; boiling oil spares the oil-immune peak-roofed ram, p.23/p.39) starts a 5-turn burn that advanceBurn ticks down each turn in endRound until the piece is consumed (destroyed, defense 0). renderWorks/renderStructure draw a flame + BURNING-n marker and the sidebar reports burning / flammable / push / ram / assault state. Ignition triggers from board geometry (dragon-fire or oil overlapping wood) are deferred to the geometry layer; here ignition is a tested primitive. Asserts cover the flammable flags, ignite + oil immunity, the 5-turn burn-out, ram −2/disable, push-speed move allowance, and the five spawnable equipment pieces. -->
+<!-- chainmail-board.html · v0.11.27 · Mantlet cover. A movable mantlet now screens friendly troops from missile fire: when a shooter looses at a target, effectiveCoverVs checks for a friendly mantlet sitting on the shooter's side of the target (within MANTLET_COVER_NEAR_IN of it and within MANTLET_COVER_HALF_IN of the line of fire) and, if found, grants hard cover — folded into the same path as woods so mass fire is halved and individual fire loses 2 dice (mantletShields is the pure geometric test; abatis, which carries no cover value, does not screen). Wired into all three missile resolvers (mass→mass, mass→individual, individual). The 3-covered-figures / 1-slit-firer cap from p.22 is not modeled yet — the whole target is covered for now. Asserts cover the mantlet screen geometry (on-line, off-line, behind, too-far) and the friendly-vs-enemy distinction. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.26</title>
+<title>Chainmail — Battlefield · v0.11.27</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Mobile siege equipment + wooden-works fire</div>
+    <div class="sub">Chainmail HTML Sim · Mantlet missile cover</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.26</span>
+    <span class="version-tag">v0.11.27</span>
   </div>
 
   <div class="toolbar">
@@ -505,7 +505,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.24';
+const SIM_VERSION = '0.11.27';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2083,6 +2083,36 @@ function effectiveCover(u) {
   const manual = u.cover || 'none';
   const terr = terrainCoverAt(u.x, u.y);
   return (COVER_RANK[terr] || 0) > (COVER_RANK[manual] || 0) ? terr : manual;
+}
+// Mantlet cover (p.22): a movable mantlet between the shooter and a friendly unit
+// screens that unit. mantletShields is the pure geometric test — the mantlet must sit
+// on the shooter's side of the target (proj > 0), close to it, and near the line of
+// fire. mantletCoverVs scans for a qualifying friendly mantlet (a piece that carries a
+// cover value — so an abatis, which does not, never screens) and grants hard cover.
+const MANTLET_COVER_NEAR_IN = 4;   // mantlet sits at most this far in front of the covered unit
+const MANTLET_COVER_HALF_IN = 2;   // and within this perpendicular reach of the line of fire
+function mantletShields(tx, ty, sx, sy, mx, my) {
+  const fx = sx - tx, fy = sy - ty, flen = Math.hypot(fx, fy);
+  if (flen < 1e-6) return false;
+  const ux = fx / flen, uy = fy / flen, dx = mx - tx, dy = my - ty;
+  const proj = dx * ux + dy * uy;
+  if (proj <= 0 || proj > inchesToPx(MANTLET_COVER_NEAR_IN)) return false;
+  return Math.abs(dx * (-uy) + dy * ux) <= inchesToPx(MANTLET_COVER_HALF_IN);
+}
+function mantletCoverVs(d, a) {
+  if (!a || !d) return 'none';
+  for (const m of state.units) {
+    if (m.destroyed || m.kind !== 'works' || m.side !== d.side) continue;
+    if (!WORKS_TYPES[m.worksType]?.cover) continue;
+    if (mantletShields(d.x, d.y, a.x, a.y, m.x, m.y)) return 'hard';
+  }
+  return 'none';
+}
+// Cover a shooter must fire through: the stronger of the target's own cover (woods /
+// manual) and any friendly mantlet screen on the line of fire.
+function effectiveCoverVs(d, a) {
+  const own = effectiveCover(d), mant = mantletCoverVs(d, a);
+  return (COVER_RANK[mant] || 0) > (COVER_RANK[own] || 0) ? mant : own;
 }
 // Woods/overhead cover prevents all indirect fire AGAINST a target standing in it
 // (p.12). LOS blocking by terrain merely *between* shooter and target is a later
@@ -4940,7 +4970,7 @@ function onResolveMissile() {
   const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const indirect = effectiveIndirect(a, d);
   const indirectBlocked = indirectWanted && !indirect;
-  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const cover = indirect ? false : coverHalves(dCover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   let firingCount = Math.min(activeFigures(a), a.cols * 2);
@@ -5040,7 +5070,7 @@ function onIndivMissile(a, d) {
   const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const indirect = effectiveIndirect(a, d);
   const indirectBlocked = indirectWanted && !indirect;
-  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const coverPenalty = indirect ? 0 : coverDiceMinus(dCover);
   const r = resolveIndividualMissile({
     weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, indirect, rng: state.rng,
@@ -5150,7 +5180,7 @@ function onMassMissileAtIndiv(a, d) {
   const indirectWanted = !!a.indirect && weaponIndirectAllowed(a.weapon);
   const indirect = effectiveIndirect(a, d);
   const indirectBlocked = indirectWanted && !indirect;
-  const dCover = effectiveCover(d);   // T3: woods confers soft cover (p.12)
+  const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const cover = indirect ? false : coverHalves(dCover);
   // Chainmail p.11: only the first two ranks of missile troops may fire.
   let firingCount = Math.min(activeFigures(a), a.cols * 2);
@@ -6410,6 +6440,19 @@ renderBoard();
     console.assert(effectiveCover(inWoods) === 'soft', 'T3: a unit in woods gets soft cover automatically');
     console.assert(effectiveCover({ x:400, y:100, cover:'hard' }) === 'hard', 'T3: stronger manual cover (hard) is kept over woods soft');
     console.assert(effectiveCover(clear) === 'none', 'T3: clear ground + no manual cover = none');
+    // Mantlet cover (p.22): target (240,240), shooter 10″ to the east (480,240). PX_PER_INCH=24.
+    const TGT = 240, SH = 480;
+    console.assert(mantletShields(TGT,TGT, SH,TGT, TGT+inchesToPx(2),TGT) === true, 'mantlet: a screen 2″ in front of the unit, on the line of fire, gives cover');
+    console.assert(mantletShields(TGT,TGT, SH,TGT, TGT+inchesToPx(2),TGT+inchesToPx(3)) === false, 'mantlet: a screen offset 3″ off the line of fire does not cover');
+    console.assert(mantletShields(TGT,TGT, SH,TGT, TGT-inchesToPx(2),TGT) === false, 'mantlet: a screen behind the unit (away from the shooter) does not cover');
+    console.assert(mantletShields(TGT,TGT, SH,TGT, TGT+inchesToPx(5),TGT) === false, 'mantlet: a screen more than 4″ ahead is too far to cover');
+    { const tgt = { x:TGT, y:TGT, side:'A', cover:'none' }, shooter = { x:SH, y:TGT };
+      const saved = state.units;
+      state.units = [{ id:'m', kind:'works', worksType:'mantlet', side:'A', x:TGT+inchesToPx(2), y:TGT }];
+      console.assert(effectiveCoverVs(tgt, shooter) === 'hard', 'mantlet: a friendly mantlet on the line of fire grants hard cover');
+      state.units[0].side = 'B';
+      console.assert(effectiveCoverVs(tgt, shooter) === 'none', 'mantlet: an enemy mantlet does not screen the target');
+      state.units = saved; }
     console.assert(terrainBlocksIndirectAt(400,100) === true && terrainBlocksIndirectAt(1000,100) === false, 'T3: woods canopy blocks indirect; clear ground does not');
     const lb = { indirect:true, weapon:'longbow' };
     console.assert(effectiveIndirect(lb, clear) === true, 'T3: longbow indirect reaches a target in the open');
