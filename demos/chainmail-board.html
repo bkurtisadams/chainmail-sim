@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.58 · Facing-edge visibility. The front/flank/rear facing edges on mass units (front green, flanks amber, rear red) were thin, half-transparent, and — because they were drawn in board units — shrank with the board so they vanished when zoomed out. Fixed: the edge strokes (and the hedgehog all-round box) now carry vector-effect="non-scaling-stroke", holding a constant on-screen thickness at any zoom; the default opacity is raised 0.5→0.85; and a new "Facing-edge thickness" slider (Settings ▸ Display, facingEdgeWeight 0.5–3×, default 1.5×) scales the stroke widths so the edges can be made as bold as wanted. The dark front-rank squares remain an always-on facing cue. No rules impact. Per-edge colour customisation deferred as an optional follow-up. -->
+<!-- chainmail-board.html · v0.11.59 · Save / load board + 8×4 default table. SAVE/LOAD: new toolbar Save and Load buttons export and re-import the whole board as a JSON file (works from file://). The save is full-state — it reuses the undo snapshot, so units, engines, terrain, engagements, turn/phase/initiative, the RNG seed and the log all round-trip and a load resumes exactly where you left off; board dimensions and a format/version stamp are added on top. Load validates the file, confirms before replacing a non-empty board, sets the board size first (positions depend on it), runs every piece through a hydrator that fills any fields newer than the save with current defaults (so older saves still load, with a soft version notice), then clears undo/redo and any edit/measure/terrain mode. FUTURE: a "fresh scenario" save variant (units reset to full strength, turn/log/engagements cleared) is noted in the code as a follow-up. BOARD: default playing area is now 8×4 ft (96×48", boardWIn 72→96) per Chainmail p.5 (length ≥ 8ʹ, width 4–7ʹ); existing saved settings keep their stored size until changed. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.58</title>
+<title>Chainmail — Battlefield · v0.11.59</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Adjustable facing-edge visibility</div>
+    <div class="sub">Chainmail HTML Sim · Save / load board (JSON)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.58</span>
+    <span class="version-tag">v0.11.59</span>
   </div>
 
   <div class="toolbar">
@@ -277,6 +277,10 @@
     <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
     <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
     <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button id="btn-save" class="secondary" title="Save the board (units, engines, terrain, turn state) to a JSON file">Save</button>
+    <button id="btn-load" class="secondary" title="Load a board from a JSON file">Load</button>
+    <input id="file-load" type="file" accept="application/json,.json" hidden>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
     <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
@@ -536,9 +540,9 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.58';
+const SIM_VERSION = '0.11.59';
 const PX_PER_INCH = 24;
-let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
+let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
 const BOARD_MIN_IN = 24, BOARD_MAX_IN = 600;   // playing-area clamp (2 ft … 50 ft)
 const ZOOM_MIN_VIEW_IN = 8;   // most zoomed-in: 8 tabletop inches span the board view (board-size-independent, so large boards still zoom in)
@@ -1849,7 +1853,7 @@ const state = {
     enforcePhases: false,     // Slice 8D: false = advisory phase tracker; true = restrict movement to the active mover's phase and combat to its phase.
     snapToGrid: false,        // Slice 8F: snap unit centres to the 1″ grid while moving, for clean move distances.
     mountedRoadBonus: false,  // House rule (NOT RAW): mounted individuals get the Heavy-Horse road bonus (+3). p.9 lists horse only.
-    boardWIn: 72,             // playing-area width in tabletop inches (resizable; clamped 24–600)
+    boardWIn: 96,             // playing-area width in tabletop inches (8 ft default per Chainmail p.5; resizable; clamped 24–600)
     boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
   },
   engagements: [],   // { aId, dId, round, startTurn }
@@ -4631,6 +4635,88 @@ function applySnapshot(s) {
   $('#log').innerHTML = s.logHtml;
   state.dragging = null; state.panning = null; state.terrainDrag = null; state.terrainResize = null;   // drop any in-flight interaction
 }
+
+// --- Save / Load board to JSON ------------------------------------------
+// Full-state save: the undo snapshot already round-trips units, engines (works),
+// terrain, engagements, turn/phase/initiative, RNG seed and the log — so a load
+// resumes exactly where you left off. Board dimensions and a format version are
+// added on top (layout depends on the board size; the version lets old saves
+// load by filling any newer fields with defaults). FUTURE: a "fresh scenario"
+// variant could strip the live battle state here (units back to startCount,
+// engagements/turn/log cleared) so a save reopens as a clean starting position.
+function downloadJson(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+function saveScenario() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  const data = {
+    format: 'chainmail-board',
+    simVersion: SIM_VERSION,
+    savedAt: d.toISOString(),
+    board: { wIn: state.settings.boardWIn, hIn: state.settings.boardHIn },
+    state: captureSnapshot(),
+  };
+  downloadJson(`chainmail-${stamp}.json`, JSON.stringify(data, null, 2));
+  appendTurn('Board saved', `Exported ${state.units.length} piece${state.units.length === 1 ? '' : 's'} and ${state.terrain.length} terrain feature${state.terrain.length === 1 ? '' : 's'} to chainmail-${stamp}.json.`);
+}
+// Fill any fields newer than the save with the same defaults spawnUnit uses, so
+// a board written by an older build still loads cleanly.
+function hydrateUnit(u) {
+  if (!u.acted) u.acted = { moved: false, fired: false, fought: false };
+  const def = {
+    movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
+    fatigued: false, moveStreak: 0, charged: false, chargedLastTurn: false,
+    prisoners: 0, indirect: false, cover: 'none', breathsUsed: 0, facing: 0,
+  };
+  for (const k in def) if (u[k] === undefined) u[k] = def[k];
+  if (u.turnStartFacing === undefined) u.turnStartFacing = u.facing || 0;
+  return u;
+}
+function loadScenario(data) {
+  if (!data || data.format !== 'chainmail-board' || !data.state || !Array.isArray(data.state.units)) {
+    alert('That file is not a Chainmail board save.');
+    return false;
+  }
+  const stale = data.simVersion && data.simVersion !== SIM_VERSION;
+  if (data.board) {                       // board size first — piece positions depend on it
+    state.settings.boardWIn = clampBoardIn(data.board.wIn, 96);
+    state.settings.boardHIn = clampBoardIn(data.board.hIn, 48);
+    applyBoardSize();
+    const wi = $('[data-setting-num="boardWIn"]'); if (wi) wi.value = state.settings.boardWIn;
+    const hi = $('[data-setting-num="boardHIn"]'); if (hi) hi.value = state.settings.boardHIn;
+    saveSettings();
+  }
+  const snap = data.state;
+  snap.units = snap.units.map(hydrateUnit);
+  applySnapshot(snap);
+  state.editUnitId = null; syncEditMode();                                  // load = fresh context (mirror resetBoard hygiene)
+  state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton();
+  state.terrainMode = false; state.terrainDraw = null; state.terrainVertex = null; state.terrainSelId = null; syncTerrainButton();
+  state.undoStack = []; state.redoStack = []; state._lastUndoTag = null; syncUndoButtons();
+  resetView();
+  renderTurnUI(); renderBoard();
+  appendTurn('Board loaded', `${snap.units.length} piece${snap.units.length === 1 ? '' : 's'} restored — turn ${snap.turn}.${stale ? ` Saved with v${data.simVersion} (now v${SIM_VERSION}); pieces filled with current defaults.` : ''}`);
+  return true;
+}
+function onLoadFile(evt) {
+  const file = evt.target.files && evt.target.files[0];
+  evt.target.value = '';   // let the same file be chosen again later
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); } catch (e) { alert('Could not read that file as JSON.'); return; }
+    if (state.units.length && !confirm('Loading will replace the current board. Continue?')) return;
+    loadScenario(data);
+  };
+  reader.readAsText(file);
+}
 // Snapshot the pre-action state. Consecutive same-target nudge/rotate runs
 // collapse (one undo reverses the whole run). Any push clears the redo stack.
 function pushUndo(tag) {
@@ -6970,6 +7056,9 @@ document.querySelectorAll('[data-board-preset]').forEach(b => b.addEventListener
   setBoardSize(w, h); syncSettingsCheckboxes();
 }));
 $('#btn-reset').addEventListener('click', resetBoard);
+$('#btn-save').addEventListener('click', saveScenario);
+$('#btn-load').addEventListener('click', () => $('#file-load').click());
+$('#file-load').addEventListener('change', onLoadFile);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
 $('#board').addEventListener('mouseup',   onBoardMouseUp);
