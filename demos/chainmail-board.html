@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.55 · Half-square snap + structure edge-snapping + tidied piece sizes. (1) The grid-snap lattice is now HALF a square (15 ft / 12px) instead of a full square (30 ft / 24px): finer placement for individuals at figure scale, and — because a mass unit's centre lands on a half-square boundary whenever its frontage is an EVEN number of figures — clean centring for formed bodies of any count. Every old whole-square point is still on the finer lattice, so large blocks lose nothing. (2) When grid-snap is ON, a dragged STRUCTURE (wall/tower/gate) released within a square of another structure's END snaps edge-to-edge: its facing locks to the neighbour's (nearest of N, N+90, N+180, N+270 — crisp straight runs AND 90° corners) and its near end abuts the neighbour's end, so fort pieces click together Lego-style with no gaps. Engines and troop units are unaffected; structures only snap to other structures. (3) Tidied off-module sizes so the kit tiles cleanly: round tower 25→30 ft, square tower 28→30 ft, gatehouse 40→60 ft long (30 ft deep unchanged). Footprints remain purely cosmetic — defence value still comes from the rulebook's per-structure range, not dimensions. FAITHFUL OMISSION: edge-snap aligns to orthogonal runs/corners only; oblique (non-90°) wall junctions are placed by hand. -->
+<!-- chainmail-board.html · v0.11.56 · New-unit panel: the Count field is now spinner-less and adjusted by the mouse wheel. Once the box is clicked (focused), scrolling the wheel nudges the figure count by 1 within its min/max; scrolling while it is NOT focused scrolls the side panel as before. The native up/down spin buttons are hidden (the reusable .wheel-num class styles them off in WebKit and Firefox). Wiring is generic (wireWheelNumber over every input.wheel-num), so the same treatment can be extended to other numeric fields later. No rules or gameplay impact. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.55</title>
+<title>Chainmail — Battlefield · v0.11.56</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -112,6 +112,10 @@
   .field select, .field input { flex: 1; min-width: 0; padding: 4px 6px; font-family: var(--serif); font-size: 13px;
     background: #fff8e7; border: 1px solid var(--rule); border-radius: 3px; color: var(--ink);
     text-overflow: ellipsis; }
+  /* Spinner-less number input adjusted by the mouse wheel while focused (see wireWheelNumber). */
+  input.wheel-num { -moz-appearance: textfield; appearance: textfield; }
+  input.wheel-num::-webkit-inner-spin-button,
+  input.wheel-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0;
     border-bottom: 1px dashed var(--rule); }
   .stat:last-child { border-bottom: 0; }
@@ -237,9 +241,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Half-square snap &amp; structure edge-snapping</div>
+    <div class="sub">Chainmail HTML Sim · Wheel-adjusted Count field</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.55</span>
+    <span class="version-tag">v0.11.56</span>
   </div>
 
   <div class="toolbar">
@@ -300,7 +304,7 @@
           <option value="works">Works (engine)</option>
         </select></div>
         <div class="field f-troop-only"><label>Type</label><select id="f-type"></select></div>
-        <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" value="20" min="1" max="200"></div>
+        <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" class="wheel-num" value="20" min="1" max="200"></div>
         <div class="field f-mass-only"><label>Formation</label><select id="f-form">
           <option value="line">Line</option>
           <option value="column">Column</option>
@@ -520,7 +524,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.55';
+const SIM_VERSION = '0.11.56';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6884,6 +6888,23 @@ $('#board').addEventListener('mouseup',   onBoardMouseUp);
 $('#board').addEventListener('mouseleave', onBoardMouseUp);
 $('#board').addEventListener('click', onBoardClick);
 $('#board').addEventListener('wheel', onWheel, { passive: false });
+// Spinner-less number fields: once clicked (focused), the mouse wheel nudges the
+// value by its step within min/max. Unfocused, the wheel scrolls the panel as usual.
+function wireWheelNumber(el) {
+  if (!el) return;
+  el.addEventListener('wheel', (e) => {
+    if (document.activeElement !== el) return;
+    e.preventDefault();
+    const step = parseFloat(el.step) || 1;
+    const min = el.min !== '' ? parseFloat(el.min) : -Infinity;
+    const max = el.max !== '' ? parseFloat(el.max) : Infinity;
+    let v = (parseFloat(el.value) || 0) + (e.deltaY < 0 ? step : -step);
+    el.value = String(Math.max(min, Math.min(max, v)));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }, { passive: false });
+}
+document.querySelectorAll('input.wheel-num').forEach(wireWheelNumber);
 $('#board').addEventListener('dblclick', e => { if (state.terrainMode && state.terrainDraw) { finishTerrainDraw(); e.preventDefault(); } });
 $('#board').addEventListener('contextmenu', e => { e.preventDefault(); if (state.terrainMode) onTerrainContextMenu(svgPoint(e)); });
 $('#ctx-menu').addEventListener('click', onContextMenuAction);
