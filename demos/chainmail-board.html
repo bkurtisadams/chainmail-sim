@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.61 · Close-to-striking-range melee gate (COMBAT-RAW-AUDIT). Melee may now only be declared when the two units are actually in striking range. The contact test is rebuilt: mass bodies and works pieces use the 1″ control-zone as base contact (p.16 — troops "control the space 1″ on either side"), while a single man reaches 3″ (p.25 — "two figures within melee range (3″)"); the gate uses the larger of the two combatants' ranges. The reach is now footprint-orientation-aware — an edge-to-edge gap measured along the line joining the centres via an oriented-rectangle support function — so a formed line fights front-to-front across its shallow depth rather than the old orientation-blind circular max(w,h)/2 radius, which let mass units melee from well beyond contact. This tightens mass melee to true base contact and feeds every consumer of inMeleeContact (the Resolve-melee gate, the engagement overlay, charge contact-reach, and the meleesPending end-of-turn check). FAITHFUL SIMPLIFICATION: contact is gauged centre-line edge gap on the footprint bounding rectangle, not a full per-figure base-to-base test; the 3″ draw-in of nearby units to an existing melee (p.16 §3) remains a later slice. -->
+<!-- chainmail-board.html · v0.11.62 · Unified footprint-gap range checks (bugfix). The v0.11.61 melee gate introduced an oriented-rectangle support function, but the missile-range and edge-gap checks still used the older max(w,h)/2 circular footprint radius — which subtracts HALF A UNIT'S WIDEST DIMENSION in every direction, so a wide formed line was treated as a big circle and could fire (or be reached) far past its true range: a 10-figure javelin line (6″ range) lit the fire button out to ~13″ centre-to-centre. Factor a single footprintGapPx(a,b) — the edge-to-edge gap along the line joining the centres, from each footprint's oriented support — and route the melee gate, missile range (inMissileRange), and edge-gap helper (edgeGapInches, which feeds charge contact-reach and the 1″ free-paralysis / Wraith-touch checks) all through it. Now every proximity gate agrees and is orientation-aware: the javelin line fires only to ~6″ from its front edge, and melee/missile no longer disagree. Displayed range stays centre-to-centre. No rules change — this aligns the existing range tests with the geometry the melee slice already used. The measure tool was investigated and is correct as-is (no change). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.61</title>
+<title>Chainmail — Battlefield · v0.11.62</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Close-to-striking-range melee gate</div>
+    <div class="sub">Chainmail HTML Sim · Unified footprint-gap range checks</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.61</span>
+    <span class="version-tag">v0.11.62</span>
   </div>
 
   <div class="toolbar">
@@ -541,7 +541,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.61';
+const SIM_VERSION = '0.11.62';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2162,18 +2162,22 @@ function footprintSupport(u, ux, uy) {
   const f = (u.facing || 0) * Math.PI / 180, cf = Math.cos(f), sf = Math.sin(f);
   return (b.w / 2) * Math.abs(cf * ux + sf * uy) + (b.h / 2) * Math.abs(-sf * ux + cf * uy);
 }
-// Melee contact (p.16 mass control-zone, p.25 man-to-man range): the two units
-// are in striking range when the edge-to-edge gap between their footprints —
-// measured along the line joining their centres — is within the larger of the
-// two combatants' melee ranges (3″ for a man, 1″ base contact for a formed body).
-// Footprint-orientation-aware, so a line fights front-to-front at its shallow
-// depth, not at the old circular max(w,h)/2 radius.
-function inMeleeContact(a, b) {
-  const range = inchesToPx(Math.max(meleeRangeIn(a), meleeRangeIn(b)));
+// Edge-to-edge gap (px) between two units' footprints along the line joining
+// their centres, using each footprint's oriented support. 0 when touching or
+// overlapping. The single basis for every proximity gate — melee contact,
+// missile range, charge reach, and the 1″ touch/free checks — so they all agree
+// and none over-reaches for a wide formation the way the old max(w,h)/2 circle did.
+function footprintGapPx(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
   const ux = dx / d, uy = dy / d;
-  const gap = d - footprintSupport(a, ux, uy) - footprintSupport(b, ux, uy);
-  return gap <= range;
+  return Math.max(0, d - footprintSupport(a, ux, uy) - footprintSupport(b, ux, uy));
+}
+// Melee contact (p.16 mass control-zone, p.25 man-to-man range): in striking
+// range when the footprint gap is within the larger of the two combatants' melee
+// ranges (3″ for a man, 1″ base contact for a formed body). Orientation-aware via
+// footprintGapPx — a line fights front-to-front at its shallow depth.
+function inMeleeContact(a, b) {
+  return footprintGapPx(a, b) <= inchesToPx(Math.max(meleeRangeIn(a), meleeRangeIn(b)));
 }
 // One melee per turn (p.8 turn sequence — "Melees are resolved" is a single
 // step). A unit that has meleed this turn may not melee again until next turn;
@@ -2183,9 +2187,7 @@ function inMeleeContact(a, b) {
 const canMeleeThisTurn = (u) => !!u && !(u.acted && u.acted.fought);
 // Edge-to-edge gap in inches (0 when footprints touch/overlap).
 function edgeGapInches(a, b) {
-  const aMax = Math.max(unitBounds(a).w, unitBounds(a).h) / 2;
-  const bMax = Math.max(unitBounds(b).w, unitBounds(b).h) / 2;
-  return pxToInches(Math.max(0, dist(a, b) - aMax - bMax));
+  return pxToInches(footprintGapPx(a, b));
 }
 // Contact reach (p.16 charge "contact expected"): can `mover` close to melee
 // contact with `target` by advancing up to `maxIn` inches? True if already
@@ -2642,9 +2644,7 @@ function inMissileRange(firer, target) {
   // displayed distance collapsing to 0.
   const centerPx = dist(firer, target);
   const distIn = pxToInches(centerPx);
-  const aMax = Math.max(unitBounds(firer).w, unitBounds(firer).h) / 2;
-  const bMax = Math.max(unitBounds(target).w, unitBounds(target).h) / 2;
-  const edgePx = Math.max(0, centerPx - aMax - bMax);
+  const edgePx = footprintGapPx(firer, target);   // oriented footprint gap — was the over-generous max(w,h)/2 circle that let wide lines fire far past range
   const edgeIn = pxToInches(edgePx);
   // Indirect fire must clear intervening troops — only possible past 3″ (p.12).
   if (indirect && edgeIn <= 3) {
