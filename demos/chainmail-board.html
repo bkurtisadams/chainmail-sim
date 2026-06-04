@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.45 · Hill direction (p.8, p.10), gap 3 of the movement-rules cleanup. RAW: "hill slows movement 50%, prevents all charge moves, but movement downhill is at normal speed" and "movement uphill equals two normal moves per uphill move." The sim charged hills a flat 0.5× (double cost) in BOTH directions; now a hill slows only UPHILL. A hill rect's centre is treated as the crest: terrainMoveMultAlong(x,y,ux,uy) gives 0.5 when a step heads toward the crest (climbing) and 1 (normal) downhill or along a contour, so crossing a hill costs double up to the crest then normal down the far side. pathMoveCost samples this with the move's heading; the flat terrainMoveMultAt / terrainCostMultAt helpers are unchanged (worst-case uphill, still used by tests). Only the 'hill' type is directional (flagged hill:true) — woods/marsh/ditch are "as hill" for the 50% slow + no-charge but are flat obstacles, so they slow regardless of direction. Charges remain barred on hills both ways ("prevents all charge moves"); the noCharge gate is untouched. FAITHFUL SIMPLIFICATION: the crest is the rect centre, so a hill is modelled as a cone — fine for a single mound, approximate for a long ridge. -->
+<!-- chainmail-board.html · v0.11.46 · Marsh blocks heavy equipment (p.8), gap 4 of the movement-rules cleanup. RAW: "marshy as hill, with the additional penalty of preventing the entrance of heavy equipment, catapults, and guns." The entry-block machinery (moveBlockScale → terrainBlocksUnitAt, wired into drag/nudge/charge under hard-enforce, and already used for woods-stops-formed-bodies) checked marsh's blocksHeavy flag against isHeavyEquip — but isHeavyEquip only consulted HEAVY_MOVE_TYPES, an empty set (it was meant for mass artillery/wagon types that don't exist). The heavy equipment in this sim are WORKS engines, so isHeavyEquip now also returns true for works whose cat is catapult/gun/ram/tower/mantlet (HEAVY_WORKS_CATS). A heavy engine's centre-path is clamped short of a marsh boundary (and one already in a marsh isn't trapped); scaling ladders (carried), abatis (built in place), structures (immobile), foot and horse are unaffected — foot/horse are still merely slowed 50% by marsh. Marsh stays flat (not directional like hills). Enforcement is gated by Hard-enforce move allowance, same as woods. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.45</title>
+<title>Chainmail — Battlefield · v0.11.46</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Hill direction (uphill slows)</div>
+    <div class="sub">Chainmail HTML Sim · Marsh blocks heavy equipment</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.45</span>
+    <span class="version-tag">v0.11.46</span>
   </div>
 
   <div class="toolbar">
@@ -518,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.45';
+const SIM_VERSION = '0.11.46';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2222,9 +2222,10 @@ const effectiveIndirect = (firer, target) =>
 // Entry-blocking terrain (T2, p.9). Formed bodies (mass units) are stopped by
 // woods; heavy equipment (catapults/cannon/wagons — none in play yet) by marsh.
 // Individuals/skirmishers are unaffected.
-const HEAVY_MOVE_TYPES = new Set();   // populated when artillery/wagon types exist; marsh block dormant until then
+const HEAVY_MOVE_TYPES = new Set();   // (future) heavy mass types, e.g. wagons/artillery as troops
+const HEAVY_WORKS_CATS = new Set(['catapult', 'gun', 'ram', 'tower', 'mantlet']);   // p.8: "heavy equipment, catapults, and guns"
 const isFormedBody = (u) => u.kind === 'mass';
-const isHeavyEquip = (u) => HEAVY_MOVE_TYPES.has(u.type);
+const isHeavyEquip = (u) => HEAVY_MOVE_TYPES.has(u.type) || (u.kind === 'works' && HEAVY_WORKS_CATS.has(WORKS_TYPES[u.worksType]?.cat));
 function terrainBlocksUnitAt(x, y, u) {
   return terrainTypesAt(x, y).some(t =>
     (t.blocksFormed && isFormedBody(u)) || (t.blocksHeavy && isHeavyEquip(u)));
@@ -6836,6 +6837,19 @@ renderBoard();
     console.assert(moveBlockScale(100, 100, 150, 0, mass) === 1, 'formed body: move stopping short of woods is unclamped');
     console.assert(moveBlockScale(100, 100, 600, 0, indiv) === 1, 'individual: woods never clamps the move');
     console.assert(moveBlockScale(400, 100, 200, 0, mass) === 1, 'formed body already in woods is not trapped (can move out)');
+    // Marsh blocks heavy works engines from entering (p.8); ladders/foot/horse pass.
+    state.terrain = [{ id:'tm', type:'marshy', x:400, y:100, w:240, h:192 }];   // marsh 280–520 px in x
+    const cat = { kind:'works', worksType:'catHeavy' };
+    const siegeTower = { kind:'works', worksType:'tower' };
+    const ladder = { kind:'works', worksType:'ladder' };
+    console.assert(isHeavyEquip(cat) && isHeavyEquip(siegeTower), 'marsh: catapults and siege towers are heavy equipment');
+    console.assert(!isHeavyEquip(ladder), 'marsh: a scaling ladder is not heavy equipment (men carry it)');
+    console.assert(!isHeavyEquip(mass), 'marsh: a mass troop body is not "heavy equipment"');
+    console.assert(moveBlockScale(100, 100, 600, 0, cat) < 0.999, 'marsh: a heavy engine is clamped short of the marsh boundary');
+    console.assert(moveBlockScale(100, 100, 150, 0, cat) === 1, 'marsh: an engine stopping short of the marsh is unclamped');
+    console.assert(moveBlockScale(100, 100, 600, 0, ladder) === 1, 'marsh: a ladder passes (not heavy)');
+    console.assert(moveBlockScale(100, 100, 600, 0, mass) === 1, 'marsh: foot are slowed by marsh, not blocked');
+    console.assert(moveBlockScale(400, 100, 200, 0, cat) === 1, 'marsh: a heavy engine already in the marsh is not trapped');
     // T2b: stream/river crossing costs + near-bank halt.
     state.terrain = [{ id:'ts', type:'stream', x:300, y:100, w:48, h:240 }];   // 2″-wide stream at x 276–324
     const lf = { type:'LF' };
