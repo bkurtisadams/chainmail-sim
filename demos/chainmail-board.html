@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.42 · Visible multi-turn formation reform (p.10), fixing the v0.11.40 bug where a 2-move change (line↔square = 2 moves) was charged as 2×allowance inches in ONE turn and so refused forever (e.g. "costs 18″, 9″ remain"). A "move" in that table is one TURN's movement, not a pool of inches. Now: 1-move changes (line↔column, column↔square) complete instantly and consume the unit's move; 2-move changes (line↔square, line↔hedgehog) set u.reform = {to, movesLeft} and play out over their turns — the unit keeps rendering its OLD shape with an amber "REFORMING → SQUARE" badge, can't move/pivot/charge (moveAllowanceOf 0 while reforming), and advanceReform() in endRound completes it when movesLeft hits 0. A reforming unit caught in melee is treated as FLANKED (p.10): reformingFlankEdge upgrades a frontal attack to a flank in onResolveMelee, so the attacker gets the existing flank class-up / +1-die and the reformer takes −1 on any charge-morale check; a reformer is also barred from initiating melee (it's committed). Right-click → "Cancel reform" aborts. Advisory mode (enforce off) stays freeform — reshape is instant. FAITHFUL OMISSIONS: the flank-when-reforming rule is wired for mass-vs-mass melee only — the individual-vs-mass (mixed) path passes flank/rear under param names resolveMassMelee never reads, so it already ignores flank/rear generally (a separate latent bug, deferred). -->
+<!-- chainmail-board.html · v0.11.43 · Fix flank/rear in mixed (individual-vs-mass) melee. onResolveMixed built its attacker params with keys fightingFromEdge / attackingRear, but resolveMassMelee reads attacker.flank / attacker.rear (via effectiveAttackerClass and the rear no-return branch) — so an individual hitting a mass unit's flank or rear, or a mass hitting an individual's, got NO flank class-up and NO rear no-return, silently. (The log section already referenced melee.attacker.flankBumpToBonus, attackerParams.flank||rear, and melee.defender.noReturn, so those notes never fired either.) Renamed the two keys to flank:(edge left|right) and rear:(edge rear), matching the mass-vs-mass path. Also applied reformingFlankEdge here so a reforming mass meleed by an individual is correctly flanked (p.10) — closing the omission flagged in v0.11.42. Wiring fix; resolveMassMelee unchanged. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.42</title>
+<title>Chainmail — Battlefield · v0.11.43</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Visible multi-turn reform</div>
+    <div class="sub">Chainmail HTML Sim · Mixed-melee flank/rear fix</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.42</span>
+    <span class="version-tag">v0.11.43</span>
   </div>
 
   <div class="toolbar">
@@ -518,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.42';
+const SIM_VERSION = '0.11.43';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -5131,7 +5131,7 @@ function onResolveMixed(a, d) {
   const ind = aIsIndiv ? a : d;
   const mass = aIsIndiv ? d : a;
   const indT = typeById(ind.type), massT = typeById(mass.type);
-  const edge = engagementEdge(a, d);
+  const edge = reformingFlankEdge(engagementEdge(a, d), d);   // p.10: reforming defender is flanked
   const fs = FIGHTING_STRENGTH[ind.type] || 1;
   const cls = fightingClassFor(ind.type);
   const defCls = defendClassFor(ind.type);
@@ -5156,8 +5156,8 @@ function onResolveMixed(a, d) {
   const defender = aIsIndiv ? d : proxy;
   const round = (findEngagement(a.id, d.id)?.round || 0) + 1;
   const attackerParams = { type: typeById(attacker.type).id, count: attacker.count,
-    fightingFromEdge: edge, polearm: !!attacker.polearm,
-    impetus: !!attacker.charged, attackingRear: edge === 'rear', fatigued: !!attacker.fatigued };
+    flank: edge === 'left' || edge === 'right', polearm: !!attacker.polearm,
+    impetus: !!attacker.charged, rear: edge === 'rear', fatigued: !!attacker.fatigued };
   const defenderParams = { type: typeById(defender.type).id, count: defender.count,
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
   // Frozen figures don't swing: the individual contributes 0 dice if paralyzed;
@@ -5202,6 +5202,7 @@ function onResolveMixed(a, d) {
   if (melee.attacker.impetusApplied)   aMods.push('impetus +1/man');
   if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
+  if (d.reform) aMods.push('target reforming → flanked (p.10)');
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
   if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
@@ -7199,6 +7200,14 @@ renderBoard();
   console.assert(reformingFlankEdge('rear', { reform: {} }) === 'rear', 'reform: a real rear attack on a reformer stays rear (not downgraded)');
   console.assert(reformingFlankEdge('front', {}) === 'front', 'reform: a non-reforming unit keeps its true edge');
   console.assert(reformingFlankEdge('left', { reform: {} }) === 'left', 'reform: a flank attack on a reformer stays flank');
+
+  // Mixed melee now feeds flank/rear under the keys resolveMassMelee actually reads
+  // (effectiveAttackerClass + the rear no-return branch); before the fix it used
+  // fightingFromEdge / attackingRear, which were silently ignored.
+  console.assert(effectiveAttackerClass('HF', {}) === 'HF', 'mixed: no flag → no class change');
+  console.assert(effectiveAttackerClass('HF', { flank: true }) === 'AF', 'mixed: flank key bumps HF→AF');
+  console.assert(effectiveAttackerClass('HF', { rear: true }) === 'AF', 'mixed: rear key bumps HF→AF');
+  console.assert(classBumpsToBonus('AF', { flank: true }) === true, 'mixed: AF (no higher class) flank → +1/die instead');
 
   // Screen-fixed badge/label clearance tracks orientation (not worst-case max)
   { const wide = { w: 240, h: 28 };  // a 10-wide line
