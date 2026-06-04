@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.47 · Fix the right-click Restore / Reset-actions commands so a "reset" unit can actually move. clearActed() only cleared the acted flags (moved/fired/fought) + shotsThisTurn, so Restore and Reset-actions cleared the M/F/X badges — making the unit LOOK ready — while leaving the consumed move budget (movedThisTurn), a half-move pause, a split-fire cap, a charge declaration, and any reform in place. Under hard-enforce the unit then still had 0″ remaining (and a half-move/reform lock blocks it outright). New resetMoveActions(u) mirrors endRound's per-turn reset (movedThisTurn 0, halfMovePaused/splitFired/splitLeg1 cleared, charged/chargeDir cleared, turnStart facing/position re-baselined, clearActed) — it does NOT touch a multi-turn reform (use Cancel reform) or chargedLastTurn (prior-turn history). Reset-actions now calls it; Restore (full pristine reset) calls it AND clears reform + chargedLastTurn. The three menu items are relabelled for what they actually do and each now logs a one-line confirmation: "Restore unit (full reset)", "Reset move & actions (this round)", "Reset status (ready · clear paralysis)". Phase/initiative gating (whose side moves now) is unchanged — a reset can't override the turn order. -->
+<!-- chainmail-board.html · v0.11.48 · River crossing (p.9), gap 5 (final) of the movement-rules cleanup. RAW: "a typical river would require troops to halt before and after crossing and cost an entire move to cross." Previously a river was effectively uncrossable — the full-move ford lump plus per-inch in-water cost meant a unit halted at the near bank but could never land on the far side. Now (Option B, the dedicated-crossing model): the river def is flagged haltCross:true, and riverBlockScale clamps ANY unit's move so its centre path stops at the near bank (a unit already in/at the water isn't trapped). That hard halt is combined with moveBlockScale at the drag/nudge/charge sites under hard-enforce, realising "halt before." A new right-click "Cross river" action (shown when the unit is touching a river bank) carries it straight across — perpendicular to the strip, onto the far bank clear of the water (crossRiverTarget handles rotation and unit footprint) — and sets movedThisTurn to the whole allowance so it halts there ("entire move" + "halt after"). Under hard-enforce the crossing is refused if the unit already moved/charged this turn (it must halt at the bank and cross on a fresh turn). Streams are unchanged — forded normally for 6″, no halt. Advisory mode stays freeform (drag across freely). pathMoveCost and the stream/river cost tests are untouched; this slice is purely additive. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.47</title>
+<title>Chainmail — Battlefield · v0.11.48</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>
+    <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.47</span>
+    <span class="version-tag">v0.11.48</span>
   </div>
 
   <div class="toolbar">
@@ -418,6 +418,7 @@
   <button data-act="reshape-square">Form square</button>
   <button data-act="reshape-hedgehog">Form hedgehog</button>
   <button data-act="cancel-reform">Cancel reform</button>
+  <button data-act="cross-river">Cross river (entire move)</button>
   <button data-act="rotate-90">Rotate 90°</button>
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
@@ -518,7 +519,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.47';
+const SIM_VERSION = '0.11.48';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -537,7 +538,7 @@ const TERRAIN_TYPES = Object.freeze({
   ditch:  { label: 'Ditch/Rampart', fill: '#a98b5a', moveMult: 0.5, noCharge: true,                      wIn: 14, hIn: 3 },
   rough:  { label: 'Rough',         fill: '#b09a6a', moveMult: 1,   noCharge: true,                      wIn: 9,  hIn: 6 },
   stream: { label: 'Stream',        fill: '#5b86a8', moveMult: 1,   noCharge: true, cross: 6,            wIn: 16, hIn: 2 },
-  river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full',      wIn: 22, hIn: 3 },
+  river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full', haltCross: true, wIn: 22, hIn: 3 },
   pond:   { label: 'Pond',          fill: '#4f7c9c', moveMult: 0.5, noCharge: true,                      wIn: 7,  hIn: 6 },
   gulley: { label: 'Gulley',        fill: '#9c8757', moveMult: 1,   noCharge: true,                      wIn: 11, hIn: 3 },
   road:   { label: 'Road',          fill: '#8a6f4a', moveMult: 1,   noCharge: false, road: true,          wIn: 30, hIn: 2 },
@@ -2249,6 +2250,64 @@ function moveBlockScale(ox, oy, dx, dy, u) {
   }
   return 1;
 }
+// River crossing (p.9): a river must be crossed as a dedicated move — "halt before
+// and after, cost an entire move." riverBlockScale clamps ANY unit's centre path so
+// it stops at the near bank (halt before); a unit already in/at the water isn't
+// trapped. The actual crossing is the "Cross river" action (crossRiverTarget).
+function riverBlockScale(ox, oy, dx, dy) {
+  const inHalt = (x, y) => terrainTypesAt(x, y).some(t => t.haltCross);
+  if (inHalt(ox, oy)) return 1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return 1;
+  const steps = Math.max(2, Math.ceil(len / 4));
+  let lastClear = 0;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (inHalt(ox + dx * t, oy + dy * t)) return lastClear;
+    lastClear = t;
+  }
+  return 1;
+}
+// The river the unit is touching (perpendicular gap to the strip ≤ ~1″), or null.
+// Returns the rect plus its local-frame geometry so a crossing can be placed across.
+function nearestAdjacentRiver(u) {
+  let best = null, bestGap = Infinity;
+  for (const r of state.terrain) {
+    const t = TERRAIN_TYPES[r.type];
+    if (!t || !t.haltCross) continue;
+    const a = -(r.rot || 0) * Math.PI / 180;
+    const dx = u.x - r.x, dy = u.y - r.y;
+    const lx = dx * Math.cos(a) - dy * Math.sin(a);
+    const ly = dx * Math.sin(a) + dy * Math.cos(a);
+    const horizontal = r.w >= r.h;
+    const along = horizontal ? lx : ly;
+    const cross = horizontal ? ly : lx;
+    const halfLen = (horizontal ? r.w : r.h) / 2;
+    const halfThick = (horizontal ? r.h : r.w) / 2;
+    if (Math.abs(along) > halfLen + 8) continue;        // off the ends of the strip
+    const gap = Math.abs(cross) - halfThick;            // perpendicular gap to the near bank
+    if (gap <= 24 && gap < bestGap) { bestGap = gap; best = { r, a, horizontal, along, cross, halfThick }; }
+  }
+  return best;
+}
+// Far-bank landing point for a "Cross river": straight across the strip,
+// perpendicular, clear of the water by the unit's footprint. Honors rotation.
+function crossRiverTarget(u) {
+  const adj = nearestAdjacentRiver(u);
+  if (!adj) return null;
+  const { r, a, horizontal, along, cross, halfThick } = adj;
+  const b = unitBounds(u);
+  const clear = halfThick + Math.max(b.w, b.h) / 2 + 6;
+  const farSign = cross >= 0 ? -1 : 1;
+  const crossTarget = farSign * clear;
+  const lx2 = horizontal ? along : crossTarget;
+  const ly2 = horizontal ? crossTarget : along;
+  // world = centre + R(rot)·local; R(rot) = R(a)ᵀ since a = -rot
+  const wx = r.x + lx2 * Math.cos(a) + ly2 * Math.sin(a);
+  const wy = r.y - lx2 * Math.sin(a) + ly2 * Math.cos(a);
+  return { x: wx, y: wy };
+}
+const canCrossRiver = (u) => u.kind !== 'works' && !u.reform && !!nearestAdjacentRiver(u);
 // Path-aware terrain cost (T2b, p.9). Supersedes T1's centre-based slow: a move
 // no longer scales the whole allowance by the terrain under the unit's centre —
 // instead each inch of travel costs move-budget by the terrain it crosses, plus a
@@ -4085,8 +4144,9 @@ function onBoardMouseMove(evt) {
     const remBefore = Math.max(0, effectiveMoveAllowance(u) - (state.dragging.movedBefore || 0) - facingCostIn(u));
     const pc = pathMoveCost(state.dragging.originX, state.dragging.originY, vx, vy, u, remBefore);   // T2b: clamp by path cost (slow terrain + stream/river crossings), not raw length
     const s = moveBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale, vy * pc.scale, u);   // T2a: woods stops formed bodies (p.9)
-    nx = state.dragging.originX + vx * pc.scale * s;
-    ny = state.dragging.originY + vy * pc.scale * s;
+    const rs = riverBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale * s, vy * pc.scale * s);   // p.9: halt at a river bank (cross via the Cross-river action)
+    nx = state.dragging.originX + vx * pc.scale * s * rs;
+    ny = state.dragging.originY + vy * pc.scale * s * rs;
   }
   u.x = Math.max(20, Math.min(BOARD_W - 20, nx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, ny));
@@ -4387,6 +4447,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   const stepCost = pathMoveCost(u.x, u.y, dxPx, dyPx, u).cost;   // T2b: path-aware (slow terrain + crossings)
   if (state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
   if (state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
+  if (state.settings.enforceMovement && riverBlockScale(u.x, u.y, dxPx, dyPx) < 1 - 1e-9) return false;      // p.9: halt at a river bank (use Cross river)
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
@@ -4689,7 +4750,8 @@ function followThroughCharge(charger) {
   // Cap by terrain budget (slow ground / stream-river fords) and woods entry-block.
   const pc = pathMoveCost(charger.x, charger.y, vx, vy, charger, remaining);
   const block = moveBlockScale(charger.x, charger.y, vx * pc.scale, vy * pc.scale, charger);
-  const maxScale = pc.scale * block;
+  const riverBlock = riverBlockScale(charger.x, charger.y, vx * pc.scale * block, vy * pc.scale * block);   // p.9: a charge halts at a river bank
+  const maxScale = pc.scale * block * riverBlock;
   const cx = (v) => Math.max(20, Math.min(BOARD_W - 20, v));
   const cy = (v) => Math.max(20, Math.min(BOARD_H - 20, v));
   // Sample the path; stop at the first point that brings a fresh enemy into contact.
@@ -5967,6 +6029,7 @@ function onUnitContextMenu(evt, unitId) {
     b.hidden = !!u.reform || !canReshape(u, target);
   });
   document.querySelector('#ctx-menu [data-act="cancel-reform"]').hidden = !u.reform;
+  document.querySelector('#ctx-menu [data-act="cross-river"]').hidden = !canCrossRiver(u);
   // Fatigue entries — only when the optional rule is enabled, and only the
   // direction that makes sense for the current state.
   const fatigueOn = !!state.settings.applyFatigue;
@@ -6149,6 +6212,20 @@ function onContextMenuAction(evt) {
       u.reform = null;
       appendTurn(`Reform cancelled`,
         `<div class="step">${typeById(u.type).name} (${u.side}) abandons forming ${was} and holds its ${u.formation}.</div>`);
+    }
+  } else if (act === 'cross-river') {
+    const tgt = crossRiverTarget(u);
+    if (!tgt) {
+      appendTurn(`Cross river — not at a bank`, `<div class="step">${typeById(u.type).name} (${u.side}) must be touching a river's bank to cross.</div>`);
+    } else if (state.settings.enforceMovement && ((u.movedThisTurn || 0) > 1e-9 || u.charged)) {
+      appendTurn(`Cross river — needs a full move`, `<div class="step">${typeById(u.type).name} (${u.side}) has already moved this turn. Crossing a river costs an entire move (p.9) — halt at the bank and cross on a fresh turn.</div>`);
+    } else {
+      u.x = Math.max(20, Math.min(BOARD_W - 20, tgt.x));
+      u.y = Math.max(20, Math.min(BOARD_H - 20, tgt.y));
+      u.movedThisTurn = effectiveMoveAllowance(u);   // p.9: an entire move; the unit halts on the far bank
+      u.halfMovePaused = false;
+      u.acted.moved = true;
+      appendTurn(`River crossing`, `<div class="step">${typeById(u.type).name} (${u.side}) crosses to the far bank — its entire move (p.9); it halts there.</div>`);
     }
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
@@ -6875,6 +6952,18 @@ renderBoard();
       console.assert(!u.charged && u.chargeDir === null && !u.acted.moved && !u.acted.fired && !u.acted.fought && u.shotsThisTurn === 0, 'reset: charge declaration and acted flags cleared');
       console.assert(u.turnStartFacing === 90 && u.turnStartX === 200 && u.turnStartY === 200, 'reset: facing/position baselines re-set to current');
       console.assert(u.reform && u.reform.movesLeft === 2, 'reset-actions: a multi-turn reform is left intact (use Cancel reform)'); }
+
+    // River crossing (p.9): halt at the near bank; Cross river carries straight across
+    { const _t2 = state.terrain;
+      state.terrain = [{ id:'rv', type:'river', x:500, y:500, w:240, h:48 }];   // horizontal river, banks at y 476 / 524
+      const sc = riverBlockScale(500, 400, 0, 200);                              // moving south into the river
+      console.assert(sc < 0.999 && 400 + 200 * sc < 480, 'river: a move into a river halts at the near bank');
+      console.assert(riverBlockScale(500, 500, 0, 200) === 1, 'river: a unit in the water is not trapped');
+      console.assert(riverBlockScale(500, 100, 0, 50) === 1, 'river: a move that never reaches the river is unclamped');
+      console.assert(!!nearestAdjacentRiver({ x:500, y:460 }) && !nearestAdjacentRiver({ x:500, y:100 }), 'river: adjacency within ~1″ of the bank, not far away');
+      const tgt = crossRiverTarget({ kind:'mass', type:'HF', x:500, y:460, cols:2, rows:1 });
+      console.assert(tgt && Math.abs(tgt.x - 500) < 1e-6 && tgt.y > 524, 'river: Cross river lands the unit straight across on the far bank');
+      state.terrain = _t2; }
     // T2b: stream/river crossing costs + near-bank halt.
     state.terrain = [{ id:'ts', type:'stream', x:300, y:100, w:48, h:240 }];   // 2″-wide stream at x 276–324
     const lf = { type:'LF' };
