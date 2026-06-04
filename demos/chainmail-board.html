@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.37 · Settings UX + facing-edge opacity. The Settings dialog now caps at 85vh with an internal scrollbar (max-height + overflow-y) so its growing option list no longer overflows the viewport. Adds a 'Facing-edge opacity' slider (facingEdgeOpacity, default 0.5) controlling the translucency of the front/flank/rear edge lines, alongside the show/hide toggle; onSettingRange now re-renders the board for non-grid sliders. The 'a' arc toggle is unchanged and working as designed — a SELECTED unit always shows its arc, so 'a' visibly toggles only the un-selected units, and a freshly spawned unit is auto-selected (which is why its arc looked unaffected). -->
+<!-- chainmail-board.html · v0.11.38 · Escalade — the climb-to-the-wall fight (p.22-23, 25). Wires scaling ladders and siege towers into a man-to-man melee at the wall, realizing the rulebook's "sieges should be used in combination with the rules for man-to-man combat." A selected attacker (the head climber) that stands in contact with a friendly ladder/tower, which itself touches an enemy structure, may escalade an enemy defender at the wall: a new btn-escalade routes one round through the existing mtmResolveRound with the DEFENDER flagged fromAbove (height → he strikes first, p.25). On a defender win the climber's head figure is killed and — for a ladder — ladderPushOff (d6 5-6) repulses it: 2nd climber killed, 3rd stunned a turn (escaladeStunnedUntil blocks re-climbing); a siege tower's drawbridge protects the queue (head figure only, no cascade). On a climber win the defender dies and the climber gains a foothold; the engagement persists for successive climbers. Pure escaladeCasualties(via,count,pushed) is unit-tested. Also guards the latent onUnitContextMenu crash on works pieces (typeById(null)). FAITHFUL OMISSIONS: rockOnLadder (the defender's proactive rock-drop) is deferred to a later slice; stun only blocks re-escalade, not general movement; contact uses centre-distance + footprint pad. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.37</title>
+<title>Chainmail — Battlefield · v0.11.38</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Scrollable settings + edge opacity</div>
+    <div class="sub">Chainmail HTML Sim · Escalade — fight at the wall</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.37</span>
+    <span class="version-tag">v0.11.38</span>
   </div>
 
   <div class="toolbar">
@@ -250,6 +250,7 @@
     <button id="btn-fire-engine" disabled hidden>Fire engine</button>
     <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
     <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
+    <button id="btn-escalade" disabled hidden>Escalade</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -511,7 +512,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.37';
+const SIM_VERSION = '0.11.38';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -3376,6 +3377,127 @@ function resolveGiantBoulder() {
     `<div class="step">${a.side} Giant hurls a boulder at ${tName} (${gb.r.toFixed(1)}″) — −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
   renderBoard();
 }
+
+// === ESCALADE — climb-to-the-wall man-to-man fight (p.22-23, 25) ===========
+// A climber (selected troop/individual) in contact with a friendly ladder/tower
+// that touches an enemy structure fights an enemy defender at the wall. The
+// defender, being above, strikes first (p.25); a beaten climber is repulsed —
+// a ladder push-off (d6 5-6) also kills the 2nd man and stuns the 3rd, while a
+// tower's drawbridge shields the queue. All combat is man-to-man (mtmResolveRound).
+const worksPad = (p) => (p && p.kind === 'works' && p.lengthFt) ? ftToIn(Math.max(p.lengthFt, p.thickFt)) / 2 + 1 : 2;
+function piecesInContact(a, b) { return engineRangeToTarget(a, b) <= worksPad(a) + worksPad(b); }
+// Build an mtmResolveRound combatant from any unit (mass armor via the indiv map).
+function mtmCombatantFrom(u, extra) {
+  const weapon = mtmWeaponById(u.meleeWeapon || 'sword') || mtmWeaponById('sword');
+  const armor  = u.armor || (ARMOR_MTM[targetArmorIdx(u)] || { id: 'none' }).id;
+  return {
+    weapon, armor, mounted: !!u.mounted, prone: !!u.prone, parry: !!u.parry,
+    charging: !!(extra && extra.charging), attackedFrom: (extra && extra.attackedFrom) || 'front',
+    fromAbove: !!(extra && extra.fromAbove),
+  };
+}
+// Pure: who falls when a beaten climber is repulsed. Ladder push-off kills the
+// head + 2nd man (if a 2nd is queued) and stuns a 3rd (if one remains); a tower
+// repulses only the head figure.
+function escaladeCasualties(via, climberCount, pushed) {
+  if (via === 'tower') return { killed: 1, stunned: false };
+  const head = 1;
+  const second = (pushed && climberCount > 1) ? 1 : 0;
+  const stunned = !!(pushed && (climberCount - head - second) > 0);
+  return { killed: head + second, stunned };
+}
+function escaladeState(a, d, units = state.units) {
+  if (!a || a.kind === 'works' || a.destroyed) return null;
+  const climbCats = new Set(['ladder', 'tower']);
+  let via = null, ladder = null, structure = null, anyLadder = false;
+  for (const L of units) {
+    if (L.kind !== 'works' || L.destroyed || L.side !== a.side) continue;
+    if (!climbCats.has(WORKS_TYPES[L.worksType]?.cat)) continue;
+    if (!piecesInContact(a, L)) continue;
+    anyLadder = true;
+    const wall = units.find(u => u.kind === 'works' && !u.destroyed && u.side !== a.side &&
+      WORKS_TYPES[u.worksType]?.cat === 'structure' && u.defenseMax > 0 && piecesInContact(L, u));
+    if (wall) { via = WORKS_TYPES[L.worksType].cat; ladder = L; structure = wall; break; }
+  }
+  if (!ladder)    return { ok: false, reason: anyLadder ? 'notAtWall' : 'noLadder' };
+  if (!d || d.kind === 'works' || d.destroyed || d.side === a.side) return { ok: false, reason: 'target', via, ladder, structure };
+  if (!piecesInContact(d, structure)) return { ok: false, reason: 'defNotAtWall', via, ladder, structure };
+  const r = engineRangeToTarget(a, d);
+  if (!piecesInContact(a, d)) return { ok: false, reason: 'reach', r, via, ladder, structure };
+  if (a.escaladeStunnedUntil && a.escaladeStunnedUntil > state.turn) return { ok: false, reason: 'stunned', via, ladder, structure, r };
+  return { ok: true, via, ladder, structure, climbCap: WORKS_TYPES[ladder.worksType].climbPerTurn, r };
+}
+function resolveEscalade() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'melee') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const es = escaladeState(a, d);
+  if (!es || !es.ok) return;
+  if (!canMeleeThisTurn(a)) return;
+  pushUndo('escalade');
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const climber  = mtmCombatantFrom(a, { attackedFrom: 'front' });
+  const defender = mtmCombatantFrom(d, { attackedFrom: 'front', fromAbove: true });  // height → first blow (p.25)
+  const existing = findEngagement(a.id, d.id);
+  const round = existing ? existing.round + 1 : 1;
+  const r = mtmResolveRound({ round, rng: state.rng, prevFirstStriker: existing ? existing.prevFirstStriker : null, a: climber, d: defender });
+
+  const viaName = es.via === 'tower' ? 'siege tower' : 'ladder';
+  let html = `<div class="step">Round ${round} · escalade via ${viaName} · ` +
+    `<b style="color:var(--side-a-d)">${a.side}</b> ${aT ? aT.name : 'climber'} w/ ${climber.weapon.name} vs ` +
+    `<b style="color:var(--side-b-d)">${d.side}</b> ${dT ? dT.name : 'defender'} on the wall (strikes first for height)</div>`;
+  for (let i = 0; i < r.blows.length; i++) {
+    const b = r.blows[i];
+    const onWall = b.striker === 'defender';
+    const side = onWall ? d.side : a.side;
+    const sideC = onWall ? 'var(--side-b-d)' : 'var(--side-a-d)';
+    const modStr = b.mods ? ` ${b.mods > 0 ? '+' : ''}${b.mods}` : '';
+    const penStr = b.parried ? ` − ${b.penalty} parry` : '';
+    const result = b.kill ? `<b style="color:#a3322a">KILL</b>` : (b.breakWeapon ? `miss · <b>weapon breaks</b>` : 'miss');
+    html += `<div class="step"><b style="color:${sideC}">${side}</b> ${onWall ? 'defender' : 'climber'} blow ${i + 1}` +
+      `${b.parried ? ' (parried)' : ''} · ${b.weapon} vs ${b.targetArmor} (TN ${b.tn}+) · ` +
+      `2d6 = ${b.dice[0]}+${b.dice[1]}${modStr}${penStr} = <b>${b.total}</b> → ${result}</div>`;
+  }
+
+  if (r.outcome === 'continues') {
+    html += `<div class="verdict v-stable">neither falls — the assault holds, engaged for round ${round}</div>`;
+    if (existing) { existing.round = round; existing.prevFirstStriker = r.nextFirstStriker; }
+    else state.engagements.push({ aId: a.id, dId: d.id, round, startTurn: state.turn, prevFirstStriker: r.nextFirstStriker });
+  } else if (r.outcome === 'defender') {
+    // Climber beaten — repulsed off the wall.
+    let pushed = false;
+    if (es.via === 'ladder') pushed = ladderPushOff(d6(state.rng)).pushed;
+    const cc = escaladeCasualties(es.via, a.count, pushed);
+    applyCasualties(a, cc.killed);
+    if (cc.stunned && !a.destroyed) a.escaladeStunnedUntil = state.turn + 1;
+    const detail = es.via === 'tower'
+      ? `the head climber is cut down on the drawbridge (−1); the tower shields those behind`
+      : pushed
+        ? `defenders heave the ladder away (d6 5-6) — head climber & 2nd man killed (−${cc.killed})${cc.stunned ? ', 3rd stunned a turn' : ''}`
+        : `the head climber is thrown back from the rampart (−1)`;
+    html += `<div class="verdict v-rout">${a.side} ${aT ? aT.name : 'climber'} repulsed — ${detail}${a.destroyed ? ' · unit destroyed' : ''}</div>`;
+    if (a.destroyed) {
+      cleanupEngagementsForUnit(a.id);
+      if (a.id === state.selectedId) state.selectedId = null;
+    } else if (existing) { existing.round = round; existing.prevFirstStriker = r.nextFirstStriker; }
+  } else { // attacker (climber) wins
+    applyCasualties(d, 1);
+    const took = d.destroyed;
+    html += `<div class="verdict v-stable">${a.side} ${aT ? aT.name : 'climber'} fells the defender and gains a foothold on the wall${took ? '' : ' (the next defender steps up)'}</div>`;
+    if (took) {
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    }
+    if (!d.destroyed) {
+      if (existing) { existing.round = round; existing.prevFirstStriker = r.nextFirstStriker; }
+      else state.engagements.push({ aId: a.id, dId: d.id, round, startTurn: state.turn, prevFirstStriker: r.nextFirstStriker });
+    }
+  }
+  a.acted.fought = true;
+  d.acted.fought = true;
+  appendTurn(`Escalade · ${aT ? aT.name : 'climber'} (${a.side}) → ${dT ? dT.name : 'defender'} (${d.side}) · round ${round}`, html);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3446,6 +3568,22 @@ function updateButtons() {
       cb.reason === 'reach' ? `Move into contact to batter (now ${cb.r.toFixed(1)}″ away)` :
       !meleePhaseOk ? 'Resolve in the Melee phase' :
       `Batter — removes ${cb.points} defense/turn${STRUCTURE_INFLAMERS.has(a.type) ? ' and sets wood alight' : ''}`;
+  }
+  const eb = $('#btn-escalade');
+  if (eb) {
+    const es = escaladeState(a, d);
+    const showEsc = !!(es && es.ladder);   // selected climber stands at a friendly ladder/tower against a wall
+    const meleePhaseOk = !state.settings.enforcePhases || phaseId === 'melee';
+    eb.hidden = !showEsc;
+    eb.disabled = !(es && es.ok && meleePhaseOk && canMeleeThisTurn(a));
+    eb.title = !showEsc || !es ? '' :
+      es.reason === 'target' ? 'Shift-click an enemy defender at the wall to climb and fight' :
+      es.reason === 'defNotAtWall' ? 'That defender is not at the wall this ladder reaches' :
+      es.reason === 'reach' ? `Climb head not yet in melee reach (now ${es.r.toFixed(1)}″)` :
+      es.reason === 'stunned' ? 'These climbers were thrown back last turn — stunned, no climb this turn' :
+      !meleePhaseOk ? 'Resolve in the Melee phase' :
+      !canMeleeThisTurn(a) ? 'Already fought this turn — the next round is next turn' :
+      `Escalade via ${es.via === 'tower' ? 'siege tower' : 'ladder'} — the defender strikes first from above (p.25)`;
   }
   updateResolverPane();
 }
@@ -5666,6 +5804,7 @@ function onUnitContextMenu(evt, unitId) {
   evt.stopPropagation();
   const u = state.units.find(x => x.id === unitId);
   if (!u || u.destroyed) return;
+  if (u.kind === 'works') return;   // works pieces have no troop type/formation menu (guards typeById(null))
   state.ctxUnitId = unitId;
   const T = typeById(u.type);
   $('#ctx-head').textContent = `${u.side} · ${T.name} × ${u.count} · ${u.formation || 'line'}`;
@@ -6145,6 +6284,7 @@ $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
+$('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -6859,6 +6999,28 @@ renderBoard();
   console.assert(ladderPushOff(5).pushed && ladderPushOff(5).secondKilled && !ladderPushOff(4).pushed, 'siege: ladder pushed off on 5-6');
   console.assert(rockOnLadder(3, 5).secondSurvives && rockOnLadder(3, 5).thirdSurvives, 'siege: rock 2nd saved on 3, 3rd saved on 5');
   console.assert(!rockOnLadder(4, 6).secondSurvives && !rockOnLadder(4, 6).thirdSurvives, 'siege: rock 2nd dies on 4, 3rd dies on 6');
+
+  // Escalade (climb-to-the-wall fight, p.22-23, 25)
+  console.assert(escaladeCasualties('tower', 8, true).killed === 1 && !escaladeCasualties('tower', 8, true).stunned, 'escalade: a tower repulse kills only the head climber, no cascade');
+  { const c = escaladeCasualties('ladder', 5, true); console.assert(c.killed === 2 && c.stunned, 'escalade: ladder push-off kills head + 2nd and stuns the 3rd'); }
+  console.assert(escaladeCasualties('ladder', 5, false).killed === 1 && !escaladeCasualties('ladder', 5, false).stunned, 'escalade: a beaten climber not pushed off loses only the head figure');
+  { const c = escaladeCasualties('ladder', 2, true); console.assert(c.killed === 2 && !c.stunned, 'escalade: push-off on a 2-man climb kills both, no 3rd to stun'); }
+  { const c = escaladeCasualties('ladder', 1, true); console.assert(c.killed === 1 && !c.stunned, 'escalade: a lone climber pushed off just dies (no 2nd/3rd)'); }
+  { // escaladeState precondition matrix on a fabricated unit list
+    const px = inchesToPx;
+    const climber = { id:'c', kind:'mass', side:'A', count:20, x:0, y:0 };
+    const ladder  = { id:'l', kind:'works', side:'A', worksType:'ladder', x:px(1), y:0 };
+    const wall    = { id:'w', kind:'works', side:'B', worksType:'curtain', defenseMax:33, defenseLeft:33, lengthFt:90, thickFt:10, x:px(3), y:0 };
+    const def     = { id:'d', kind:'mass', side:'B', count:10, x:px(4), y:0 };
+    const far     = { id:'f', kind:'works', side:'A', worksType:'ladder', x:px(40), y:0 };
+    console.assert(escaladeState(climber, def, [climber, far, wall, def]).reason === 'noLadder', 'escalade: no friendly ladder in contact → noLadder');
+    console.assert(escaladeState(climber, def, [climber, ladder, def]).reason === 'notAtWall', 'escalade: ladder not touching a wall → notAtWall');
+    const ok = escaladeState(climber, def, [climber, ladder, wall, def]);
+    console.assert(ok.ok && ok.via === 'ladder' && ok.structure.id === 'w', 'escalade: climber@ladder@wall + enemy defender at wall → ok');
+    console.assert(escaladeState(climber, null, [climber, ladder, wall, def]).reason === 'target', 'escalade: no defender targeted → target');
+    const farDef = { id:'d2', kind:'mass', side:'B', count:10, x:px(40), y:0 };
+    console.assert(escaladeState(climber, farDef, [climber, ladder, wall, farDef]).reason === 'defNotAtWall', 'escalade: defender away from the wall → defNotAtWall');
+  }
   console.assert(mineFoiled(10) && !mineFoiled(15), 'siege: counter-mine within 12" foils the mine');
   console.assert(MINE.breechWidthIn === 6 && BREECH.widthIn === 6, 'siege: a mined / battered breech is 6" wide');
 
