@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.28 · Hide the Type dropdown for Works. The unit Type select (troop / fantastic types) only applies to mass and individual units, so it now carries f-troop-only and is hidden when Kind is Works — the piece is chosen from its own Engine / Structure dropdown, and the Type value was already ignored when spawning works. Consistency fix matching how the mass-only and individual-only fields hide; no engine logic changed. -->
+<!-- chainmail-board.html · v0.11.29 · Fantastic-creature siege batter (p.39). A selected fantastic creature with an enemy fortification targeted gets a Batter (creature) action: in contact it removes its structural points per turn (FANTASTIC_BATTER — Earth Elemental −6, Balrog −4, Giant −3, Troll/Ent −2; melee phase), and a Giant out of contact but within GIANT_ROCK_RANGE_IN (20″) instead hurls a rock as a small catapult (−2; artillery phase). A Balrog that batters a flammable target also sets it alight (STRUCTURE_INFLAMERS → igniteWorks), giving the first in-play ignition trigger. applyCreatureBatter is the pure resolver (reuses batterTarget + the C.8 burn system); creatureBatterState/resolveCreatureBatter gate the button and pick the mode by contact. The sim's single ELEMENTAL is read as the earth elemental; the table's Ogre (no such type) and Wizard fire-ball/lightning −3 (a ranged spell) are left for a later spell slice. Asserts cover the point values, Giant/Elemental battering, Balrog batter+inflame, stone-immune-to-flame, and a non-siege creature being unable to batter. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.28</title>
+<title>Chainmail — Battlefield · v0.11.29</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -235,9 +235,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Works unit panel fix</div>
+    <div class="sub">Chainmail HTML Sim · Fantastic siege batter</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.28</span>
+    <span class="version-tag">v0.11.29</span>
   </div>
 
   <div class="toolbar">
@@ -247,6 +247,7 @@
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-fire-engine" disabled hidden>Fire engine</button>
     <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
+    <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -505,7 +506,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.28';
+const SIM_VERSION = '0.11.29';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1723,6 +1724,25 @@ function resolveRamContact(ram, target, d1, d2) {
   if (ramDisabled(d1, d2)) { if (ram) ram.disabled = true; return { disabled: true, sum: d1 + d2 }; }
   const res = batterTarget(target, RAM_DAMAGE_PER_TURN) || { remaining: null, destroyed: false };
   return { disabled: false, sum: d1 + d2, remaining: res.remaining, destroyed: res.destroyed };
+}
+// Fantastic creatures batter fortifications directly (Fantastic Sieges, p.39). Defense
+// points removed per turn in contact: Earth Elemental −6, Balrog −4 (+inflame wood),
+// Giant −3, Troll/Ent −2. (The table's Ogre −1 and Wizard fire-ball/lightning −3 aren't
+// here: the sim has no Ogre type, and the Wizard's −3 is a ranged spell for a later
+// slice. The sim's single ELEMENTAL is read as the earth elemental.)
+const FANTASTIC_BATTER = { ELEMENTAL: 6, BALROG: 4, GIANT: 3, ENT: 2, TROLL: 2 };
+const STRUCTURE_INFLAMERS = new Set(['BALROG']);   // a batterer whose touch also sets wood alight
+const GIANT_ROCK_RANGE_IN = 20;                    // a Giant out of contact hurls rocks as a small catapult (p.35)
+// Apply a creature's structural points to a defense-value target; an inflamer also
+// ignites a flammable target via the C.8 burn system. Pure: mutates the target.
+function applyCreatureBatter(attackerType, target, points) {
+  if (!(points > 0)) return null;
+  const res = batterTarget(target, points) || { remaining: null, destroyed: false };
+  let inflamed = false;
+  if (!res.destroyed && STRUCTURE_INFLAMERS.has(attackerType) && worksIsFlammable(target.worksType)) {
+    inflamed = igniteWorks(target).ignited;
+  }
+  return { points, inflamed, remaining: res.remaining, destroyed: res.destroyed };
 }
 
 /* === D. STATE ========================================================== */
@@ -3173,6 +3193,36 @@ function resolveRamBatter() {
     : `<div class="step">${a.side} ${rb.wt.name} → ${tgtName}: −${RAM_DAMAGE_PER_TURN} defense (2d6 = ${res.sum}) · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
   renderBoard();
 }
+// A fantastic creature battering a structure: in contact it removes its FANTASTIC_BATTER
+// points (melee phase); a Giant out of contact but within range hurls a rock as a small
+// catapult (−2, artillery phase). Contact reuses the ram's footprint-pad reach.
+function creatureBatterState(a, d) {
+  if (!a || a.kind === 'works' || !d || a.destroyed || d.destroyed) return null;
+  const pts = FANTASTIC_BATTER[a.type], isGiant = a.type === 'GIANT';
+  if (pts == null && !isGiant) return null;
+  if (!(d.defenseMax > 0) || a.side === d.side) return { ok: false, reason: 'target' };
+  const r = engineRangeToTarget(a, d);
+  const pad = (d.kind === 'works' && d.lengthFt) ? ftToIn(Math.max(d.lengthFt, d.thickFt)) / 2 + 1 : 2;
+  if (r <= pad && pts != null) return { ok: true, mode: 'contact', points: pts, r };
+  if (isGiant && r <= GIANT_ROCK_RANGE_IN) return { ok: true, mode: 'rock', points: SIEGE_WEAPONS.smallCatapult.points, r };
+  return { ok: false, reason: pts != null ? 'reach' : 'rock-range', r };
+}
+function resolveCreatureBatter() {
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const cb = creatureBatterState(a, d);
+  if (!cb || !cb.ok) return;
+  const phase = cb.mode === 'contact' ? 'melee' : 'artillery';
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== phase) return;
+  pushUndo('creature-batter');
+  const res = applyCreatureBatter(a.type, d, cb.points);
+  const cName = typeById(a.type)?.name || 'creature';
+  const tName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure';
+  const verb = cb.mode === 'rock' ? 'hurls a boulder at' : 'batters';
+  appendTurn('Fantastic siege',
+    `<div class="step">${a.side} ${cName} ${verb} ${tName}: −${cb.points} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}${res.inflamed ? ' · set ALIGHT' : ''}</div>`);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3221,6 +3271,22 @@ function updateButtons() {
       !rb.inContact ? `Move the ram into contact (now ${rb.r.toFixed(1)}″ away)` :
       !meleePhaseOk ? 'Resolve in the Melee phase' :
       `Batter — removes ${RAM_DAMAGE_PER_TURN}/turn; defenders disable on 2d6 ≥ ${rb.wt.disableOn2d6}`;
+  }
+  const cb = creatureBatterState(a, d);
+  const cbBtn = $('#btn-batter-creature');
+  if (cbBtn) {
+    const showCb = !!(a && a.kind !== 'works' && (FANTASTIC_BATTER[a.type] != null || a.type === 'GIANT'));
+    const wantPhase = cb && cb.ok ? (cb.mode === 'contact' ? 'melee' : 'artillery') : null;
+    const phaseOk = !state.settings.enforcePhases || !wantPhase || phaseId === wantPhase;
+    cbBtn.hidden = !showCb;
+    cbBtn.disabled = !(cb && cb.ok && phaseOk);
+    cbBtn.title = !showCb || !cb ? '' :
+      cb.reason === 'target' ? 'Target must be an enemy structure/engine with a defense value' :
+      cb.reason === 'reach' ? `Move into contact to batter (now ${cb.r.toFixed(1)}″ away)` :
+      cb.reason === 'rock-range' ? `Too far to hurl a rock (now ${cb.r.toFixed(1)}″, max ${GIANT_ROCK_RANGE_IN}″)` :
+      !phaseOk ? `Resolve in the ${wantPhase === 'melee' ? 'Melee' : 'Artillery'} phase` :
+      cb.mode === 'rock' ? `Hurl a rock — removes ${cb.points} defense (small catapult, ≤${GIANT_ROCK_RANGE_IN}″)` :
+      `Batter — removes ${cb.points} defense/turn${STRUCTURE_INFLAMERS.has(a.type) ? ' and sets wood alight' : ''}`;
   }
   updateResolverPane();
 }
@@ -5887,6 +5953,7 @@ $('#btn-spawn').addEventListener('click', spawnUnit);
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
+$('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const split = !!a && atHalfMovePause(a) && canSplitMoveFire(a);
@@ -6612,6 +6679,19 @@ renderBoard();
     console.assert(resolveRamContact(ram, wall, 4, 5).disabled && ram.disabled, 'ram: 2d6 = 9 jams the ram (disabled)');
     const r2 = resolveRamContact({}, wall, 3, 4);
     console.assert(!r2.disabled && r2.remaining === 25 - RAM_DAMAGE_PER_TURN, 'ram: an undisabled ram removes 2 defense/turn'); }
+  // Fantastic creature siege batter (p.39)
+  console.assert(FANTASTIC_BATTER.ELEMENTAL === 6 && FANTASTIC_BATTER.BALROG === 4 && FANTASTIC_BATTER.GIANT === 3 && FANTASTIC_BATTER.TROLL === 2 && FANTASTIC_BATTER.ENT === 2, 'fantastic siege: −X structural points per creature');
+  { const wall = { defenseMax:30, defenseLeft:30 };
+    console.assert(applyCreatureBatter('GIANT', wall, FANTASTIC_BATTER.GIANT).remaining === 27, 'fantastic siege: a Giant chips a 30-defense wall by 3');
+    console.assert(applyCreatureBatter('ELEMENTAL', wall, FANTASTIC_BATTER.ELEMENTAL).remaining === 21, 'fantastic siege: an Earth Elemental then removes 6 more'); }
+  { const pal = { worksType:'palisade', defenseMax:15, defenseLeft:15, burning:null };
+    const r = applyCreatureBatter('BALROG', pal, FANTASTIC_BATTER.BALROG);
+    console.assert(r.remaining === 11 && r.inflamed && pal.burning, 'fantastic siege: a Balrog batters wood (−4) and sets it alight'); }
+  { const stone = { worksType:'curtain', defenseMax:40, defenseLeft:40, burning:null };
+    const r = applyCreatureBatter('BALROG', stone, FANTASTIC_BATTER.BALROG);
+    console.assert(r.remaining === 36 && !r.inflamed && !stone.burning, 'fantastic siege: a Balrog cannot ignite a stone wall'); }
+  console.assert(applyCreatureBatter('HERO', { defenseMax:30, defenseLeft:30 }, FANTASTIC_BATTER.HERO) === null, 'fantastic siege: a non-siege creature (no points) cannot batter');
+  console.assert(SIEGE_WEAPONS.smallCatapult.points === 2, 'fantastic siege: a Giant out of contact hurls a rock as a small catapult (−2)');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'tower', crew:8 }) === 4 && moveAllowanceOf({ kind:'works', worksType:'tower', crew:0 }) === 0, 'move: a pushed tower is capped to push speed (8 men = 4″, 0 men = immobile)');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'mantlet', crew:2 }) === 6, 'move: a mantlet with 2 pushers moves 6″');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'gunLight', crew:4 }) === 1e6 && moveAllowanceOf({ kind:'works', worksType:'curtain' }) === 1e6, 'move: non-pushed engines/structures keep free setup repositioning');
