@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.57 · Edit unit. A selected unit can now be reconfigured in place instead of deleted and rebuilt: the Selected panel gains an "Edit" button that loads the unit’s DEFINITION (side, type, count, formation, cols, spacing, pikes, missile, melee/armor/mounted/leader for individuals, or works type/crew/defense/length/thickness) back into the New-unit panel, which switches to "Edit unit" mode with an Apply/Cancel pair. Apply rebuilds the unit at its existing position and facing, re-deriving footprint and strength from the new figures and resetting per-turn action flags (moved/fired/charged/status) to a fresh state. The Kind selector is LOCKED while editing (change type within a kind, not the kind itself — a mass block becoming a catapult is delete-and-remake). Edits are undoable (tagged "edit"); deleting or resetting the edited unit exits edit mode cleanly. SCOPE: definition only — position and facing stay on the board (drag / rotate), and live battle state (casualties taken, target, morale, remaining defence) is left to its own controls. -->
+<!-- chainmail-board.html · v0.11.58 · Facing-edge visibility. The front/flank/rear facing edges on mass units (front green, flanks amber, rear red) were thin, half-transparent, and — because they were drawn in board units — shrank with the board so they vanished when zoomed out. Fixed: the edge strokes (and the hedgehog all-round box) now carry vector-effect="non-scaling-stroke", holding a constant on-screen thickness at any zoom; the default opacity is raised 0.5→0.85; and a new "Facing-edge thickness" slider (Settings ▸ Display, facingEdgeWeight 0.5–3×, default 1.5×) scales the stroke widths so the edges can be made as bold as wanted. The dark front-rank squares remain an always-on facing cue. No rules impact. Per-edge colour customisation deferred as an optional follow-up. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.57</title>
+<title>Chainmail — Battlefield · v0.11.58</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Edit unit (reconfigure in place)</div>
+    <div class="sub">Chainmail HTML Sim · Adjustable facing-edge visibility</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.57</span>
+    <span class="version-tag">v0.11.58</span>
   </div>
 
   <div class="toolbar">
@@ -483,6 +483,8 @@
       <label><input type="checkbox" data-setting="showFacingEdges"> Show front/flank/rear facing edges</label>
       <label>Facing-edge opacity
         <input type="range" min="0.1" max="1" step="0.05" data-setting-range="facingEdgeOpacity" style="flex:0 0 140px; margin-left:auto;"></label>
+      <label>Facing-edge thickness
+        <input type="range" min="0.5" max="3" step="0.25" data-setting-range="facingEdgeWeight" style="flex:0 0 140px; margin-left:auto;"></label>
     </section>
 
     <section>
@@ -534,7 +536,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.57';
+const SIM_VERSION = '0.11.58';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1835,8 +1837,9 @@ const state = {
     gridOpacity: 0.5,
     keepCapturedVisible: true,
     arcForAllMissile: false,
-    showFacingEdges: true,   // front/flank/rear edge lines on mass units (drawn translucent)
-    facingEdgeOpacity: 0.5,  // opacity of those facing edges (0.1–1)
+    showFacingEdges: true,   // front/flank/rear edge lines on mass units
+    facingEdgeOpacity: 0.85, // opacity of those facing edges (0.1–1)
+    facingEdgeWeight: 1.5,   // stroke-width multiplier for facing edges (0.5–3); edges use non-scaling-stroke so they stay visible when zoomed out
     applyWrapAroundBonus: true,
     applyFatigue: false,
     applyCavalryChargeMorale: false,
@@ -3151,19 +3154,21 @@ function renderUnit(u) {
   // Edges
   const xL = -w/2, xR = w/2, yT = -h/2, yB = h/2;
   let edges = '';
+  const ew = state.settings.facingEdgeWeight ?? 1.5;   // thickness multiplier; edges use non-scaling-stroke so they don't shrink when the board is zoomed out
   if (u.kind === 'individual') {
     // Single facing marker — a small triangle pointing forward, contained inside the cell
     const ms = 4;
     edges += `<polygon points="0,${yT + 1} ${-ms},${yT + 7} ${ms},${yT + 7}" fill="var(--front)" stroke="${sideD}" stroke-width="0.5"/>`;
   } else if (u.hedgehog) {
     // All four edges drawn in front-color (defends all around)
-    edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="1.5" stroke-dasharray="3 3"/>`;
+    edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="${(1.5*ew).toFixed(1)}" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`;
   } else if (state.settings.showFacingEdges) {
-    edges += `<g opacity="${state.settings.facingEdgeOpacity ?? 0.5}">`
-      + `<line x1="${xL}" y1="${yT}" x2="${xR}" y2="${yT}" stroke="var(--front)" stroke-width="2.2" stroke-linecap="round"/>`
-      + `<line x1="${xR}" y1="${yT}" x2="${xR}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`
-      + `<line x1="${xL}" y1="${yB}" x2="${xR}" y2="${yB}" stroke="var(--rear)"  stroke-width="1.4"/>`
-      + `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/></g>`;
+    const efw = (2.2 * ew).toFixed(1), esw = (1.4 * ew).toFixed(1);
+    edges += `<g opacity="${state.settings.facingEdgeOpacity ?? 0.85}">`
+      + `<line x1="${xL}" y1="${yT}" x2="${xR}" y2="${yT}" stroke="var(--front)" stroke-width="${efw}" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`
+      + `<line x1="${xR}" y1="${yT}" x2="${xR}" y2="${yB}" stroke="var(--flank)" stroke-width="${esw}" vector-effect="non-scaling-stroke"/>`
+      + `<line x1="${xL}" y1="${yB}" x2="${xR}" y2="${yB}" stroke="var(--rear)"  stroke-width="${esw}" vector-effect="non-scaling-stroke"/>`
+      + `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="${esw}" vector-effect="non-scaling-stroke"/></g>`;
   }
 
   // Arc of fire (missile-armed) — render for selected unit, or all missile units when the setting is on
