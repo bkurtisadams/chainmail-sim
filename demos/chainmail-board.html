@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.35 · Move the New-unit Spawn button into the panel header so it can't be scrolled out of view. The full-width '+ Spawn at center' button at the panel foot is replaced by a compact gold '+ Spawn' button pinned to the right of the 'New unit ▾' title, sitting at the panel's top edge regardless of how many Kind-specific field rows are shown. Its click is stopPropagation'd so it spawns without toggling the collapsible panel, and it hides when the panel is collapsed. spawnUnit logic is unchanged. -->
+<!-- chainmail-board.html · v0.11.37 · Settings UX + facing-edge opacity. The Settings dialog now caps at 85vh with an internal scrollbar (max-height + overflow-y) so its growing option list no longer overflows the viewport. Adds a 'Facing-edge opacity' slider (facingEdgeOpacity, default 0.5) controlling the translucency of the front/flank/rear edge lines, alongside the show/hide toggle; onSettingRange now re-renders the board for non-grid sliders. The 'a' arc toggle is unchanged and working as designed — a SELECTED unit always shows its arc, so 'a' visibly toggles only the un-selected units, and a freshly spawned unit is auto-selected (which is why its arc looked unaffected). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.35</title>
+<title>Chainmail — Battlefield · v0.11.37</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -203,7 +203,7 @@
   .modal-bg { position: absolute; inset: 0; background: rgba(0,0,0,0.42); }
   .modal-card { position: relative; background: var(--panel); border: 1px solid var(--rule);
     border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); padding: 18px 22px 16px;
-    min-width: 400px; max-width: 480px; font-family: var(--serif); color: var(--ink); }
+    min-width: 400px; max-width: 480px; max-height: 85vh; overflow-y: auto; font-family: var(--serif); color: var(--ink); }
   .modal-card .modal-head { font-family: var(--sans); font-size: 13px; letter-spacing: 3px;
     text-transform: uppercase; color: var(--ink); margin: 0 0 14px; padding-bottom: 8px;
     border-bottom: 1px solid var(--rule); font-weight: 700; }
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Spawn button in header</div>
+    <div class="sub">Chainmail HTML Sim · Scrollable settings + edge opacity</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.35</span>
+    <span class="version-tag">v0.11.37</span>
   </div>
 
   <div class="toolbar">
@@ -274,7 +274,7 @@
       <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
     </span>
     <span class="phase-hint" id="phase-hint" hidden></span>
-    <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid</span>
+    <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid · a → fire arcs</span>
   </div>
 
   <div class="layout">
@@ -431,6 +431,7 @@
       <tr><td>0</td><td>Reset zoom &amp; pan</td></tr>
       <tr><td>middle-drag</td><td>Pan the board</td></tr>
       <tr><td>g</td><td>Toggle grid</td></tr>
+      <tr><td>a</td><td>Toggle the missile arc-of-fire display for all units (Settings has the same switch)</td></tr>
       <tr><td>m</td><td>Measure tool — click to anchor (snaps to a unit's centre, or the grid when snap is on), the ruler follows the cursor, click again to lock; reads inches. esc clears the line</td></tr>
       <tr><td>delete</td><td>Remove selected unit</td></tr>
       <tr><td>esc</td><td>Clear selection / close menus</td></tr>
@@ -457,6 +458,9 @@
         <input type="range" min="0" max="1" step="0.05" data-setting-range="gridOpacity" style="flex:0 0 140px;"></label>
       <label><input type="checkbox" data-setting="keepCapturedVisible"> Keep captured units visible (faded)</label>
       <label><input type="checkbox" data-setting="arcForAllMissile"> Show arc of fire for all missile units</label>
+      <label><input type="checkbox" data-setting="showFacingEdges"> Show front/flank/rear facing edges</label>
+      <label>Facing-edge opacity
+        <input type="range" min="0.1" max="1" step="0.05" data-setting-range="facingEdgeOpacity" style="flex:0 0 140px; margin-left:auto;"></label>
     </section>
 
     <section>
@@ -507,7 +511,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.35';
+const SIM_VERSION = '0.11.37';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1789,6 +1793,8 @@ const state = {
     gridOpacity: 0.5,
     keepCapturedVisible: true,
     arcForAllMissile: false,
+    showFacingEdges: true,   // front/flank/rear edge lines on mass units (drawn translucent)
+    facingEdgeOpacity: 0.5,  // opacity of those facing edges (0.1–1)
     applyWrapAroundBonus: true,
     applyFatigue: false,
     applyCavalryChargeMorale: false,
@@ -2826,11 +2832,12 @@ function renderUnit(u) {
   } else if (u.hedgehog) {
     // All four edges drawn in front-color (defends all around)
     edges += `<rect x="${xL-3}" y="${yT-3}" width="${w+6}" height="${h+6}" fill="none" stroke="var(--front)" stroke-width="1.5" stroke-dasharray="3 3"/>`;
-  } else {
-    edges += `<line x1="${xL}" y1="${yT}" x2="${xR}" y2="${yT}" stroke="var(--front)" stroke-width="2.2" stroke-linecap="round"/>`;
-    edges += `<line x1="${xR}" y1="${yT}" x2="${xR}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
-    edges += `<line x1="${xL}" y1="${yB}" x2="${xR}" y2="${yB}" stroke="var(--rear)"  stroke-width="1.4"/>`;
-    edges += `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`;
+  } else if (state.settings.showFacingEdges) {
+    edges += `<g opacity="${state.settings.facingEdgeOpacity ?? 0.5}">`
+      + `<line x1="${xL}" y1="${yT}" x2="${xR}" y2="${yT}" stroke="var(--front)" stroke-width="2.2" stroke-linecap="round"/>`
+      + `<line x1="${xR}" y1="${yT}" x2="${xR}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/>`
+      + `<line x1="${xL}" y1="${yB}" x2="${xR}" y2="${yB}" stroke="var(--rear)"  stroke-width="1.4"/>`
+      + `<line x1="${xL}" y1="${yT}" x2="${xL}" y2="${yB}" stroke="var(--flank)" stroke-width="1.4"/></g>`;
   }
 
   // Arc of fire (missile-armed) — render for selected unit, or all missile units when the setting is on
@@ -3727,6 +3734,13 @@ function toggleGrid() {
   $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
   renderBoard();
 }
+function toggleArcForAll() {
+  state.settings.arcForAllMissile = !state.settings.arcForAllMissile;
+  const cb = document.querySelector('[data-setting="arcForAllMissile"]');
+  if (cb) cb.checked = state.settings.arcForAllMissile;
+  saveSettings();
+  renderBoard();
+}
 
 function onBoardMouseDown(evt) {
   if (state.terrainMode && evt.button === 0) { onTerrainMouseDown(svgPoint(evt)); return; }
@@ -4186,6 +4200,7 @@ function onKeyDown(evt) {
   if (evt.key === 'g' || evt.key === 'G') { toggleGrid(); evt.preventDefault(); return; }
   if ((evt.key === 'm' || evt.key === 'M') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleMeasure(); evt.preventDefault(); return; }
   if ((evt.key === 't' || evt.key === 'T') && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleTerrain(); evt.preventDefault(); return; }
+  if ((evt.key === 'a' || evt.key === 'A') && !evt.ctrlKey && !evt.metaKey && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleArcForAll(); evt.preventDefault(); return; }
   // Terrain editing: a selected region claims [ ] (rotate), arrows (nudge),
   // Delete (remove), Escape (deselect) before the unit handlers see them.
   if (state.terrainMode && state.terrainSelId != null && !typingField) {
@@ -5932,6 +5947,8 @@ function onSettingRange(evt) {
     const g = $('#grid');
     if (g) g.setAttribute('opacity', val);
     else renderBoard();
+  } else {
+    renderBoard();
   }
 }
 
