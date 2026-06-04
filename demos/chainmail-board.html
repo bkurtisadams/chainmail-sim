@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.46 · Marsh blocks heavy equipment (p.8), gap 4 of the movement-rules cleanup. RAW: "marshy as hill, with the additional penalty of preventing the entrance of heavy equipment, catapults, and guns." The entry-block machinery (moveBlockScale → terrainBlocksUnitAt, wired into drag/nudge/charge under hard-enforce, and already used for woods-stops-formed-bodies) checked marsh's blocksHeavy flag against isHeavyEquip — but isHeavyEquip only consulted HEAVY_MOVE_TYPES, an empty set (it was meant for mass artillery/wagon types that don't exist). The heavy equipment in this sim are WORKS engines, so isHeavyEquip now also returns true for works whose cat is catapult/gun/ram/tower/mantlet (HEAVY_WORKS_CATS). A heavy engine's centre-path is clamped short of a marsh boundary (and one already in a marsh isn't trapped); scaling ladders (carried), abatis (built in place), structures (immobile), foot and horse are unaffected — foot/horse are still merely slowed 50% by marsh. Marsh stays flat (not directional like hills). Enforcement is gated by Hard-enforce move allowance, same as woods. -->
+<!-- chainmail-board.html · v0.11.47 · Fix the right-click Restore / Reset-actions commands so a "reset" unit can actually move. clearActed() only cleared the acted flags (moved/fired/fought) + shotsThisTurn, so Restore and Reset-actions cleared the M/F/X badges — making the unit LOOK ready — while leaving the consumed move budget (movedThisTurn), a half-move pause, a split-fire cap, a charge declaration, and any reform in place. Under hard-enforce the unit then still had 0″ remaining (and a half-move/reform lock blocks it outright). New resetMoveActions(u) mirrors endRound's per-turn reset (movedThisTurn 0, halfMovePaused/splitFired/splitLeg1 cleared, charged/chargeDir cleared, turnStart facing/position re-baselined, clearActed) — it does NOT touch a multi-turn reform (use Cancel reform) or chargedLastTurn (prior-turn history). Reset-actions now calls it; Restore (full pristine reset) calls it AND clears reform + chargedLastTurn. The three menu items are relabelled for what they actually do and each now logs a one-line confirmation: "Restore unit (full reset)", "Reset move & actions (this round)", "Reset status (ready · clear paralysis)". Phase/initiative gating (whose side moves now) is unchanged — a reset can't override the turn order. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.46</title>
+<title>Chainmail — Battlefield · v0.11.47</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Marsh blocks heavy equipment</div>
+    <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.46</span>
+    <span class="version-tag">v0.11.47</span>
   </div>
 
   <div class="toolbar">
@@ -398,9 +398,9 @@
 
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
-  <button data-act="restore">Restore unit (count + status + fatigue + actions)</button>
-  <button data-act="reset-actions">Reset actions (this round)</button>
-  <button data-act="reset-status">Reset status (set to ready)</button>
+  <button data-act="restore">Restore unit (full reset)</button>
+  <button data-act="reset-actions">Reset move &amp; actions (this round)</button>
+  <button data-act="reset-status">Reset status (ready · clear paralysis)</button>
   <button data-act="declare-charge">Declare charge (+1 die/man in melee)</button>
   <button data-act="cancel-charge">Cancel charge</button>
   <button data-act="pause-half">Pause at half-move</button>
@@ -518,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.46';
+const SIM_VERSION = '0.11.47';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6033,16 +6033,21 @@ function onContextMenuAction(evt) {
     u.lastFiredTurn = null;
     if (u.conditions) delete u.conditions;
     if (u.maxHp) u.hp = u.maxHp;
-    clearActed(u);
+    u.reform = null;
+    u.chargedLastTurn = false;
+    resetMoveActions(u);
     if (u.kind !== 'individual') {
       const dims = formationDims(u.formation || 'line', u.count, u.customCols);
       u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
     }
+    appendTurn(`Restore unit`, `<div class="step">${typeById(u.type).name} (${u.side}) fully reset — count, status, fatigue, and this round's move/actions restored.</div>`);
   } else if (act === 'reset-actions') {
-    clearActed(u);
+    resetMoveActions(u);
+    appendTurn(`Reset move & actions`, `<div class="step">${typeById(u.type).name} (${u.side}) may move and act again this round (move budget, half-move pause, split-fire, and charge cleared).</div>`);
   } else if (act === 'reset-status') {
     u.status = 'ready';
     clearParalysis(u);
+    appendTurn(`Reset status`, `<div class="step">${typeById(u.type).name} (${u.side}) set to ready; paralysis cleared.</div>`);
   } else if (act === 'paralyze-touch') {
     const tgt = state.units.find(x => x.id === state.targetId);
     if (!tgt || tgt.destroyed || tgt.side === u.side) {
@@ -6181,6 +6186,18 @@ function resetBoard() {
 }
 
 function clearActed(u) { u.acted = { moved: false, fired: false, fought: false }; u.shotsThisTurn = 0; }
+// Free a unit's per-turn move/fire/fight state so it may act again this round —
+// mirrors endRound's per-turn reset. Does NOT touch a multi-turn reform (use
+// Cancel reform) or chargedLastTurn (prior-turn history, gates a fresh charge).
+function resetMoveActions(u) {
+  u.charged = false; u.chargeDir = null;
+  u.movedThisTurn = 0;
+  u.halfMovePaused = false;
+  u.splitFired = false; u.splitLeg1 = 0;
+  u.turnStartFacing = u.facing;
+  u.turnStartX = u.x; u.turnStartY = u.y;
+  clearActed(u);
+}
 
 function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting]').forEach(el => {
@@ -6850,6 +6867,14 @@ renderBoard();
     console.assert(moveBlockScale(100, 100, 600, 0, ladder) === 1, 'marsh: a ladder passes (not heavy)');
     console.assert(moveBlockScale(100, 100, 600, 0, mass) === 1, 'marsh: foot are slowed by marsh, not blocked');
     console.assert(moveBlockScale(400, 100, 200, 0, cat) === 1, 'marsh: a heavy engine already in the marsh is not trapped');
+
+    // Reset commands free per-turn movement, not just the acted flags
+    { const u = { kind:'mass', type:'HF', facing:90, x:200, y:200, movedThisTurn:9, halfMovePaused:true, splitFired:true, splitLeg1:4, charged:true, chargeDir:90, acted:{ moved:true, fired:true, fought:true }, shotsThisTurn:2, reform:{ to:'square', movesLeft:2 } };
+      resetMoveActions(u);
+      console.assert(u.movedThisTurn === 0 && !u.halfMovePaused && !u.splitFired && u.splitLeg1 === 0, 'reset: move budget, half-move pause, and split-fire are cleared');
+      console.assert(!u.charged && u.chargeDir === null && !u.acted.moved && !u.acted.fired && !u.acted.fought && u.shotsThisTurn === 0, 'reset: charge declaration and acted flags cleared');
+      console.assert(u.turnStartFacing === 90 && u.turnStartX === 200 && u.turnStartY === 200, 'reset: facing/position baselines re-set to current');
+      console.assert(u.reform && u.reform.movesLeft === 2, 'reset-actions: a multi-turn reform is left intact (use Cancel reform)'); }
     // T2b: stream/river crossing costs + near-bank halt.
     state.terrain = [{ id:'ts', type:'stream', x:300, y:100, w:48, h:240 }];   // 2″-wide stream at x 276–324
     const lf = { type:'LF' };
