@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.63 · Heavy crossbow +1 to missile fire die rolls (COMBAT-RAW-AUDIT, finishing the rate-of-fire section). The shot-count tiers (archers/longbows fire twice when held and unmeleed, once when moved; crossbows never double), the every-other-turn heavy-crossbow/arquebus cadence, and the moved-over-half "beat your opponent's opposed d6 to loose" gate were already implemented and tested; this adds the remaining clause from p.12 — "[Heavy Crossbowmen] add 1 to Missile Fire die rolls." It is data-driven: a missileBonus:1 flag on the heavy_crossbow weapon definition, read via missileDieBonus(u), and applied in BOTH resolution paths — folded into the 2d6 total for an individual heavy-crossbowman (resolveIndividualMissile) and added to the firing d6 before the low/high band lookup for a massed heavy-crossbow unit (resolveMassMissile), so a heavier bolt shifts more results into the higher kill column. Both resolvers take the new argument as an optional default-0 parameter, so every existing call and test is unaffected. FAITHFUL SIMPLIFICATION: the +1 is scoped to heavy crossbow per RAW (the arquebus, governed by the separate p.13 gunpowder rules, does not get it); the "no reloading when a heavy crossbow moved over half" nuance remains approximated by the every-other-turn cadence, as before. -->
+<!-- chainmail-board.html · v0.11.64 · Arquebus wired into missile resolution (p.13 gunpowder). Arquebusiers previously fired through the generic armour-based missile table; now arquebus fire routes through the dedicated resolveArquebus engine, which IGNORES armour and rolls a per-man accuracy d6 against a range-band hit number (0–6″ hit on 2+, 6–12″ on 4+, 12–18″ on 5+) — a hit kills any figure. New onArquebusFire handles every firer/target combination (individual or massed shooter; individual or mass target), intercepted ahead of the bow/thrown dispatch in onResolveMissile by an a.weapon==='arquebus' branch. Front-two-ranks firing cap (p.11), the every-other-turn cadence and the over-half-move opposed-die gate ("treat as Heavy Crossbowmen", already in place via halfRoF + overHalfMoveFire), the 45° foot arc, the no-indirect rule, and the simultaneous-missile-phase deferral + loss-morale checks all carry through the existing machinery. Hard cover deducts from the accuracy die per p.13 (up to ½ concealed −1, over ½ −2), mapped from the sim's cover model (soft/woods → −1, hard/mantlet → −2) via the new arquebusCover helper. FAITHFUL OMISSION: the rested-weapon +1 has no UI toggle and is left off; "treat as Heavy Crossbowmen" is read as rate-of-fire cadence only, so the heavy-crossbow +1-to-fire bonus is NOT applied to the arquebus accuracy die. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.63</title>
+<title>Chainmail — Battlefield · v0.11.64</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Heavy crossbow +1 missile bonus</div>
+    <div class="sub">Chainmail HTML Sim · Arquebus gunpowder fire wired</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.63</span>
+    <span class="version-tag">v0.11.64</span>
   </div>
 
   <div class="toolbar">
@@ -541,7 +541,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.63';
+const SIM_VERSION = '0.11.64';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6035,8 +6035,10 @@ function onResolveMissile() {
         `<div class="step">${roll}</div><div class="verdict v-noeffect">would fail the foe's die — advisory only (enforce-movement off), shot allowed</div>`);
     }
   }
-  // Dispatch by shooter kind. Individuals use the Appendix B-bottom table;
-  // mass shooters use the mass missile table (existing path).
+  // Dispatch by weapon, then shooter kind. Arquebus uses the p.13 gunpowder
+  // table (ignores armour) regardless of firer/target kind; bows & thrown use
+  // the Appendix-B individual table or the mass missile table.
+  if (a.weapon === 'arquebus') return onArquebusFire(a, d);
   if (a.kind === 'individual') return onIndivMissile(a, d);
   if (d.kind === 'individual') return onMassMissileAtIndiv(a, d);
   const rng = state.rng;
@@ -6324,6 +6326,78 @@ function onMassMissileAtIndiv(a, d) {
 
   appendTurn(missileTitle(a, d), html);
   markFired(a);
+  renderBoard();
+}
+
+// Arquebus fire (p.13 gunpowder). A gun ignores armour entirely and rolls a
+// per-man accuracy d6 against a range-band hit number (0–6″ 2+, 6–12″ 4+,
+// 12–18″ 5+); a hit kills any figure. Rate of fire is "as Heavy Crossbowmen"
+// (every other turn via halfRoF, and the over-½-move opposed-die gate already
+// runs ahead of this in onResolveMissile); no indirect; 45° foot arc. Hard
+// cover deducts from the accuracy die: up to ½ concealed −1, over ½ −2. The
+// sim's cover model maps soft (woods) → −1, hard (mantlet screen) → −2. The
+// rested-weapon +1 has no UI toggle and is left off (faithful omission).
+const arquebusCover = (c) => c === 'hard' ? 'over' : c === 'soft' ? 'half' : 'none';
+function onArquebusFire(a, d) {
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const reach = inMissileRange(a, d);
+  if (!reach.ok) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">${reach.reason}</div>`); return; }
+  if (d.kind === 'individual' && MISSILE_IMMUNE_INDIV.has(d.type)) {
+    appendTurn(missileTitle(a, d),
+      `<div class="step">${a.side} · ${aT.name} fires arquebus at ${d.side} · ${dT.name} · ${reach.distanceIn.toFixed(1)}″</div>` +
+      `<div class="verdict v-noeffect">${dT.name} is impervious to normal missile fire</div>`);
+    markFired(a);
+    return;
+  }
+  // p.11: only the front two ranks of a body may fire; an individual is one shooter.
+  const shooters = a.kind === 'individual' ? 1 : Math.min(activeFigures(a), a.cols * 2);
+  const rankCapped = a.kind !== 'individual' && shooters < a.count;
+  const cov = arquebusCover(effectiveCoverVs(d, a));
+  const res = resolveArquebus({ rangeIn: reach.distanceIn, shooters, cover: cov, support: false, rng: state.rng });
+  if (!res.inRange) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">out of arquebus range (${reach.distanceIn.toFixed(1)}″ > 18″)</div>`); return; }
+  const n = res.kills;
+  const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${shooters} firing (front 2 ranks of ${a.count})</small>` : '';
+  const covNote = cov === 'none' ? '' : ` · ${cov === 'over' ? 'over-½ hard cover (−2)' : 'hard cover (−1)'}`;
+  const who = a.kind === 'individual' ? aT.name : `${aT.name} × ${a.count}`;
+  let html = `<div class="step">${a.side} · ${who} fires arquebus at ${d.side} · ${dT.name} · distance ${reach.distanceIn.toFixed(1)}″ · ignores armour (p.13)${covNote}${rankNote} · ${shooters} firing · need ${res.hitOn}+ → <b>${n}</b> hit${n===1?'':'s'}</div>`;
+  if (simMissilePhase()) {
+    d.pendingHits = (d.pendingHits || 0) + n;
+    html += `<div class="step" style="color:var(--ink-soft)">simultaneous fire — ${n} hit${n===1?'':'s'} pending; applied when the missile phase ends (p.9)</div>`;
+    appendTurn(missileTitle(a, d), html); markFired(a); renderBoard(); return;
+  }
+  if (d.kind === 'individual') {
+    const hpBefore = d.hp;
+    d.hp = Math.max(0, (d.hp || 0) - n);
+    if (d.hp <= 0) {
+      html += `<div class="verdict v-rout">${d.side} · ${dT.name} → killed (${n} hit${n===1?'':'s'}, hp ${hpBefore}/${d.maxHp})</div>`;
+      d.count = 0; d.destroyed = true;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    } else if (n > 0) html += `<div class="verdict v-killed">${d.side} · ${dT.name} takes ${n} hit${n===1?'':'s'} → hp ${d.hp}/${d.maxHp}</div>`;
+    else html += `<div class="verdict v-noeffect">no hits</div>`;
+  } else {
+    applyCasualties(d, n);
+    capParalysisToCount(d);
+    if (d.destroyed) {
+      html += `<div class="verdict v-rout">${d.side} · ${dT.name} wiped out</div>`;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="verdict v-${n>0?'killed':'noeffect'}">${n} kill${n===1?'':'s'}${n>0?` → ${d.count}/${d.startCount}`:''}</div>`;
+      const cas = d.startCount - d.count;
+      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue });
+      if (lr.triggered) {
+        const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+        html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
+        if (!lr.passed) d.destroyed = true;
+      }
+    }
+  }
+  appendTurn(missileTitle(a, d), html);
+  markFired(a);
+  if (d.destroyed && state.targetId === d.id) state.targetId = null;
   renderBoard();
 }
 
