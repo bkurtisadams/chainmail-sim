@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.51 · Mounted road bonus (house rule, OFF by default — not RAW). The p.9 ROAD column only lists horse, so a mounted hero/wizard (an individual with the Mounted flag) gets no road bonus by the rules as written. New setting "Mounted figures get the road bonus" (state.settings.mountedRoadBonus, default false): when ON, any unit with the existing Mounted flag that isn't already a horse type earns the Heavy-Horse bonus (+3, MOUNTED_ROAD_BONUS) — still subject to the same on-a-road-and-facing-along-it gate from v0.11.50. roadBonusType is the only logic change; the Mounted checkbox, its melee/charge/facing effects, and the sidebar "Mounted: yes" line already existed. With the setting off, behaviour is unchanged from RAW (mounted flag ignored for movement). -->
+<!-- chainmail-board.html · v0.11.53 · Drawn-terrain editing polish: insert/remove vertices and per-line width. Right-click a drawn line: clicking on a vertex removes it (down to a 2-point minimum); clicking on the body inserts a new vertex on the nearest segment (then drag it). A per-line width override (r.widthIn) is adjusted with [ and ] while a line is selected (those keys rotate rects, which is meaningless for a line) — clamped 0.5–12″; the selected line's label shows its current width. lineWidthInOf(r) centralises "override else type default", honoured by detection (lineHalfWidthPx) and rendering. Everything from v0.11.52 (draw/select/move/vertex-drag/delete, segment-based detection/road-axis/river-crossing) is unchanged. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.51</title>
+<title>Chainmail — Battlefield · v0.11.53</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -239,7 +239,7 @@
     <h1>Battlefield</h1>
     <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.51</span>
+    <span class="version-tag">v0.11.53</span>
   </div>
 
   <div class="toolbar">
@@ -261,7 +261,7 @@
     <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
     <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
     <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
-    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>click place · drag move · corner/edge handles resize · [ ] or ⌃wheel rotate · Del remove</span>
+    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
     <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-settings" class="secondary">Settings</button>
@@ -520,7 +520,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.51';
+const SIM_VERSION = '0.11.53';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -538,11 +538,11 @@ const TERRAIN_TYPES = Object.freeze({
   marshy: { label: 'Marsh',         fill: '#7a8a5a', moveMult: 0.5, noCharge: true, blocksHeavy: true,   wIn: 9,  hIn: 7 },
   ditch:  { label: 'Ditch/Rampart', fill: '#a98b5a', moveMult: 0.5, noCharge: true,                      wIn: 14, hIn: 3 },
   rough:  { label: 'Rough',         fill: '#b09a6a', moveMult: 1,   noCharge: true,                      wIn: 9,  hIn: 6 },
-  stream: { label: 'Stream',        fill: '#5b86a8', moveMult: 1,   noCharge: true, cross: 6,            wIn: 16, hIn: 2 },
-  river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full', haltCross: true, wIn: 22, hIn: 3 },
+  stream: { label: 'Stream',        fill: '#5b86a8', moveMult: 1,   noCharge: true, cross: 6,            linear: true, lineWidthIn: 2, wIn: 16, hIn: 2 },
+  river:  { label: 'River',         fill: '#3f6f95', moveMult: 1,   noCharge: false, cross: 'full', haltCross: true, linear: true, lineWidthIn: 3, wIn: 22, hIn: 3 },
   pond:   { label: 'Pond',          fill: '#4f7c9c', moveMult: 0.5, noCharge: true,                      wIn: 7,  hIn: 6 },
   gulley: { label: 'Gulley',        fill: '#9c8757', moveMult: 1,   noCharge: true,                      wIn: 11, hIn: 3 },
-  road:   { label: 'Road',          fill: '#8a6f4a', moveMult: 1,   noCharge: false, road: true,          wIn: 30, hIn: 2 },
+  road:   { label: 'Road',          fill: '#8a6f4a', moveMult: 1,   noCharge: false, road: true,          linear: true, lineWidthIn: 2, wIn: 30, hIn: 2 },
 });
 const TERRAIN_ORDER = ['hill', 'wooded', 'marshy', 'rough', 'ditch', 'stream', 'river', 'pond', 'gulley', 'road'];
 
@@ -1807,6 +1807,8 @@ const state = {
   terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
   terrainSelId: null,     // T4-edit: id of the selected placed region (move/rotate/delete target)
   terrainDrag: null,      // T4-edit: in-flight terrain reposition drag
+  terrainDraw: null,      // v0.11.52: in-progress polyline { type, pts:[…], cursor:{x,y} }
+  terrainVertex: null,    // v0.11.52: in-flight vertex drag of a drawn line { id, vi, undoTag, moved }
   terrainResize: null,    // T4-edit: in-flight terrain resize drag (handle grip)
   ctxUnitId: null,
   turn: 1,
@@ -1895,7 +1897,7 @@ const onRoadAt = (x, y) => terrainTypesAt(x, y).some(t => t.road);
 function roadAxisDegAt(x, y) {
   for (const r of state.terrain) {
     const t = TERRAIN_TYPES[r.type];
-    if (t && t.road && inTerrainRect(x, y, r)) return (r.w >= r.h ? (r.rot || 0) : (r.rot || 0) + 90);
+    if (t && t.road && inTerrainRect(x, y, r)) return r.pts ? lineDirDegAt(r, x, y) : (r.w >= r.h ? (r.rot || 0) : (r.rot || 0) + 90);
   }
   return null;
 }
@@ -2114,7 +2116,31 @@ function chargeContactExpected(mover) {
     (!cav || Math.abs(bearingTo(mover, t)) <= 45 + 1e-9));
 }
 // Terrain geometry (T1). Regions are axis-aligned rects (centre + size, px).
+// --- Drawn (polyline) terrain geometry (p.4 chalk & ribbon) ----------------
+// A linear region carries `pts:[{x,y},…]` and lineWidthIn; rects carry w/h/rot.
+function segNearest(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+  let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const qx = ax + t * dx, qy = ay + t * dy;
+  return { dist: Math.hypot(px - qx, py - qy), t, qx, qy, dx, dy };
+}
+function polylineNearest(pts, x, y) {
+  if (!pts || !pts.length) return null;
+  if (pts.length === 1) return { dist: Math.hypot(x - pts[0].x, y - pts[0].y), t: 0, qx: pts[0].x, qy: pts[0].y, dx: 1, dy: 0, seg: 0 };
+  let best = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const s = segNearest(x, y, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+    if (!best || s.dist < best.dist) { best = s; best.seg = i; }
+  }
+  return best;
+}
+const lineWidthInOf = (r) => r.widthIn != null ? r.widthIn : ((TERRAIN_TYPES[r.type] && TERRAIN_TYPES[r.type].lineWidthIn) || 2);
+const lineHalfWidthPx = (r) => inchesToPx(lineWidthInOf(r)) / 2;
+const inLineRegion = (x, y, r) => { const n = polylineNearest(r.pts, x, y); return !!n && n.dist <= lineHalfWidthPx(r); };
+function lineDirDegAt(r, x, y) { const n = polylineNearest(r.pts, x, y); return n ? Math.atan2(n.dy, n.dx) * 180 / Math.PI : null; }
 const inTerrainRect = (x, y, r) => {
+  if (r.pts) return inLineRegion(x, y, r);   // drawn (polyline) terrain
   const rot = r.rot || 0;
   if (!rot) return Math.abs(x - r.x) <= r.w / 2 && Math.abs(y - r.y) <= r.h / 2;   // fast path: axis-aligned
   const a = -rot * Math.PI / 180, dx = x - r.x, dy = y - r.y;   // un-rotate the point into the rect's local frame
@@ -2139,6 +2165,13 @@ function terrainHandleAt(p, r, radPx) {
   const r2 = radPx * radPx;
   for (const h of terrainHandles(r)) if ((h.x - p.x) ** 2 + (h.y - p.y) ** 2 <= r2) return h;
   return null;
+}
+// Index of the drawn-line vertex within radPx of p, or -1.
+function lineVertexAt(p, r, radPx) {
+  if (!r.pts) return -1;
+  const r2 = radPx * radPx;
+  for (let i = 0; i < r.pts.length; i++) if ((r.pts[i].x - p.x) ** 2 + (r.pts[i].y - p.y) ** 2 <= r2) return i;
+  return -1;
 }
 // Pure resize: given a resize-drag record `rs` (grip, start centre C0, rot in
 // radians, start half-extents) and a pointer (px,py), return the new {x,y,w,h}.
@@ -2311,6 +2344,17 @@ function nearestAdjacentRiver(u) {
   for (const r of state.terrain) {
     const t = TERRAIN_TYPES[r.type];
     if (!t || !t.haltCross) continue;
+    if (r.pts) {                                        // drawn river: nearest segment
+      const n = polylineNearest(r.pts, u.x, u.y);
+      if (!n) continue;
+      const hw = lineHalfWidthPx(r), gap = n.dist - hw;
+      if (gap <= 24 && gap < bestGap) {
+        const len = Math.hypot(n.dx, n.dy) || 1;
+        bestGap = gap;
+        best = { line: true, qx: n.qx, qy: n.qy, nx: -n.dy / len, ny: n.dx / len, hw };   // N ⟂ segment
+      }
+      continue;
+    }
     const a = -(r.rot || 0) * Math.PI / 180;
     const dx = u.x - r.x, dy = u.y - r.y;
     const lx = dx * Math.cos(a) - dy * Math.sin(a);
@@ -2331,8 +2375,13 @@ function nearestAdjacentRiver(u) {
 function crossRiverTarget(u) {
   const adj = nearestAdjacentRiver(u);
   if (!adj) return null;
-  const { r, a, horizontal, along, cross, halfThick } = adj;
   const b = unitBounds(u);
+  if (adj.line) {                                       // drawn river: straight across the nearest segment
+    const clear = adj.hw + Math.max(b.w, b.h) / 2 + 6;
+    const side = ((u.x - adj.qx) * adj.nx + (u.y - adj.qy) * adj.ny) >= 0 ? -1 : 1;   // to the opposite bank
+    return { x: adj.qx + side * adj.nx * clear, y: adj.qy + side * adj.ny * clear };
+  }
+  const { r, a, horizontal, along, cross, halfThick } = adj;
   const clear = halfThick + Math.max(b.w, b.h) / 2 + 6;
   const farSign = cross >= 0 ? -1 : 1;
   const crossTarget = farSign * clear;
@@ -2773,12 +2822,21 @@ function renderBg() {
 // removal are done by coordinate hit-test in terrain mode, not via DOM target,
 // so terrain never intercepts unit clicks in normal play.
 function renderTerrain() {
-  if (!state.terrain.length) return '';
+  if (!state.terrain.length && !state.terrainDraw) return '';
   const rects = state.terrain.map(r => {
     const t = TERRAIN_TYPES[r.type] || { label: r.type, fill: '#999' };
+    const sel = r.id === state.terrainSelId;
+    if (r.pts) {
+      const w = inchesToPx(lineWidthInOf(r));
+      const d = r.pts.map((p, i) => `${i ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
+      const mid = r.pts[Math.floor(r.pts.length / 2)];
+      return `<path d="${d}" fill="none" stroke="${t.fill}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${sel ? 0.5 : 0.38}"/>` +
+        (sel ? `<path d="${d}" fill="none" stroke="${t.fill}" stroke-width="2" stroke-dasharray="7 4" stroke-opacity="1"/>` +
+          r.pts.map(p => `<rect x="${p.x - 4}" y="${p.y - 4}" width="8" height="8" fill="#fff" fill-opacity="0.95" stroke="${t.fill}" stroke-width="1.5"/>`).join('') : '') +
+        `<text x="${mid.x}" y="${mid.y - w / 2 - 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${sel ? ` · ${lineWidthInOf(r)}″` : ''}</text>`;
+    }
     const x = r.x - r.w / 2, y = r.y - r.h / 2;
     const rot = r.rot || 0;
-    const sel = r.id === state.terrainSelId;
     const xf = rot ? ` transform="rotate(${rot} ${r.x} ${r.y})"` : '';
     const strokeAttrs = sel
       ? `stroke-opacity="1" stroke-width="3" stroke-dasharray="7 4"`
@@ -2793,7 +2851,17 @@ function renderTerrain() {
         `<rect x="${h.x - 4}" y="${h.y - 4}" width="8" height="8" fill="#fff" fill-opacity="0.95" ` +
         `stroke="${t.fill}" stroke-width="1.5"/>`).join('') : '');
   }).join('');
-  return `<g id="terrain" pointer-events="none">${rects}</g>`;
+  // in-progress polyline being drawn: laid points + a rubber-band to the cursor
+  let draft = '';
+  if (state.terrainDraw && state.terrainDraw.pts.length) {
+    const dr = state.terrainDraw, dt = TERRAIN_TYPES[dr.type] || { fill: '#999' };
+    const pts = dr.cursor ? [...dr.pts, dr.cursor] : dr.pts;
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
+    draft = `<path d="${d}" fill="none" stroke="${dt.fill}" stroke-width="${inchesToPx(dt.lineWidthIn || 2)}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.3"/>` +
+      `<path d="${d}" fill="none" stroke="${dt.fill}" stroke-width="2" stroke-dasharray="5 4"/>` +
+      dr.pts.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3.5" fill="#fff" stroke="${dt.fill}" stroke-width="1.5"/>`).join('');
+  }
+  return `<g id="terrain" pointer-events="none">${rects}${draft}</g>`;
 }
 function renderGrid() {
   if (!state.showGrid) return '';
@@ -4023,7 +4091,7 @@ function onWheel(evt) {
   if (evt.ctrlKey) {
     if (state.terrainMode && state.terrainSelId != null) {
       const r = state.terrain.find(t => t.id === state.terrainSelId);
-      if (r) { pushUndo('terrain-rotate:' + r.id); r.rot = (((r.rot || 0) + (evt.deltaY > 0 ? 15 : -15)) % 360 + 360) % 360; renderBoard(); return; }
+      if (r && !r.pts) { pushUndo('terrain-rotate:' + r.id); r.rot = (((r.rot || 0) + (evt.deltaY > 0 ? 15 : -15)) % 360 + 360) % 360; renderBoard(); return; }
     }
     const u = state.units.find(u => u.id === state.selectedId);
     if (u && !u.destroyed) {
@@ -4121,6 +4189,18 @@ function onUnitMouseDown(evt, unitId) {
 }
 
 function onBoardMouseMove(evt) {
+  if (state.terrainDraw) { state.terrainDraw.cursor = svgPoint(evt); renderBoard(); return; }
+  if (state.terrainVertex) {
+    const r = state.terrain.find(t => t.id === state.terrainVertex.id);
+    if (r && r.pts) {
+      const p = svgPoint(evt);
+      const np = state.settings.snapToGrid ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) } : p;
+      r.pts[state.terrainVertex.vi] = { x: Math.max(0, Math.min(BOARD_W, np.x)), y: Math.max(0, Math.min(BOARD_H, np.y)) };
+      state.terrainVertex.moved = true;
+      renderBoard();
+    }
+    return;
+  }
   if (state.terrainResize) {
     const r = state.terrain.find(t => t.id === state.terrainResize.id);
     if (r) {
@@ -4133,7 +4213,13 @@ function onBoardMouseMove(evt) {
   }
   if (state.terrainDrag) {
     const r = state.terrain.find(t => t.id === state.terrainDrag.id);
-    if (r) {
+    if (r && state.terrainDrag.line) {
+      const pt = svgPoint(evt);
+      let dx = pt.x - state.terrainDrag.grabX, dy = pt.y - state.terrainDrag.grabY;
+      if (state.settings.snapToGrid) { dx = snapToGridPx(dx); dy = snapToGridPx(dy); }
+      r.pts = state.terrainDrag.originPts.map(q => ({ x: Math.max(0, Math.min(BOARD_W, q.x + dx)), y: Math.max(0, Math.min(BOARD_H, q.y + dy)) }));
+      renderBoard();
+    } else if (r) {
       const pt = svgPoint(evt);
       let nx = pt.x - state.terrainDrag.grabX, ny = pt.y - state.terrainDrag.grabY;
       if (state.settings.snapToGrid) { nx = snapToGridPx(nx); ny = snapToGridPx(ny); }
@@ -4190,6 +4276,12 @@ function onBoardMouseMove(evt) {
   renderBoard();
 }
 function onBoardMouseUp() {
+  if (state.terrainVertex) {
+    if (!state.terrainVertex.moved) discardUndo(state.terrainVertex.undoTag);   // a click on a vertex, not a drag
+    state.terrainVertex = null;
+    renderBoard();
+    return;
+  }
   if (state.terrainResize) {
     const r = state.terrain.find(t => t.id === state.terrainResize.id);
     const changed = r && (Math.abs(r.w - state.terrainResize.before.w) > 0.5 || Math.abs(r.h - state.terrainResize.before.h) > 0.5);
@@ -4200,7 +4292,9 @@ function onBoardMouseUp() {
   }
   if (state.terrainDrag) {
     const r = state.terrain.find(t => t.id === state.terrainDrag.id);
-    const moved = r && (Math.abs(r.x - state.terrainDrag.originX) > 0.5 || Math.abs(r.y - state.terrainDrag.originY) > 0.5);
+    const moved = r && (state.terrainDrag.line
+      ? (Math.abs(r.pts[0].x - state.terrainDrag.originPts[0].x) > 0.5 || Math.abs(r.pts[0].y - state.terrainDrag.originPts[0].y) > 0.5)
+      : (Math.abs(r.x - state.terrainDrag.originX) > 0.5 || Math.abs(r.y - state.terrainDrag.originY) > 0.5));
     if (!moved) discardUndo(state.terrainDrag.undoTag);   // a select-click, not a move — no undo step
     state.terrainDrag = null;
     renderBoard();
@@ -4265,6 +4359,7 @@ function toggleTerrain() {
     if (state.measure.active) { state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton(); }
   } else {
     state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;   // leaving the mode drops the editing selection
+    state.terrainDraw = null; state.terrainVertex = null;   // …and any in-progress draw/vertex edit
   }
   syncTerrainButton();
   renderBoard();
@@ -4279,10 +4374,22 @@ function syncTerrainButton() {
 // drop the current type; click a placed region to select it, then drag to move,
 // [ / ] to rotate ±15° (or Ctrl+wheel), arrows to nudge, Delete to remove.
 function onTerrainMouseDown(p) {
-  // A resize handle on the already-selected region takes priority over move/place.
+  const snap = state.settings.snapToGrid ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) } : { x: p.x, y: p.y };
+  // 1. A polyline is being drawn → each click lays another point.
+  if (state.terrainDraw) { state.terrainDraw.pts.push(snap); renderBoard(); return; }
+  // 2. A handle on the already-selected region takes priority (vertex for a line, resize grip for a rect).
   if (state.terrainSelId != null) {
     const sel = state.terrain.find(t => t.id === state.terrainSelId);
-    if (sel) {
+    if (sel && sel.pts) {
+      const vi = lineVertexAt(p, sel, 9);
+      if (vi >= 0) {
+        const tag = 'terrain-vertex:' + sel.id + ':' + Date.now();
+        pushUndo(tag);
+        state.terrainVertex = { id: sel.id, vi, undoTag: tag, moved: false };
+        renderBoard();
+        return;
+      }
+    } else if (sel) {
       const grip = terrainHandleAt(p, sel, 9);
       if (grip) {
         const tag = 'terrain-resize:' + sel.id + ':' + Date.now();
@@ -4297,21 +4404,72 @@ function onTerrainMouseDown(p) {
       }
     }
   }
+  // 3. Clicked an existing region → select it and start a whole-region move.
   const hit = terrainRegionAt(p.x, p.y);
   if (hit) {
     state.terrainSelId = hit.id;
-    const tag = 'terrain-move:' + hit.id + ':' + Date.now();   // unique per drag, like a unit drag
+    const tag = 'terrain-move:' + hit.id + ':' + Date.now();
     pushUndo(tag);
-    state.terrainDrag = { id: hit.id, originX: hit.x, originY: hit.y, grabX: p.x - hit.x, grabY: p.y - hit.y, undoTag: tag };
+    if (hit.pts) {
+      state.terrainDrag = { id: hit.id, line: true, originPts: hit.pts.map(q => ({ ...q })), grabX: p.x, grabY: p.y, undoTag: tag };
+    } else {
+      state.terrainDrag = { id: hit.id, originX: hit.x, originY: hit.y, grabX: p.x - hit.x, grabY: p.y - hit.y, undoTag: tag };
+    }
+    renderBoard();
+    return;
+  }
+  // 4. Empty space: linear type → begin a polyline draw; area type → drop a rect.
+  const def = TERRAIN_TYPES[state.terrainType] || TERRAIN_TYPES.hill;
+  if (def.linear) {
+    state.terrainSelId = null;
+    state.terrainDraw = { type: state.terrainType, pts: [snap], cursor: null };
   } else {
-    const t = TERRAIN_TYPES[state.terrainType] || TERRAIN_TYPES.hill;
     pushUndo('terrain-add');
-    const np = state.settings.snapToGrid ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) } : p;
     const id = 'tr' + (state.nextId++);
-    state.terrain.push({ id, type: state.terrainType, x: np.x, y: np.y, w: inchesToPx(t.wIn), h: inchesToPx(t.hIn), rot: 0 });
+    state.terrain.push({ id, type: state.terrainType, x: snap.x, y: snap.y, w: inchesToPx(def.wIn), h: inchesToPx(def.hIn), rot: 0 });
     state.terrainSelId = id;
   }
   renderBoard();
+}
+// Commit / cancel an in-progress polyline draw.
+function finishTerrainDraw() {
+  const dr = state.terrainDraw;
+  state.terrainDraw = null;
+  if (!dr) return;
+  // dedupe consecutive points (a finishing double-click lands two on one spot)
+  const pts = [];
+  for (const p of dr.pts) { const last = pts[pts.length - 1]; if (!last || Math.hypot(last.x - p.x, last.y - p.y) > 3) pts.push(p); }
+  if (pts.length < 2) { renderBoard(); return; }   // need at least one segment
+  pushUndo('terrain-draw');
+  const id = 'tr' + (state.nextId++);
+  state.terrain.push({ id, type: dr.type, pts });
+  state.terrainSelId = id;
+  renderBoard();
+}
+const cancelTerrainDraw = () => { state.terrainDraw = null; renderBoard(); };
+// Right-click a drawn line: on a vertex → remove it (min 2 pts); on the body → insert a vertex.
+function onTerrainContextMenu(p) {
+  if (state.terrainSelId != null) {
+    const sel = state.terrain.find(t => t.id === state.terrainSelId);
+    if (sel && sel.pts) {
+      const vi = lineVertexAt(p, sel, 10);
+      if (vi >= 0) {
+        if (sel.pts.length > 2) { pushUndo('terrain-vertex-del:' + sel.id); sel.pts.splice(vi, 1); renderBoard(); }
+        return;
+      }
+    }
+  }
+  const hit = terrainRegionAt(p.x, p.y);
+  if (hit && hit.pts) {
+    const n = polylineNearest(hit.pts, p.x, p.y);
+    if (n) {
+      pushUndo('terrain-vertex-add:' + hit.id);
+      const np = state.settings.snapToGrid ? { x: snapToGridPx(n.qx), y: snapToGridPx(n.qy) } : { x: n.qx, y: n.qy };
+      hit.pts.splice(n.seg + 1, 0, np);   // split the nearest segment
+      state.terrainSelId = hit.id;
+      renderBoard();
+    }
+  }
 }
 const measureSnap = (p) => state.settings.snapToGrid
   ? { x: snapToGridPx(p.x), y: snapToGridPx(p.y) }
@@ -4540,11 +4698,20 @@ function onKeyDown(evt) {
   if ((evt.key === 'a' || evt.key === 'A') && !evt.ctrlKey && !evt.metaKey && !/^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName)) { toggleArcForAll(); evt.preventDefault(); return; }
   // Terrain editing: a selected region claims [ ] (rotate), arrows (nudge),
   // Delete (remove), Escape (deselect) before the unit handlers see them.
+  if (state.terrainMode && state.terrainDraw && !typingField) {
+    if (evt.key === 'Enter') { finishTerrainDraw(); evt.preventDefault(); return; }
+    if (evt.key === 'Escape') { cancelTerrainDraw(); evt.preventDefault(); return; }
+  }
   if (state.terrainMode && state.terrainSelId != null && !typingField) {
     const tr = state.terrain.find(t => t.id === state.terrainSelId);
     if (tr) {
       const rotKey = { '[': -15, ']': 15 }[evt.key];
-      if (rotKey !== undefined) {
+      if (rotKey !== undefined && tr.pts) {   // [ ] resize a drawn line's width (rotation is meaningless for a line)
+        pushUndo('terrain-width:' + tr.id);
+        tr.widthIn = Math.max(0.5, Math.min(12, lineWidthInOf(tr) + (rotKey < 0 ? -0.5 : 0.5)));
+        renderBoard(); evt.preventDefault(); return;
+      }
+      if (rotKey !== undefined && !tr.pts) {   // rotation is for rects
         pushUndo('terrain-rotate:' + tr.id);   // a run of rotations coalesces into one undo
         tr.rot = (((tr.rot || 0) + rotKey) % 360 + 360) % 360;
         renderBoard(); evt.preventDefault(); return;
@@ -4557,11 +4724,12 @@ function onKeyDown(evt) {
       if (evt.key === 'Escape') { state.terrainSelId = null; renderBoard(); evt.preventDefault(); return; }
       if (evt.key.startsWith('Arrow')) {
         const step = state.settings.snapToGrid ? PX_PER_INCH : PX_PER_INCH / 4;
+        let dx = 0, dy = 0;
+        if (evt.key === 'ArrowLeft') dx = -step; else if (evt.key === 'ArrowRight') dx = step;
+        else if (evt.key === 'ArrowUp') dy = -step; else if (evt.key === 'ArrowDown') dy = step;
         pushUndo('terrain-nudge:' + tr.id);
-        if (evt.key === 'ArrowLeft')       tr.x = Math.max(0, tr.x - step);
-        else if (evt.key === 'ArrowRight') tr.x = Math.min(BOARD_W, tr.x + step);
-        else if (evt.key === 'ArrowUp')    tr.y = Math.max(0, tr.y - step);
-        else if (evt.key === 'ArrowDown')  tr.y = Math.min(BOARD_H, tr.y + step);
+        if (tr.pts) tr.pts = tr.pts.map(q => ({ x: Math.max(0, Math.min(BOARD_W, q.x + dx)), y: Math.max(0, Math.min(BOARD_H, q.y + dy)) }));
+        else { tr.x = Math.max(0, Math.min(BOARD_W, tr.x + dx)); tr.y = Math.max(0, Math.min(BOARD_H, tr.y + dy)); }
         renderBoard(); evt.preventDefault(); return;
       }
     }
@@ -6280,6 +6448,7 @@ function resetBoard() {
   state.units = [];
   state.terrain = [];
   state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;
+  state.terrainDraw = null; state.terrainVertex = null;
   state.terrainMode = false; syncTerrainButton();
   state.selectedId = null;
   state.targetId = null;
@@ -6652,7 +6821,8 @@ $('#board').addEventListener('mouseup',   onBoardMouseUp);
 $('#board').addEventListener('mouseleave', onBoardMouseUp);
 $('#board').addEventListener('click', onBoardClick);
 $('#board').addEventListener('wheel', onWheel, { passive: false });
-$('#board').addEventListener('contextmenu', e => e.preventDefault());
+$('#board').addEventListener('dblclick', e => { if (state.terrainMode && state.terrainDraw) { finishTerrainDraw(); e.preventDefault(); } });
+$('#board').addEventListener('contextmenu', e => { e.preventDefault(); if (state.terrainMode) onTerrainContextMenu(svgPoint(e)); });
 $('#ctx-menu').addEventListener('click', onContextMenuAction);
 $('#joust-mode').addEventListener('click', onJoustModeAction);
 $('#joust-mode').addEventListener('change', onJoustPick);
@@ -6998,6 +7168,34 @@ renderBoard();
       const tgt = crossRiverTarget({ kind:'mass', type:'HF', x:500, y:460, cols:2, rows:1 });
       console.assert(tgt && Math.abs(tgt.x - 500) < 1e-6 && tgt.y > 524, 'river: Cross river lands the unit straight across on the far bank');
       state.terrain = _t2; }
+
+    // Drawn (polyline) terrain: detection, direction, road bonus, and crossing
+    { const _t3 = state.terrain;
+      // a road that runs east then bends south (2″ wide → half-width 24px)
+      state.terrain = [{ id: 'rdL', type: 'road', pts: [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 400 }] }];
+      console.assert(inTerrainRect(250, 100, state.terrain[0]) && inTerrainRect(400, 250, state.terrain[0]), 'line: a point on either leg of a bent road is inside it');
+      console.assert(!inTerrainRect(250, 160, state.terrain[0]), 'line: a point 60px off the road is outside it');
+      console.assert(onRoadAt(250, 100) && Math.abs(roadAxisDegAt(250, 100)) < 1e-6, 'line: road axis on the east leg is 0°');
+      console.assert(Math.abs(Math.abs(roadAxisDegAt(400, 250)) - 90) < 1e-6, 'line: road axis on the south leg is ±90°');
+      const lhEast = { kind: 'mass', type: 'LH', x: 250, y: 100, facing: 90 };   // facing east, along the east leg
+      console.assert(roadBonusOf(lhEast) === 6, 'line: light horse marching along a drawn road gets +6');
+      const lhAcross = { kind: 'mass', type: 'LH', x: 250, y: 100, facing: 0 };   // facing north, across it
+      console.assert(roadBonusOf(lhAcross) === 0, 'line: facing across the drawn road gives no bonus');
+      // a straight horizontal drawn river (3″ → half-width 36px) at y 300
+      state.terrain = [{ id: 'rvL', type: 'river', pts: [{ x: 100, y: 300 }, { x: 700, y: 300 }] }];
+      console.assert(riverBlockScale(400, 200, 0, 200) < 0.999, 'line: a move into a drawn river halts at the near bank');
+      console.assert(!!nearestAdjacentRiver({ x: 400, y: 280 }) && !nearestAdjacentRiver({ x: 400, y: 100 }), 'line: river adjacency by perpendicular distance');
+      const ltgt = crossRiverTarget({ kind: 'mass', type: 'HF', x: 400, y: 280, cols: 2, rows: 1 });
+      console.assert(ltgt && Math.abs(ltgt.x - 400) < 1e-6 && ltgt.y > 300, 'line: Cross river goes straight across a drawn river to the far bank');
+      // per-line width override (the [ ] keys set r.widthIn)
+      const wln = { type: 'river', pts: [{ x: 0, y: 0 }, { x: 100, y: 0 }], widthIn: 4 };
+      console.assert(lineWidthInOf(wln) === 4 && Math.abs(lineHalfWidthPx(wln) - inchesToPx(4) / 2) < 1e-6, 'line: widthIn overrides the type default');
+      console.assert(inLineRegion(50, 40, wln), 'line: widthIn 4 (half 48px) includes a point 40px off-centre');
+      console.assert(!inLineRegion(50, 40, { type: 'river', pts: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }), 'line: default river width (3, half 36px) excludes a point 40px off-centre');
+      // a right-click vertex insert splits the nearest segment at seg+1
+      const ins = polylineNearest([{ x: 0, y: 0 }, { x: 100, y: 0 }], 50, 10);
+      console.assert(ins.seg === 0 && Math.abs(ins.qx - 50) < 1e-6 && Math.abs(ins.qy) < 1e-6, 'line: a vertex inserted on the body lands on the nearest segment');
+      state.terrain = _t3; }
     // T2b: stream/river crossing costs + near-bank halt.
     state.terrain = [{ id:'ts', type:'stream', x:300, y:100, w:48, h:240 }];   // 2″-wide stream at x 276–324
     const lf = { type:'LF' };
