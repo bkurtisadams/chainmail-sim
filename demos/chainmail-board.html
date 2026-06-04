@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.41 · Fix badge/label placement on wide or rotated units. The screen-fixed M/F/X action badges (above) and the side·type·count label (below) were offset by Math.max(b.w, b.h)/2 — the worst-case footprint dimension — so a wide line (or any long unit) flung the badges to the top of the board and the label far below it, looking detached and "unchanged" by a reshape/rotate. They now offset by unitScreenHalfHeight(b, facing) = (|w·sinθ| + |h·cosθ|)/2, the true screen-space vertical half-extent of the footprint after rotate(facing): a line facing up/down clears by h/2, the same line rotated 90° clears by w/2, and diagonals fall between. Pure helper, unit-tested. Rendering-only; no rules/data change. -->
+<!-- chainmail-board.html · v0.11.42 · Visible multi-turn formation reform (p.10), fixing the v0.11.40 bug where a 2-move change (line↔square = 2 moves) was charged as 2×allowance inches in ONE turn and so refused forever (e.g. "costs 18″, 9″ remain"). A "move" in that table is one TURN's movement, not a pool of inches. Now: 1-move changes (line↔column, column↔square) complete instantly and consume the unit's move; 2-move changes (line↔square, line↔hedgehog) set u.reform = {to, movesLeft} and play out over their turns — the unit keeps rendering its OLD shape with an amber "REFORMING → SQUARE" badge, can't move/pivot/charge (moveAllowanceOf 0 while reforming), and advanceReform() in endRound completes it when movesLeft hits 0. A reforming unit caught in melee is treated as FLANKED (p.10): reformingFlankEdge upgrades a frontal attack to a flank in onResolveMelee, so the attacker gets the existing flank class-up / +1-die and the reformer takes −1 on any charge-morale check; a reformer is also barred from initiating melee (it's committed). Right-click → "Cancel reform" aborts. Advisory mode (enforce off) stays freeform — reshape is instant. FAITHFUL OMISSIONS: the flank-when-reforming rule is wired for mass-vs-mass melee only — the individual-vs-mass (mixed) path passes flank/rear under param names resolveMassMelee never reads, so it already ignores flank/rear generally (a separate latent bug, deferred). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.41</title>
+<title>Chainmail — Battlefield · v0.11.42</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -237,9 +237,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Badge/label placement fix</div>
+    <div class="sub">Chainmail HTML Sim · Visible multi-turn reform</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.41</span>
+    <span class="version-tag">v0.11.42</span>
   </div>
 
   <div class="toolbar">
@@ -417,6 +417,7 @@
   <button data-act="reshape-column">Form column</button>
   <button data-act="reshape-square">Form square</button>
   <button data-act="reshape-hedgehog">Form hedgehog</button>
+  <button data-act="cancel-reform">Cancel reform</button>
   <button data-act="rotate-90">Rotate 90°</button>
   <button data-act="delete" class="danger">Remove unit</button>
 </div>
@@ -517,7 +518,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.41';
+const SIM_VERSION = '0.11.42';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1873,7 +1874,7 @@ function snapPos(u, px, py) {
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u)));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -3016,8 +3017,21 @@ function renderUnit(u) {
       })()
     : '';
 
+  const reformBadgeStr = u.reform
+    ? (() => {
+        const txt = `REFORMING → ${String(u.reform.to).toUpperCase()}`;
+        const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#8a6d3b" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.0">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
-    <g class="unit-group" data-id="${u.id}" style="cursor:grab" opacity="${groupOpacity}">
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
@@ -3035,6 +3049,7 @@ function renderUnit(u) {
       ${halfPauseBadgeStr}
       ${statusBadgeStr}
       ${paralysisBadgeStr}
+      ${reformBadgeStr}
     </g>
   `;
 }
@@ -3562,7 +3577,7 @@ function updateButtons() {
   const splitFireCase   = !!(a && atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
   const passThroughCase = !!(a && d && canPassThroughFire(a, d));
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
-  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d));
+  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform);
   const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d);
   const gb = giantBoulderState(a, d);
   const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile'));
@@ -4349,6 +4364,7 @@ function nudgeUnit(u, dxPx, dyPx) {
 // tier would push the total budget past the allowance is blocked (returns false).
 function rotateUnit(u, deltaDeg) {
   if (!canSideMoveNow(u.side)) return false;   // Slice 8D: facing change is part of the move phase
+  if (u.reform) return false;                  // committed to a formation change — can't pivot
   const newFacing = (u.facing + deltaDeg + 360) % 360;
   if (state.settings.enforceMovement) {
     if (u.turnStartFacing == null) u.turnStartFacing = u.facing;
@@ -4495,17 +4511,44 @@ function formationChangeCostMoves(from, to) {
   return 1;  // line↔column, column↔square
 }
 const formationChangeCostIn = (u, target) => formationChangeCostMoves(u.formation || 'line', target) * baseMoveAllowanceOf(u);
-function reshapeUnit(u, target) {
-  if (!canReshape(u, target)) return { ok: false, reason: 'invalid' };
-  const costIn = formationChangeCostIn(u, target);
-  if (state.settings.enforceMovement && remainingMoveIn(u) < costIn - 1e-9)
-    return { ok: false, reason: 'budget', costIn, remIn: remainingMoveIn(u) };
+function applyFormation(u, target) {
   const dims = formationDims(target, u.count);
   u.cols = dims.cols; u.rows = dims.rows; u.hedgehog = dims.hedgehog;
   u.formation = target;
-  u.movedThisTurn = (u.movedThisTurn || 0) + costIn;  // p.10: a formation change costs movement
-  u.acted.moved = true;
-  return { ok: true, costIn };
+}
+// p.10: a unit caught in melee mid-reform is treated as flanked. A frontal
+// attack on a reforming defender is upgraded to a flank (a real flank/rear is
+// already ≥ flank, so leave it); the attacker then gets the usual flank class-up.
+function reformingFlankEdge(edge, defender) {
+  return (defender && defender.reform && edge === 'front') ? 'left' : edge;
+}
+// endRound step: a reforming unit spends each turn toward its change and
+// completes when its move-count (p.10: line↔square = 2 moves = 2 turns) runs out.
+function advanceReform(u) {
+  if (!u.reform) return false;
+  u.reform.movesLeft -= 1;
+  if (u.reform.movesLeft <= 0) { applyFormation(u, u.reform.to); u.reform = null; return true; }
+  return false;
+}
+function reshapeUnit(u, target) {
+  if (!canReshape(u, target)) return { ok: false, reason: 'invalid' };
+  if (u.reform) return { ok: false, reason: 'reforming' };
+  const moves = formationChangeCostMoves(u.formation || 'line', target);
+  const costIn = formationChangeCostIn(u, target);
+  const enforce = state.settings.enforceMovement;
+  // p.10: a formation change costs the unit's whole move — it can't have moved/charged already.
+  if (enforce && (u.charged || (u.acted && u.acted.moved) || (u.movedThisTurn || 0) > 1e-9))
+    return { ok: false, reason: 'noMove', moves, costIn };
+  if (!enforce || moves <= 1) {
+    applyFormation(u, target);
+    u.movedThisTurn = (u.movedThisTurn || 0) + costIn;   // advisory: shows in "Move used"; enforce 1-move = whole move
+    if (u.acted) u.acted.moved = true;
+    return { ok: true, completed: true, moves };
+  }
+  // enforce ON, multi-move change → visible reform across `moves` turns (old shape held)
+  u.reform = { to: target, from: u.formation, movesLeft: moves };
+  if (u.acted) u.acted.moved = true;
+  return { ok: true, completed: false, movesLeft: moves };
 }
 
 /* Engagement state (slice 6e) ---------------------------------------- */
@@ -4673,7 +4716,8 @@ function onResolveMelee() {
     );
     return;
   }
-  const edge = engagementEdge(a, d);
+  let edge = engagementEdge(a, d);
+  edge = reformingFlankEdge(edge, d);   // p.10: a reforming defender is flanked
 
   // Engagement round: continued melee from prior turn means round = prev + 1
   const existing = findEngagement(a.id, d.id);
@@ -4775,6 +4819,7 @@ function onResolveMelee() {
   if (melee.attacker.impetusApplied)  aMods.push('impetus +1/man');
   if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
+  if (d.reform) aMods.push('target reforming → flanked (p.10)');
   if (aElfBonus) aMods.push(`magic weapons +${aElfBonus} dice vs ${dT.name}`);
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
@@ -5881,8 +5926,9 @@ function onUnitContextMenu(evt, unitId) {
   // Show only the reshape options that apply to this unit
   document.querySelectorAll('#ctx-menu [data-act^="reshape-"]').forEach(b => {
     const target = b.dataset.act.replace('reshape-', '');
-    b.hidden = !canReshape(u, target);
+    b.hidden = !!u.reform || !canReshape(u, target);
   });
+  document.querySelector('#ctx-menu [data-act="cancel-reform"]').hidden = !u.reform;
   // Fatigue entries — only when the optional rule is enabled, and only the
   // direction that makes sense for the current state.
   const fatigueOn = !!state.settings.applyFatigue;
@@ -5892,7 +5938,7 @@ function onUnitContextMenu(evt, unitId) {
   // that makes sense given the current charged state.
   const canCharge = IMPETUS_CLASSES.has(u.type) || u.kind === 'individual';
   // Slice 8C: a unit that charged last turn must move at normal speed (p.16) — no fresh charge.
-  document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged || !!u.chargedLastTurn;
+  document.querySelector('#ctx-menu [data-act="declare-charge"]').hidden = !canCharge || !!u.charged || !!u.chargedLastTurn || !!u.reform;
   document.querySelector('#ctx-menu [data-act="cancel-charge"]').hidden = !canCharge || !u.charged;
   // Indirect fire — bows/longbows only (not crossbows, p.12). Label reflects state.
   const indirectBtn = document.querySelector('#ctx-menu [data-act="toggle-indirect"]');
@@ -6044,9 +6090,22 @@ function onContextMenuAction(evt) {
   } else if (act && act.startsWith('reshape-')) {
     const target = act.replace('reshape-', '');
     const res = reshapeUnit(u, target);
-    if (res && !res.ok && res.reason === 'budget') {
+    if (res && !res.ok && res.reason === 'noMove') {
       appendTurn(`Formation change refused`,
-        `<div class="step">${typeById(u.type).name} (${u.side}) can't form ${target} — it costs ${res.costIn.toFixed(1)}″ of movement (p.10) but only ${res.remIn.toFixed(1)}″ remain this turn.</div>`);
+        `<div class="step">${typeById(u.type).name} (${u.side}) has already used its move this turn — a formation change costs its whole move (p.10). Begin it at the start of a fresh turn.</div>`);
+    } else if (res && !res.ok && res.reason === 'reforming') {
+      appendTurn(`Already reforming`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) is mid-change into ${u.reform.to} — cancel it first to start another.</div>`);
+    } else if (res && res.ok && !res.completed) {
+      appendTurn(`Reforming`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) begins forming ${target} — a ${res.movesLeft}-move change (p.10). It holds its current formation, can't move, and is flanked if meleed until done.</div>`);
+    }
+  } else if (act === 'cancel-reform') {
+    if (u.reform) {
+      const was = u.reform.to;
+      u.reform = null;
+      appendTurn(`Reform cancelled`,
+        `<div class="step">${typeById(u.type).name} (${u.side}) abandons forming ${was} and holds its ${u.formation}.</div>`);
     }
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
@@ -6320,6 +6379,7 @@ function endRound() {
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
+    if (u.reform) u.acted.moved = true;   // a reforming turn is active (counts toward fatigue/streak)
     if (state.settings.applyFatigue) {
       if (u.acted.moved) {
         u.moveStreak = (u.moveStreak || 0) + 1;
@@ -6339,6 +6399,7 @@ function endRound() {
     u.halfMovePaused = false;   // checkpoints reset with the new move
     u.splitFired = false; u.splitLeg1 = 0;
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
+    advanceReform(u);   // p.10: spend this turn toward a multi-turn formation change; complete when done
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
     clearActed(u);
@@ -7113,15 +7174,31 @@ renderBoard();
   console.assert(formationChangeCostMoves('line', 'line') === 0, 'formation: no change = 0');
   console.assert(formationChangeCostMoves('square', 'hedgehog') === 0, 'formation: square↔hedgehog (both square-type) = 0');
   console.assert(formationChangeCostMoves('line', 'hedgehog') === 2 && formationChangeCostMoves('column', 'hedgehog') === 1, 'formation: hedgehog costs as a square (line 2, column 1)');
-  { const sp = { kind: 'mass', type: 'HF', formation: 'line', count: 20, cols: 20, rows: 1, movedThisTurn: 0, acted: {} };
+  { const sp = { kind: 'mass', type: 'HF', formation: 'line', count: 20, cols: 20, rows: 1, movedThisTurn: 0, acted: {}, reform: null };
     const save = state.settings.enforceMovement;
     state.settings.enforceMovement = true;
-    sp.movedThisTurn = baseMoveAllowanceOf(sp) - 1;          // almost spent
-    console.assert(reshapeUnit(sp, 'square').reason === 'budget', 'formation: hard-enforce refuses a reshape that overruns the budget');
-    sp.movedThisTurn = 0;
-    const r = reshapeUnit(sp, 'column');
-    console.assert(r.ok && Math.abs(sp.movedThisTurn - baseMoveAllowanceOf(sp)) < 1e-9, 'formation: a permitted reshape charges 1 move to movedThisTurn');
+    // 1-move change completes instantly and consumes the move
+    let r = reshapeUnit(sp, 'column');
+    console.assert(r.ok && r.completed && sp.formation === 'column' && !sp.reform, 'reform: a 1-move change completes instantly');
+    // 2-move change begins a visible reform (old shape held), no instant change
+    sp.formation = 'line'; sp.movedThisTurn = 0; sp.acted = {}; sp.reform = null;
+    r = reshapeUnit(sp, 'square');
+    console.assert(r.ok && !r.completed && r.movesLeft === 2 && sp.formation === 'line' && sp.reform && sp.reform.to === 'square', 'reform: a 2-move change starts a held reform, shape unchanged');
+    console.assert(moveAllowanceOf(sp) === 0, 'reform: a reforming unit has 0 move allowance (committed)');
+    // can't start another reform while reforming
+    console.assert(reshapeUnit(sp, 'column').reason === 'reforming', 'reform: can\'t restack a reform mid-change');
+    // advanceReform spends turns; completes when movesLeft hits 0
+    console.assert(advanceReform(sp) === false && sp.reform && sp.reform.movesLeft === 1 && sp.formation === 'line', 'reform: after 1 turn, still reforming (line held)');
+    console.assert(advanceReform(sp) === true && !sp.reform && sp.formation === 'square', 'reform: after the 2nd turn, the square is formed');
+    // a unit that already moved this turn can't begin a change
+    const moved = { kind: 'mass', type: 'HF', formation: 'line', count: 20, cols: 20, rows: 1, movedThisTurn: 3, acted: { moved: true }, reform: null };
+    console.assert(reshapeUnit(moved, 'square').reason === 'noMove', 'reform: a unit that already moved can\'t begin a formation change');
     state.settings.enforceMovement = save; }
+  // p.10: a reforming defender is flanked when meleed (frontal upgraded to flank; real flank/rear kept)
+  console.assert(reformingFlankEdge('front', { reform: {} }) === 'left', 'reform: a frontal attack on a reforming unit counts as a flank');
+  console.assert(reformingFlankEdge('rear', { reform: {} }) === 'rear', 'reform: a real rear attack on a reformer stays rear (not downgraded)');
+  console.assert(reformingFlankEdge('front', {}) === 'front', 'reform: a non-reforming unit keeps its true edge');
+  console.assert(reformingFlankEdge('left', { reform: {} }) === 'left', 'reform: a flank attack on a reformer stays flank');
 
   // Screen-fixed badge/label clearance tracks orientation (not worst-case max)
   { const wide = { w: 240, h: 28 };  // a 10-wide line
