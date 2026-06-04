@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.49 · Fix the road move bonus not applying. v0.11.44 evaluated roadBonusOf at the unit's TURN-START position (turnStartX/Y), so a unit placed or dragged onto a road only gained the bonus next turn (after endRound re-baselined the start position) — in testing it looked like roads did nothing. roadBonusOf now evaluates at the unit's CURRENT position, so a mounted unit sitting on a road shows the bonus immediately in the sidebar and budget; during a drag it uses the drag ORIGIN so the bonus is stable for the whole drag (no boundary flicker, and the enforce clamp stays consistent). The now-unused turnStartX/turnStartY bookkeeping is removed from spawn, endRound, and resetMoveActions. Unchanged: foot still get no road bonus (p.10), works/individuals excluded, a charge uses the charge column. -->
+<!-- chainmail-board.html · v0.11.50 · Road bonus now requires facing ALONG the road, plus a terrain readout. The road bonus (p.9) represents a body marching along a road, so a unit straddling it crossways (e.g. a line drawn across a road) shouldn't get it: roadAlignedAt gates the bonus on the unit's facing being within 45° of the road's long-axis direction (roadAxisDegAt, rotation-aware). The unit-info panel gains an "On terrain" line listing what the unit's centre is over (or "open ground"), and the Move-used line now shows "(on road · face along it for +N)" when a mounted unit sits on a road but faces across it — so the bonus state is never a mystery. Unchanged: only horse get a bonus (HH +3, MH/LH +6) per the p.9 table; foot, works, and individuals get none; the bonus is still evaluated at the current position (drag origin during a drag). NOTE: roads/rivers are still axis-rect strips; a freehand/polyline "chalk & ribbon" representation is under discussion as a larger follow-up. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.49</title>
+<title>Chainmail — Battlefield · v0.11.50</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -239,7 +239,7 @@
     <h1>Battlefield</h1>
     <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.49</span>
+    <span class="version-tag">v0.11.50</span>
   </div>
 
   <div class="toolbar">
@@ -519,7 +519,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.49';
+const SIM_VERSION = '0.11.50';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1881,15 +1881,40 @@ const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf
 const ROAD_BONUS = { HH: 3, MH: 6, LH: 6, MK: 3 };
 const roadBonusType = (u) => (u.kind === 'mass') ? (ROAD_BONUS[u.type] || 0) : 0;
 const onRoadAt = (x, y) => terrainTypesAt(x, y).some(t => t.road);
-// Granted while the unit is on a road, evaluated at its CURRENT position so
-// placing/moving onto a road takes effect immediately. During a drag the drag
-// origin is used, so the bonus is stable for the whole drag (no boundary flicker).
+// World direction (deg) of the road strip under a point — its long axis — or null.
+function roadAxisDegAt(x, y) {
+  for (const r of state.terrain) {
+    const t = TERRAIN_TYPES[r.type];
+    if (t && t.road && inTerrainRect(x, y, r)) return (r.w >= r.h ? (r.rot || 0) : (r.rot || 0) + 90);
+  }
+  return null;
+}
+// The bonus is for marching ALONG a road (p.9), so the unit must be facing within
+// 45° of the road's direction — a body straddling the road crossways gets nothing.
+function roadAlignedAt(u, x, y) {
+  const axisDeg = roadAxisDegAt(x, y);
+  if (axisDeg == null) return false;
+  const fH = facingHeadingRad(u.facing) * 180 / Math.PI;
+  let d = (((fH - axisDeg) % 180) + 180) % 180;   // 0..180 between facing-heading and road axis
+  if (d > 90) d = 180 - d;                          // fold to 0..90 (a road runs both ways)
+  return d <= 45;
+}
+// Position the bonus is judged at: current, or the drag origin during a drag.
+const roadBonusPos = (u) =>
+  (state.dragging && state.dragging.unitId === u.id) ? { x: state.dragging.originX, y: state.dragging.originY } : { x: u.x, y: u.y };
+// Granted while the unit is on a road AND facing along it. Mounted/wheeled types only.
 function roadBonusOf(u) {
   const b = roadBonusType(u);
   if (!b) return 0;
-  let x = u.x, y = u.y;
-  if (state.dragging && state.dragging.unitId === u.id) { x = state.dragging.originX; y = state.dragging.originY; }
-  return onRoadAt(x, y) ? b : 0;
+  const { x, y } = roadBonusPos(u);
+  return (onRoadAt(x, y) && roadAlignedAt(u, x, y)) ? b : 0;
+}
+// On an eligible road but facing across it — would earn b if aligned (for the readout).
+function roadBonusBlockedByFacing(u) {
+  const b = roadBonusType(u);
+  if (!b) return 0;
+  const { x, y } = roadBonusPos(u);
+  return (onRoadAt(x, y) && !roadAlignedAt(u, x, y)) ? b : 0;
 }
 // The turn's move budget: a declared charge uses the larger charge distance.
 const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
@@ -3353,7 +3378,8 @@ function updateSidebar() {
         : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
-      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : ''} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
+      `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
+      `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : (roadBonusBlockedByFacing(u) ? ` <small style="color:var(--ink-soft)">(on road · face along it for +${roadBonusBlockedByFacing(u)})</small>` : '')} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
       (u.halfMovePaused ? `<div class="stat"><span class="k">Half-move</span><span class="v" style="color:#46707d">PAUSED — resume to take 2nd leg</span></div>` : '') +
       (u.splitFired ? `<div class="stat"><span class="k">Split-fire</span><span class="v" style="color:#46707d">fired mid-move · 2nd leg ≤ ½ (cap ${effectiveMoveAllowance(u).toFixed(1)}″)</span></div>` : '') +
       (turnedDeg > 0.5 ? `<div class="stat"><span class="k">Turned</span><span class="v">${turnedDeg.toFixed(0)}° · ${facingTierLabel(u)} · ${faceCostIn.toFixed(1)}″</span></div>` : '') +
@@ -7378,18 +7404,22 @@ renderBoard();
   console.assert(effectiveAttackerClass('HF', { rear: true }) === 'AF', 'mixed: rear key bumps HF→AF');
   console.assert(classBumpsToBonus('AF', { flank: true }) === true, 'mixed: AF (no higher class) flank → +1/die instead');
 
-  // Road move bonus (p.10): mounted/wheeled types only, granted while on a road (current position)
+  // Road move bonus (p.9): mounted types only, on a road AND facing along it (current position)
   { const savedTerrain = state.terrain;
-    state.terrain = [{ id: -1, type: 'road', x: 100, y: 100, w: inchesToPx(30), h: inchesToPx(8) }];
-    const lh  = { kind: 'mass', type: 'LH', x: 100, y: 100 };          // light horse on the road
-    const hh  = { kind: 'mass', type: 'HH', x: 100, y: 100 };
-    const hf  = { kind: 'mass', type: 'HF', x: 100, y: 100 };          // foot: no bonus
-    const off = { kind: 'mass', type: 'LH', x: 5000, y: 5000 };        // off the road
-    console.assert(roadBonusOf(lh) === 6 && roadBonusOf(hh) === 3, 'road: light horse +6, heavy horse +3 on a road');
-    console.assert(roadBonusOf(hf) === 0, 'road: foot get no road bonus (p.10)');
+    state.terrain = [{ id: -1, type: 'road', x: 100, y: 100, w: inchesToPx(30), h: inchesToPx(8) }];   // horizontal road, axis 0°
+    const lh  = { kind: 'mass', type: 'LH', x: 100, y: 100, facing: 90 };   // light horse marching along the road
+    const hh  = { kind: 'mass', type: 'HH', x: 100, y: 100, facing: 90 };
+    const hf  = { kind: 'mass', type: 'HF', x: 100, y: 100, facing: 90 };   // foot: no bonus
+    const off = { kind: 'mass', type: 'LH', x: 5000, y: 5000, facing: 90 }; // off the road
+    console.assert(roadBonusOf(lh) === 6 && roadBonusOf(hh) === 3, 'road: light horse +6, heavy horse +3 marching along a road');
+    console.assert(roadBonusOf(hf) === 0, 'road: foot get no road bonus (p.9)');
     console.assert(roadBonusOf(off) === 0, 'road: a unit not on a road gets no bonus');
     console.assert(moveAllowanceOf(lh) === baseMoveAllowanceOf(lh) + 6, 'road: the bonus folds into the move allowance');
-    const charging = { kind: 'mass', type: 'LH', charged: true, x: 100, y: 100 };
+    const across = { kind: 'mass', type: 'LH', x: 100, y: 100, facing: 0 };  // facing up = across the horizontal road
+    console.assert(roadBonusOf(across) === 0, 'road: a unit facing across the road gets no bonus (not marching along it)');
+    console.assert(roadBonusBlockedByFacing(across) === 6, 'road: ...but the readout flags it would earn +6 if it faced along the road');
+    console.assert(roadBonusBlockedByFacing(lh) === 0, 'road: an aligned unit is not flagged as blocked');
+    const charging = { kind: 'mass', type: 'LH', charged: true, x: 100, y: 100, facing: 90 };
     console.assert(moveAllowanceOf(charging) === chargeAllowanceOf(charging), 'road: a declared charge uses the charge column, no road bonus');
     console.assert(baseMoveAllowanceOf(lh) === MOVE_ALLOWANCE['LH'], 'road: baseMoveAllowanceOf (facing/formation/half-move) is untouched');
     state.terrain = savedTerrain; }
