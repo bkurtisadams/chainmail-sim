@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.48 · River crossing (p.9), gap 5 (final) of the movement-rules cleanup. RAW: "a typical river would require troops to halt before and after crossing and cost an entire move to cross." Previously a river was effectively uncrossable — the full-move ford lump plus per-inch in-water cost meant a unit halted at the near bank but could never land on the far side. Now (Option B, the dedicated-crossing model): the river def is flagged haltCross:true, and riverBlockScale clamps ANY unit's move so its centre path stops at the near bank (a unit already in/at the water isn't trapped). That hard halt is combined with moveBlockScale at the drag/nudge/charge sites under hard-enforce, realising "halt before." A new right-click "Cross river" action (shown when the unit is touching a river bank) carries it straight across — perpendicular to the strip, onto the far bank clear of the water (crossRiverTarget handles rotation and unit footprint) — and sets movedThisTurn to the whole allowance so it halts there ("entire move" + "halt after"). Under hard-enforce the crossing is refused if the unit already moved/charged this turn (it must halt at the bank and cross on a fresh turn). Streams are unchanged — forded normally for 6″, no halt. Advisory mode stays freeform (drag across freely). pathMoveCost and the stream/river cost tests are untouched; this slice is purely additive. -->
+<!-- chainmail-board.html · v0.11.49 · Fix the road move bonus not applying. v0.11.44 evaluated roadBonusOf at the unit's TURN-START position (turnStartX/Y), so a unit placed or dragged onto a road only gained the bonus next turn (after endRound re-baselined the start position) — in testing it looked like roads did nothing. roadBonusOf now evaluates at the unit's CURRENT position, so a mounted unit sitting on a road shows the bonus immediately in the sidebar and budget; during a drag it uses the drag ORIGIN so the bonus is stable for the whole drag (no boundary flicker, and the enforce clamp stays consistent). The now-unused turnStartX/turnStartY bookkeeping is removed from spawn, endRound, and resetMoveActions. Unchanged: foot still get no road bonus (p.10), works/individuals excluded, a charge uses the charge column. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.48</title>
+<title>Chainmail — Battlefield · v0.11.49</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -239,7 +239,7 @@
     <h1>Battlefield</h1>
     <div class="sub">Chainmail HTML Sim · River crossing (halt before <div class="sub">Chainmail HTML Sim · Restore/Reset commands fixed</div>amp; after)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.48</span>
+    <span class="version-tag">v0.11.49</span>
   </div>
 
   <div class="toolbar">
@@ -519,7 +519,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.48';
+const SIM_VERSION = '0.11.49';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1881,13 +1881,14 @@ const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf
 const ROAD_BONUS = { HH: 3, MH: 6, LH: 6, MK: 3 };
 const roadBonusType = (u) => (u.kind === 'mass') ? (ROAD_BONUS[u.type] || 0) : 0;
 const onRoadAt = (x, y) => terrainTypesAt(x, y).some(t => t.road);
-// Granted when the unit BEGAN the turn on a road (turnStartX/Y); stable for the
-// whole turn. Doesn't verify the whole path stays on the road (simplification).
+// Granted while the unit is on a road, evaluated at its CURRENT position so
+// placing/moving onto a road takes effect immediately. During a drag the drag
+// origin is used, so the bonus is stable for the whole drag (no boundary flicker).
 function roadBonusOf(u) {
   const b = roadBonusType(u);
   if (!b) return 0;
-  const x = (u.turnStartX != null) ? u.turnStartX : u.x;
-  const y = (u.turnStartY != null) ? u.turnStartY : u.y;
+  let x = u.x, y = u.y;
+  if (state.dragging && state.dragging.unitId === u.id) { x = state.dragging.originX; y = state.dragging.originY; }
   return onRoadAt(x, y) ? b : 0;
 }
 // The turn's move budget: a declared charge uses the larger charge distance.
@@ -6008,7 +6009,6 @@ function spawnUnit() {
       formation, customCols, spacing, polearm };
   }
   if (state.settings.snapToGrid) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
-  u.turnStartX = u.x; u.turnStartY = u.y;   // road-bonus baseline (p.10)
   state.units.push(u);
   state.selectedId = u.id;
   renderBoard();
@@ -6272,7 +6272,6 @@ function resetMoveActions(u) {
   u.halfMovePaused = false;
   u.splitFired = false; u.splitLeg1 = 0;
   u.turnStartFacing = u.facing;
-  u.turnStartX = u.x; u.turnStartY = u.y;
   clearActed(u);
 }
 
@@ -6509,7 +6508,7 @@ function endRound() {
   state.turn += 1;
   state.lastCatapultHit = null;
   for (const u of state.units) {
-    if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; u.turnStartX = u.x; u.turnStartY = u.y; clearActed(u); continue; }
+    if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
     if (u.reform) u.acted.moved = true;   // a reforming turn is active (counts toward fatigue/streak)
     if (state.settings.applyFatigue) {
@@ -6531,7 +6530,6 @@ function endRound() {
     u.halfMovePaused = false;   // checkpoints reset with the new move
     u.splitFired = false; u.splitLeg1 = 0;
     u.turnStartFacing = u.facing;   // Slice 8B: new pivot baseline for the round
-    u.turnStartX = u.x; u.turnStartY = u.y;   // road-bonus baseline for the new turn (p.10)
     advanceReform(u);   // p.10: spend this turn toward a multi-turn formation change; complete when done
     // Dragon rekindles its fire after a stationary turn (p.34).
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
@@ -6950,7 +6948,7 @@ renderBoard();
       resetMoveActions(u);
       console.assert(u.movedThisTurn === 0 && !u.halfMovePaused && !u.splitFired && u.splitLeg1 === 0, 'reset: move budget, half-move pause, and split-fire are cleared');
       console.assert(!u.charged && u.chargeDir === null && !u.acted.moved && !u.acted.fired && !u.acted.fought && u.shotsThisTurn === 0, 'reset: charge declaration and acted flags cleared');
-      console.assert(u.turnStartFacing === 90 && u.turnStartX === 200 && u.turnStartY === 200, 'reset: facing/position baselines re-set to current');
+      console.assert(u.turnStartFacing === 90, 'reset: facing baseline re-set to current');
       console.assert(u.reform && u.reform.movesLeft === 2, 'reset-actions: a multi-turn reform is left intact (use Cancel reform)'); }
 
     // River crossing (p.9): halt at the near bank; Cross river carries straight across
@@ -7380,18 +7378,18 @@ renderBoard();
   console.assert(effectiveAttackerClass('HF', { rear: true }) === 'AF', 'mixed: rear key bumps HF→AF');
   console.assert(classBumpsToBonus('AF', { flank: true }) === true, 'mixed: AF (no higher class) flank → +1/die instead');
 
-  // Road move bonus (p.10): mounted/wheeled types only, granted when begun on a road
+  // Road move bonus (p.10): mounted/wheeled types only, granted while on a road (current position)
   { const savedTerrain = state.terrain;
     state.terrain = [{ id: -1, type: 'road', x: 100, y: 100, w: inchesToPx(30), h: inchesToPx(8) }];
-    const lh  = { kind: 'mass', type: 'LH', turnStartX: 100, turnStartY: 100 };          // light horse on the road
-    const hh  = { kind: 'mass', type: 'HH', turnStartX: 100, turnStartY: 100 };
-    const hf  = { kind: 'mass', type: 'HF', turnStartX: 100, turnStartY: 100 };          // foot: no bonus
-    const off = { kind: 'mass', type: 'LH', turnStartX: 5000, turnStartY: 5000 };        // off the road
+    const lh  = { kind: 'mass', type: 'LH', x: 100, y: 100 };          // light horse on the road
+    const hh  = { kind: 'mass', type: 'HH', x: 100, y: 100 };
+    const hf  = { kind: 'mass', type: 'HF', x: 100, y: 100 };          // foot: no bonus
+    const off = { kind: 'mass', type: 'LH', x: 5000, y: 5000 };        // off the road
     console.assert(roadBonusOf(lh) === 6 && roadBonusOf(hh) === 3, 'road: light horse +6, heavy horse +3 on a road');
     console.assert(roadBonusOf(hf) === 0, 'road: foot get no road bonus (p.10)');
     console.assert(roadBonusOf(off) === 0, 'road: a unit not on a road gets no bonus');
     console.assert(moveAllowanceOf(lh) === baseMoveAllowanceOf(lh) + 6, 'road: the bonus folds into the move allowance');
-    const charging = { kind: 'mass', type: 'LH', charged: true, turnStartX: 100, turnStartY: 100 };
+    const charging = { kind: 'mass', type: 'LH', charged: true, x: 100, y: 100 };
     console.assert(moveAllowanceOf(charging) === chargeAllowanceOf(charging), 'road: a declared charge uses the charge column, no road bonus');
     console.assert(baseMoveAllowanceOf(lh) === MOVE_ALLOWANCE['LH'], 'road: baseMoveAllowanceOf (facing/formation/half-move) is untouched');
     state.terrain = savedTerrain; }
