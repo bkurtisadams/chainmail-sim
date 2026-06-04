@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.56 · New-unit panel: the Count field is now spinner-less and adjusted by the mouse wheel. Once the box is clicked (focused), scrolling the wheel nudges the figure count by 1 within its min/max; scrolling while it is NOT focused scrolls the side panel as before. The native up/down spin buttons are hidden (the reusable .wheel-num class styles them off in WebKit and Firefox). Wiring is generic (wireWheelNumber over every input.wheel-num), so the same treatment can be extended to other numeric fields later. No rules or gameplay impact. -->
+<!-- chainmail-board.html · v0.11.57 · Edit unit. A selected unit can now be reconfigured in place instead of deleted and rebuilt: the Selected panel gains an "Edit" button that loads the unit’s DEFINITION (side, type, count, formation, cols, spacing, pikes, missile, melee/armor/mounted/leader for individuals, or works type/crew/defense/length/thickness) back into the New-unit panel, which switches to "Edit unit" mode with an Apply/Cancel pair. Apply rebuilds the unit at its existing position and facing, re-deriving footprint and strength from the new figures and resetting per-turn action flags (moved/fired/charged/status) to a fresh state. The Kind selector is LOCKED while editing (change type within a kind, not the kind itself — a mass block becoming a catapult is delete-and-remake). Edits are undoable (tagged "edit"); deleting or resetting the edited unit exits edit mode cleanly. SCOPE: definition only — position and facing stay on the board (drag / rotate), and live battle state (casualties taken, target, morale, remaining defence) is left to its own controls. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.56</title>
+<title>Chainmail — Battlefield · v0.11.57</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -233,6 +233,16 @@
   .panel.collapsed h2 .caret { transform: rotate(-90deg); }
   .panel h2.collapsible .spawn-btn { padding: 4px 10px; font-size: 11px; letter-spacing: 1.2px; border-radius: 4px; }
   .panel.collapsed h2 .spawn-btn { display: none; }
+  .panel h2.sel-head { display: flex; align-items: center; gap: 6px; }
+  .panel h2 .edit-btn { margin-left: auto; padding: 2px 10px; font-size: 10.5px; letter-spacing: 1px;
+    border-radius: 4px; background: #fff8e7; border: 1px solid var(--rule); color: var(--ink); cursor: pointer; }
+  .panel h2 .edit-btn:hover { background: var(--gold); }
+  .nu-actions { display: flex; align-items: center; gap: 6px; }
+  .panel.collapsed h2 .nu-actions { display: none; }
+  .nu-actions .cancel-btn { padding: 4px 10px; font-size: 11px; letter-spacing: 1.1px; border-radius: 4px;
+    background: #fff8e7; border: 1px solid var(--rule); color: var(--ink); cursor: pointer; }
+  #new-unit-panel.editing h2 .spawn-btn { background: var(--front, #2f7d4f); color: #fff; }
+  #new-unit-panel.editing #f-kind { opacity: 0.6; }
   .panel.collapsed > *:not(h2) { display: none; }
   button#btn-help { padding: 8px 11px; }
 </style>
@@ -241,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Wheel-adjusted Count field</div>
+    <div class="sub">Chainmail HTML Sim · Edit unit (reconfigure in place)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.56</span>
+    <span class="version-tag">v0.11.57</span>
   </div>
 
   <div class="toolbar">
@@ -286,7 +296,7 @@
     <svg id="board" viewBox="0 0 960 540"></svg>
     <aside class="side-panel">
       <div class="panel">
-        <h2>Selected <span class="swatch" id="selected-swatch" style="display:none"></span></h2>
+        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
         <div id="selected-pane" class="empty">none</div>
       </div>
       <div class="panel">
@@ -294,7 +304,7 @@
         <div id="target-pane" class="empty">none</div>
       </div>
       <div class="panel" id="new-unit-panel">
-        <h2 class="collapsible" id="new-unit-toggle"><span>New unit <span class="caret">▾</span></span><button id="btn-spawn" class="gold spawn-btn" title="Spawn the unit at board centre">+ Spawn</button></h2>
+        <h2 class="collapsible" id="new-unit-toggle"><span><span id="new-unit-label">New unit</span> <span class="caret">▾</span></span><span class="nu-actions"><button id="btn-edit-cancel" class="cancel-btn" hidden>Cancel</button><button id="btn-spawn" class="gold spawn-btn" title="Spawn the unit at board centre">+ Spawn</button></span></h2>
         <div class="field"><label>Side</label><select id="f-side">
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
@@ -524,7 +534,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.56';
+const SIM_VERSION = '0.11.57';
 const PX_PER_INCH = 24;
 let BOARD_W = 1728; // 72" wide  (6 ft, standard wargame table) — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1815,6 +1825,7 @@ const state = {
   terrainVertex: null,    // v0.11.52: in-flight vertex drag of a drawn line { id, vi, undoTag, moved }
   terrainResize: null,    // T4-edit: in-flight terrain resize drag (handle grip)
   ctxUnitId: null,
+  editUnitId: null,     // id of the unit currently loaded into the panel for editing (kind locked)
   turn: 1,
   phaseIdx: 0,          // Slice 8D: index into PHASES
   firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
@@ -3430,6 +3441,7 @@ function renderDragRuler() {
 }
 
 function updateSidebar() {
+  { const _selU = state.selectedId != null && state.units.find(x => x.id === state.selectedId && !x.destroyed); const _eb = $('#btn-edit'); if (_eb) _eb.hidden = !_selU; }
   for (const [pane, id, swSel] of [['#selected-pane', state.selectedId, '#selected-swatch'], ['#target-pane', state.targetId, '#target-swatch']]) {
     const el = $(pane);
     const sw = $(swSel);
@@ -4825,6 +4837,7 @@ function onKeyDown(evt) {
   else if (evt.key === 'Escape')     { state.selectedId = null; state.targetId = null; }
   else if (evt.key === 'Delete' || evt.key === 'Backspace') {
     pushUndo('delete');
+    if (state.editUnitId === u.id) cancelEdit();
     state.units = state.units.filter(x => x.id !== u.id);
     state.selectedId = null;
   }
@@ -6207,13 +6220,16 @@ function onResolveDragonBreath(dragon) {
 }
 
 function spawnUnit() {
-  pushUndo('spawn');
+  const orig = state.editUnitId != null ? state.units.find(x => x.id === state.editUnitId) : null;
+  const reEdit = !!orig;                              // editing an existing unit (kind locked) vs spawning new
+  if (state.editUnitId != null && !orig) cancelEdit(); // the edited unit was removed — fall back to a fresh spawn
+  pushUndo(reEdit ? 'edit' : 'spawn');
   const side = $('#f-side').value;
-  const kind = $('#f-kind').value;
+  const kind = reEdit ? orig.kind : $('#f-kind').value;   // kind cannot change while editing
   const type = $('#f-type').value;
   const weapon = $('#f-weapon').value || null;
   const common = {
-    id: state.nextId++,
+    id: reEdit ? orig.id : state.nextId++,
     side, kind, type,
     weapon,
     acted: { moved: false, fired: false, fought: false },
@@ -6228,10 +6244,10 @@ function spawnUnit() {
     indirect: false,
     cover: 'none',
     breathsUsed: 0,
-    x: side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75,
-    y: BOARD_H/2 + (Math.random()-0.5)*60,
-    facing: side === 'A' ? 90 : 270,
-    turnStartFacing: side === 'A' ? 90 : 270,   // Slice 8B: facing baseline for this turn's pivot cost
+    x: reEdit ? orig.x : (side === 'A' ? BOARD_W*0.25 : BOARD_W*0.75),
+    y: reEdit ? orig.y : (BOARD_H/2 + (Math.random()-0.5)*60),
+    facing: reEdit ? (orig.facing || 0) : (side === 'A' ? 90 : 270),
+    turnStartFacing: reEdit ? (orig.facing || 0) : (side === 'A' ? 90 : 270),   // Slice 8B: facing baseline for this turn's pivot cost
   };
   let u;
   if (kind === 'individual') {
@@ -6279,10 +6295,73 @@ function spawnUnit() {
       cols: dims.cols, rows: dims.rows, hedgehog: dims.hedgehog,
       formation, customCols, spacing, polearm };
   }
-  if (state.settings.snapToGrid) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
-  state.units.push(u);
-  state.selectedId = u.id;
+  if (reEdit) {
+    const i = state.units.findIndex(x => x.id === orig.id);
+    if (i >= 0) state.units[i] = u; else state.units.push(u);   // re-derives footprint/strength, resets per-turn flags
+    state.selectedId = u.id;
+    cancelEdit();   // applied — leave edit mode, re-enable Kind, restore the Spawn button
+  } else {
+    if (state.settings.snapToGrid) { const sp = snapPos(u, u.x, u.y); u.x = sp.x; u.y = sp.y; }
+    state.units.push(u);
+    state.selectedId = u.id;
+  }
   renderBoard();
+}
+
+// --- Edit unit ----------------------------------------------------------
+// Reuse the New-unit panel as an editor: load a unit's DEFINITION into the
+// fields, then "Apply" rebuilds it in place (preserving position/facing/side,
+// resetting per-turn state). Kind is locked while editing; position & facing
+// stay on the board (drag / rotate). Live battle state is out of scope here.
+function loadUnitIntoPanel(u) {
+  $('#f-side').value = u.side;
+  $('#f-kind').value = u.kind;
+  syncKindFields();                       // show the right field group, fill type/works selects with defaults
+  $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
+  if (u.kind === 'individual') {
+    $('#f-type').value = u.type;
+    $('#f-mtm-weapon').value = u.meleeWeapon || 'sword';
+    $('#f-armor').value = u.armor || 'chain_sh';
+    $('#f-mounted').checked = !!u.mounted;
+    $('#f-leader').checked = !!u.leader;
+  } else if (u.kind === 'works') {
+    $('#f-works-type').value = u.worksType;
+    syncWorksType();                      // sets defense range + engine/struct visibility for this type…
+    if (u.crew != null)       $('#f-works-crew').value = u.crew;     // …then load the unit's stored values
+    if (u.defenseMax != null) $('#f-works-defense').value = u.defenseMax;
+    if (u.lengthFt != null)   $('#f-works-length').value = u.lengthFt;
+    if (u.thickFt != null)    $('#f-works-thick').value = u.thickFt;
+  } else {
+    $('#f-type').value = u.type;
+    syncPikeRow();                        // show pike row (and its default) for this type…
+    $('#f-count').value = u.count;
+    $('#f-form').value = u.formation || 'line';
+    $('#f-cols').value = u.customCols ? String(u.customCols) : '';
+    $('#f-spacing').value = u.spacing || 'close';
+    $('#f-pike').checked = !!u.polearm;   // …then restore the unit's actual pike state
+  }
+}
+function beginEditUnit(id) {
+  const u = state.units.find(x => x.id === id);
+  if (!u || u.destroyed) return;
+  state.editUnitId = id;
+  loadUnitIntoPanel(u);
+  $('#new-unit-panel').classList.remove('collapsed');   // make sure the editor is open…
+  syncEditMode();
+  $('#new-unit-panel').scrollIntoView({ block: 'nearest' });
+}
+function cancelEdit() {
+  state.editUnitId = null;
+  syncEditMode();
+}
+function syncEditMode() {
+  const editing = state.editUnitId != null;
+  const btn = $('#btn-spawn');
+  if (btn) { btn.textContent = editing ? '✓ Apply' : '+ Spawn'; btn.title = editing ? 'Apply changes to the selected unit' : 'Spawn the unit at board centre'; }
+  const lbl = $('#new-unit-label'); if (lbl) lbl.textContent = editing ? 'Edit unit' : 'New unit';
+  const cancel = $('#btn-edit-cancel'); if (cancel) cancel.hidden = !editing;
+  const kindSel = $('#f-kind'); if (kindSel) kindSel.disabled = editing;   // lock kind during edit
+  $('#new-unit-panel').classList.toggle('editing', editing);
 }
 
 function onUnitContextMenu(evt, unitId) {
@@ -6501,6 +6580,7 @@ function onContextMenuAction(evt) {
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
   } else if (act === 'delete') {
+    if (state.editUnitId === u.id) cancelEdit();
     state.units = state.units.filter(x => x.id !== u.id);
     cleanupEngagementsForUnit(u.id);
     if (state.selectedId === u.id) state.selectedId = null;
@@ -6513,6 +6593,7 @@ function onContextMenuAction(evt) {
 
 function resetBoard() {
   state.units = [];
+  state.editUnitId = null; syncEditMode();
   state.terrain = [];
   state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;
   state.terrainDraw = null; state.terrainVertex = null;
@@ -6818,6 +6899,8 @@ $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
 $('#btn-spawn').addEventListener('click', (e) => { e.stopPropagation(); spawnUnit(); });
+$('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state.selectedId != null) beginEditUnit(state.selectedId); });
+$('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
