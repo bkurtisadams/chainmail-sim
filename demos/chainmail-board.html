@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.67 · Mine breach (p.23, roadmap thread #1/#2) + the covered-piece rock tooltip polish folded in. MINE BREACH: a Breach toolbar action on a selected defense-value structure collapses a ≤6″ (BREECH.widthIn) section to defense 0 regardless of its defense value — the distinctive thing a mine does that battering cannot (it bypasses the pool). Mining itself is a paper procedure in Chainmail (sappers, counter-mining, a judge); structureBreach() applies the adjudicated RESULT to the tabletop piece (sets defenseLeft 0, breached, breechWidthIn = min(wall length, 6″)). breachState() gates the button (shown for any defense-value structure, disabled once already breached). renderStructure now punches a dark rubble gap of the breach width into any ruined wall — whether breached by a mine or battered to 0 — so the breach reads spatially. ROCK TOOLTIP POLISH: the Drop-rock notBatterable message now routes through rockImmunityNote(d) — a peak-roofed ram or roofed siege tower reports "Covered — rocks slide off the roof (p.23)", a scaling ladder reports indestructible, and anything else keeps the generic "no defense value" — so a correct refusal reads as a rule, not a bug (the confusion that flagged this). FAITHFUL SIMPLIFICATIONS: the paper sapper/counter-mine procedure is not simulated (only its result); the breach is already passable because structures do not block troop movement in this sim, so the "passable at Rough Terrain speed" crossing SLOW (p.23) and the abatis block are deferred (constants exist in BREECH). -->
+<!-- chainmail-board.html · v0.11.68 · Cannon dowel fire vs troops with lateral variation (p.13-14, roadmap thread #2). Cannons previously only battered defense-value structures; the anti-personnel dowel line was never wired (only the catapult hit-area was). Now engineFireState gives a gun firing at troops a cannonLine mode, and resolveCannonLine projects the dowel: a straight line from the muzzle toward the target, with a d6 "variation measure" shifting the far end laterally in 1½″ steps (cannonVariation: offsetIn = (die−4)×1.5, 4 = straight), the line pivoting about the muzzle. The player calls SHORT (white sections) or LONG (black) via a new Shot: short/long toolbar toggle (per-gun a.cannonLong); figuresUnderDowel then eliminates every figure within the ball diameter (0.625/0.75/1″) of the deviated line whose along-axis distance falls in a named-colour section (cannonSectionsHitting gives the spans). Overhead cover spares figures (as for the catapult hit-area); friendly fire applies. The shot renders as a deviated dowel line with the kill sections banded (renderCannonShot, cleared at end of turn like the catapult mark); the gun reloads at the catapult cadence. FAITHFUL SIMPLIFICATIONS: terrain interposition (high ground / barricades / water stopping the ball mid-flight, p.14) is NOT yet modelled — the line runs its full length; the 45° firing arc is not enforced for guns yet (deferred, as before). Tests cover the variation offset and figuresUnderDowel (on-line white hit, black-section miss for SHORT, off-line miss, out-of-range miss, LONG hit). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.67</title>
+<title>Chainmail — Battlefield · v0.11.68</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Mine breach + covered-piece note</div>
+    <div class="sub">Chainmail HTML Sim · Cannon dowel fire + lateral variation</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.67</span>
+    <span class="version-tag">v0.11.68</span>
   </div>
 
   <div class="toolbar">
@@ -262,6 +262,7 @@
     <button id="btn-melee" disabled>Resolve melee</button>
     <button id="btn-missile" disabled>Fire missiles</button>
     <button id="btn-fire-engine" disabled hidden>Fire engine</button>
+    <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
     <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
     <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
     <button id="btn-escalade" disabled hidden>Escalade</button>
@@ -544,7 +545,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.67';
+const SIM_VERSION = '0.11.68';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1615,9 +1616,10 @@ function cannonSections(typeId) {
     return { color, len, start, end: at, idx: i, colorIdx: ci[color] };
   });
 }
-// Variation measure: a d6 sets lateral deviation; 4 = straight (per the worked example).
+// Variation measure: a d6 sets lateral deviation; 4 = straight (per the worked
+// example). The dowel's far end shifts (die − 4) × 1½″ sideways (p.14).
 function cannonVariation(die) {
-  return { die, straight: die === 4 };
+  return { die, offsetIn: (die - 4) * 1.5, straight: die === 4 };
 }
 // Down-range hit (1-D): named-colour sections overlapping the target span [nearIn, farIn].
 function cannonSectionsHitting(typeId, namedColor, nearIn, farIn) {
@@ -2654,7 +2656,29 @@ function figuresUnderCircle(target, cx, cy, radiusPx) {
   return Math.min(n, target.count);
 }
 
-// Where a called shot actually lands after the optional scatter (p.12): the miss is
+// Figures of `target` struck by a cannon dowel (p.13-14): a line from the muzzle
+// (mx,my) along unit dir (ux,uy) for rangePx, kill-width halfWidthPx each side,
+// that fall along one of the named-colour `hitSpans` (inch ranges from the muzzle).
+function figuresUnderDowel(target, mx, my, ux, uy, rangePx, halfWidthPx, hitSpans) {
+  if (!target || target.destroyed) return 0;
+  const inSpan = (alongPx) => { const ai = pxToInches(alongPx); return hitSpans.some(s => ai >= s.start && ai <= s.end); };
+  const hit = (wx, wy) => {
+    const along = (wx - mx) * ux + (wy - my) * uy;
+    const perp = Math.abs((wx - mx) * (-uy) + (wy - my) * ux);
+    return along >= 0 && along <= rangePx && perp <= halfWidthPx && inSpan(along);
+  };
+  if (target.kind === 'individual') return hit(target.x, target.y) ? 1 : 0;
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  const cols = target.cols, f = (target.facing || 0) * Math.PI / 180, cos = Math.cos(f), sin = Math.sin(f);
+  let n = 0;
+  for (let i = 0; i < target.count; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+    const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+    if (hit(target.x + lx * cos - ly * sin, target.y + lx * sin + ly * cos)) n++;
+  }
+  return Math.min(n, target.count);
+}
 // taken along the firing line — overshoot pushes past the aim point, undershoot falls
 // short, a tie lands on the called spot.
 function scatterImpact(ax, ay, tx, ty, sc) {
@@ -2953,7 +2977,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -3528,6 +3552,23 @@ function renderCatapultHit() {
        + `<circle cx="${h.x}" cy="${h.y}" r="2.2" fill="${col}" pointer-events="none"/>`;
 }
 
+function renderCannonShot() {
+  const s = state.lastCannonShot;
+  if (!s) return '';
+  const col  = s.side === 'A' ? 'rgba(58,110,144,0.9)'  : 'rgba(156,59,44,0.9)';
+  const kill = s.side === 'A' ? 'rgba(58,110,144,0.32)' : 'rgba(156,59,44,0.32)';
+  const ang = Math.atan2(s.uy, s.ux) * 180 / Math.PI;
+  const hw = Math.max(1.5, s.halfWidthPx);
+  let bands = '';
+  for (const sp of s.spans) {
+    const x0 = inchesToPx(sp.start);
+    bands += `<rect x="${x0.toFixed(1)}" y="${(-hw).toFixed(1)}" width="${(inchesToPx(sp.end) - x0).toFixed(1)}" height="${(2 * hw).toFixed(1)}" fill="${kill}"/>`;
+  }
+  return `<g transform="translate(${s.mx} ${s.my}) rotate(${ang.toFixed(2)})" pointer-events="none">` +
+    `<line x1="0" y1="0" x2="${s.rangePx.toFixed(1)}" y2="0" stroke="${col}" stroke-width="1" stroke-dasharray="3 3"/>${bands}` +
+    `<circle cx="0" cy="0" r="2.2" fill="${col}"/></g>`;
+}
+
 function renderOverlay() {
   // Engagement arrow when both selected and in melee contact
   if (state.selectedId && state.targetId && state.selectedId !== state.targetId) {
@@ -3750,16 +3791,16 @@ function engineFireState(a, d) {
   const wt = WORKS_TYPES[a.worksType];
   if (!wt || !wt.fires) return null;
   if (a.side === d.side) return { wt, ok: false, reason: 'target' };
-  const f = wt.fires, isCatapult = f.mode === 'catapult', isStructure = d.defenseMax > 0;
-  // A catapult may also drop its hit area on troops; guns stay structure-only for now.
-  if (!isStructure && !(isCatapult && d.kind !== 'works')) return { wt, f, ok: false, reason: 'target' };
+  const f = wt.fires, isCatapult = f.mode === 'catapult', isStructure = d.defenseMax > 0, isTroop = d.kind !== 'works';
+  // Structures are battered; troops take a catapult hit-area or a cannon dowel line (p.13-14).
+  if (!isStructure && !isTroop) return { wt, f, ok: false, reason: 'target' };
   const r = engineRangeToTarget(a, d);
   const inRange = isCatapult
     ? (r >= CATAPULTS[f.key].min && r <= CATAPULTS[f.key].max)
     : (r <= CANNON[f.key].range);
   const inArc = isCatapult ? inFiringArc(a, d) : true;   // 45° L/R for all catapult fire (p.12)
   const ready = worksReadyToFire(a, state.turn);
-  const mode = isStructure ? 'batter' : 'antipersonnel';
+  const mode = isStructure ? 'batter' : (isCatapult ? 'antipersonnel' : 'cannonLine');
   return { wt, f, r, inRange, inArc, ready, mode, ok: inRange && inArc && ready };
 }
 function resolveEngineFire() {
@@ -3771,6 +3812,7 @@ function resolveEngineFire() {
   pushUndo('engine-fire');
   if (es.f.mode === 'catapult') a.readyTurn = state.turn + worksReloadTurns(a);
   if (es.mode === 'antipersonnel') { resolveCatapultAntipersonnel(a, d, es); renderBoard(); return; }
+  if (es.mode === 'cannonLine') { resolveCannonLine(a, d, es); renderBoard(); return; }
   const pts = SIEGE_WEAPONS[es.wt.batterAs].points;
   const res = batterTarget(d, pts);
   const tgtName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'engine') : 'target';
@@ -3824,7 +3866,60 @@ function resolveCatapultAntipersonnel(a, d, es) {
   else if (!struck) html += `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
   appendTurn(`${es.wt.name} fires`, html);
 }
-// Eligibility for a covered ram battering an adjacent defense-value target. Contact is
+// Cannon dowel fire vs troops (p.13-14): a straight line from the muzzle, with a
+// d6 "variation measure" shifting the far end laterally in 1½″ steps (4 = straight).
+// The player calls SHORT (white sections) or LONG (black); figures along the line
+// within the named-colour sections, inside the ball's diameter, are eliminated.
+function resolveCannonLine(a, d, es) {
+  const key = es.f.key, c = CANNON[key];
+  a.readyTurn = state.turn + worksReloadTurns(a);   // rate of fire as catapults (p.13)
+  const die = d6(state.rng), v = cannonVariation(die);
+  const dx = d.x - a.x, dy = d.y - a.y, len = Math.hypot(dx, dy) || 1, d0x = dx / len, d0y = dy / len;
+  const perpx = -d0y, perpy = d0x;
+  const rangePx = inchesToPx(c.range), offPx = inchesToPx(v.offsetIn);
+  const fx = d0x * rangePx + perpx * offPx, fy = d0y * rangePx + perpy * offPx, flen = Math.hypot(fx, fy) || 1;
+  const ux = fx / flen, uy = fy / flen;             // deviated dowel direction
+  const color = a.cannonLong ? 'B' : 'W';
+  const hitSpans = cannonSectionsHitting(key, color, 0, c.range);
+  const halfWidthPx = inchesToPx(c.diameter / 2);
+  state.lastCannonShot = { mx: a.x, my: a.y, ux, uy, rangePx, halfWidthPx, color, side: a.side,
+    spans: hitSpans.map(s => ({ start: s.start, end: s.end })) };
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  const callTxt = a.cannonLong ? 'LONG (black)' : 'SHORT (white)';
+  const devTxt = v.straight ? 'straight (4)' : `die ${die} → ${v.offsetIn > 0 ? '+' : ''}${v.offsetIn.toFixed(2)}″ lateral`;
+  let html = `<div class="step">${a.side} ${es.wt.name} fires ${callTxt} toward ${d.side} ${nm(d)} · variation ${devTxt} · ${c.diameter}″ ball</div>`;
+  let struck = false, anyUnder = false;
+  for (const t of state.units.slice()) {
+    if (t.destroyed || t.kind === 'works') continue;
+    const n = figuresUnderDowel(t, a.x, a.y, ux, uy, rangePx, halfWidthPx, hitSpans);
+    if (n <= 0) continue;
+    anyUnder = true;
+    if (effectiveCover(t) !== 'none') { html += `<div class="step" style="color:var(--ink-soft)">${t.side} ${nm(t)}: ${n} in the line, spared by overhead cover</div>`; continue; }
+    struck = true;
+    const friendly = t.side === a.side ? ' · friendly fire!' : '';
+    if (t.kind === 'individual') {
+      t.destroyed = true;
+      html += `<div class="verdict v-rout">${t.side} ${nm(t)} cut down by the shot${friendly}</div>`;
+      cleanupEngagementsForUnit(t.id);
+      if (t.id === state.selectedId) state.selectedId = null;
+      if (t.id === state.targetId) state.targetId = null;
+      continue;
+    }
+    applyCasualties(t, n);
+    capParalysisToCount(t);
+    if (t.destroyed) {
+      html += `<div class="verdict v-rout">${t.side} ${nm(t)} swept away by the shot${friendly}</div>`;
+      cleanupEngagementsForUnit(t.id);
+      if (t.id === state.selectedId) state.selectedId = null;
+      if (t.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="step">${t.side} ${nm(t)}: <b>${n}</b> killed${friendly} → ${t.count}/${t.startCount}</div>`;
+    }
+  }
+  if (!struck && !anyUnder) html += `<div class="verdict v-noeffect">the ${color === 'W' ? 'white' : 'black'} sections sweep empty ground — the variation carried the ball clear</div>`;
+  else if (!struck) html += `<div class="verdict v-noeffect">no effect — everyone in the line was under cover</div>`;
+  appendTurn(`${es.wt.name} fires`, html);
+}
 // approximated by centre-to-centre distance within half the target footprint + 1″; the
 // exact edge test against a rotated footprint is the deferred 2-D geometry layer.
 function ramBatterState(a, d) {
@@ -4199,13 +4294,22 @@ function updateButtons() {
     fb.hidden = !showFire;
     fb.disabled = !(es && es.ok && artilleryOk);
     fb.title = !showFire || !es ? '' :
-      es.reason === 'target' ? (es.f && es.f.mode === 'catapult' ? 'Target an enemy structure, or enemy troops for a hit-area shot' : 'Target must be an enemy engine/structure with a defense value') :
+      es.reason === 'target' ? (es.f && es.f.mode === 'catapult' ? 'Target an enemy structure, or enemy troops for a hit-area shot' : 'Target an enemy structure to batter, or enemy troops for a dowel-line shot') :
       !es.inRange ? `Out of range (${es.r.toFixed(1)}″ — fires ${es.f.mode === 'catapult' ? `${CATAPULTS[es.f.key].min}–${CATAPULTS[es.f.key].max}` : `0–${CANNON[es.f.key].range}`}″)` :
       es.inArc === false ? `Outside the 45° arc — rotate the ${es.wt.name} to bear` :
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
       !artilleryOk ? 'Resolve in the Artillery phase' :
       es.mode === 'antipersonnel' ? `Drop the ${CATAPULTS[es.f.key].hitArea}″ hit area on ${d ? d.side + ' ' : ''}troops at ${es.r.toFixed(1)}″ — kills figures under it (scatter applies)` :
+      es.mode === 'cannonLine' ? `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — dowel line, ${a && a.cannonLong ? 'LONG (black)' : 'SHORT (white)'} sections, d6 lateral variation (p.14)` :
       `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — removes ${SIEGE_WEAPONS[es.wt.batterAs].points} defense`;
+  }
+  const csBtn = $('#btn-cannon-shot');
+  if (csBtn) {
+    const isGun = !!(a && a.kind === 'works' && WORKS_TYPES[a.worksType]?.cat === 'gun');
+    csBtn.hidden = !isGun;
+    csBtn.disabled = !isGun;
+    csBtn.textContent = `Shot: ${a && a.cannonLong ? 'long' : 'short'}`;
+    csBtn.title = isGun ? 'Call SHORT (white) or LONG (black) sections before firing the dowel (p.14)' : '';
   }
   const rb = ramBatterState(a, d);
   const rbBtn = $('#btn-batter-ram');
@@ -7478,6 +7582,7 @@ function endRound() {
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   state.lastCatapultHit = null;
+  state.lastCannonShot = null;
   tickHazards();
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
@@ -7522,6 +7627,7 @@ $('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state
 $('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
+$('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a) { a.cannonLong = !a.cannonLong; renderTurnUI(); } });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
@@ -8282,6 +8388,17 @@ renderBoard();
     console.assert(hit[0].len === 3 && hit[1].len === 1, 'cannon: those white sections are 3" and 1" (p.14 example)');
     console.assert(!cannonSectionsHitting('heavy', 'W', 22, 30).some((s) => s.colorIdx === 1), 'cannon: long 1st white section (0-18) does not reach 22-30'); }
   console.assert(cannonVariation(4).straight && !cannonVariation(1).straight, 'cannon variation die: 4 = straight');
+  console.assert(cannonVariation(4).offsetIn === 0 && cannonVariation(1).offsetIn === -4.5 && cannonVariation(6).offsetIn === 3, 'cannon variation: (die−4)×1½″ lateral offset');
+  { // figuresUnderDowel: a light gun (W16/B6/W3/B5) firing SHORT (white) along +x from origin
+    const spansW = cannonSectionsHitting('light', 'W', 0, 30);   // white spans [0,16] and [22,25]
+    const ind = (xi, yi) => ({ kind:'individual', x: inchesToPx(xi), y: inchesToPx(yi) });
+    const hw = inchesToPx(CANNON.light.diameter / 2), R = inchesToPx(30);
+    console.assert(figuresUnderDowel(ind(10, 0), 0, 0, 1, 0, R, hw, spansW) === 1, 'dowel: a figure at 10″ on-line is in a white section → hit');
+    console.assert(figuresUnderDowel(ind(19, 0), 0, 0, 1, 0, R, hw, spansW) === 0, 'dowel: 19″ falls in a black section → no white hit');
+    console.assert(figuresUnderDowel(ind(10, 1), 0, 0, 1, 0, R, hw, spansW) === 0, 'dowel: 1″ off the line is wider than the ball → miss');
+    console.assert(figuresUnderDowel(ind(35, 0), 0, 0, 1, 0, R, hw, spansW) === 0, 'dowel: beyond range → miss');
+    const spansB = cannonSectionsHitting('light', 'B', 0, 30);   // black spans [16,22] and [25,30]
+    console.assert(figuresUnderDowel(ind(19, 0), 0, 0, 1, 0, R, hw, spansB) === 1, 'dowel: 19″ is in a black section → LONG hit'); }
   console.assert(catapultTurnsPerShot('light', 4) === 2 && catapultTurnsPerShot('light', 2) === 4, 'catapult: light 4 crew=2, 2 crew=4');
   console.assert(catapultTurnsPerShot('heavy', 4) === 3 && catapultTurnsPerShot('heavy', 1) === 6, 'catapult: heavy 4 crew=3, 1 crew=6');
   console.assert(catapultTurnsPerShot('light', 5) === 2, 'catapult: crew above 4 gives no benefit');
