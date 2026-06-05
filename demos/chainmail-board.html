@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.68 · Cannon dowel fire vs troops with lateral variation (p.13-14, roadmap thread #2). Cannons previously only battered defense-value structures; the anti-personnel dowel line was never wired (only the catapult hit-area was). Now engineFireState gives a gun firing at troops a cannonLine mode, and resolveCannonLine projects the dowel: a straight line from the muzzle toward the target, with a d6 "variation measure" shifting the far end laterally in 1½″ steps (cannonVariation: offsetIn = (die−4)×1.5, 4 = straight), the line pivoting about the muzzle. The player calls SHORT (white sections) or LONG (black) via a new Shot: short/long toolbar toggle (per-gun a.cannonLong); figuresUnderDowel then eliminates every figure within the ball diameter (0.625/0.75/1″) of the deviated line whose along-axis distance falls in a named-colour section (cannonSectionsHitting gives the spans). Overhead cover spares figures (as for the catapult hit-area); friendly fire applies. The shot renders as a deviated dowel line with the kill sections banded (renderCannonShot, cleared at end of turn like the catapult mark); the gun reloads at the catapult cadence. FAITHFUL SIMPLIFICATIONS: terrain interposition (high ground / barricades / water stopping the ball mid-flight, p.14) is NOT yet modelled — the line runs its full length; the 45° firing arc is not enforced for guns yet (deferred, as before). Tests cover the variation offset and figuresUnderDowel (on-line white hit, black-section miss for SHORT, off-line miss, out-of-range miss, LONG hit). -->
+<!-- chainmail-board.html · v0.11.69 · Header/toolbar reorg (the on-hold mockup, built). The single flex-wrap toolbar row is split into two stacked .tb-row rows: a SETUP row on top (board tools Grid/Measure/Terrain/Recenter · scenario I/O Save/Load/Maps · meta Settings/? · Reset board pinned to the far-right corner via .tb-pin-right margin-left:auto), and a PLAY row beneath it (the phase tag + ◀ phase-rail ▶ nav, then the phase-contextual combat verbs Roll-initiative/Move-winner-last/Melee/Missile/Fire-engine/Shot/Batter/Escalade/Rock/Oil/Breach/End-turn, then Undo/Redo/Clear). Per the approved mockup the play row is the gold-tinted "now" cluster; per Kurt’s tweak the setup row sits ABOVE it (config on top, the cluster you read every turn nearest the board). .toolbar is now flex-direction:column; .phase-nav no longer forces its own full-width line (it sits inline at the head of the play row). Pure markup/CSS — every button keeps its id, so all listeners/gating/renderTurnUI(#phase,#phase-rail) are untouched; the two .toolbar.hidden joust toggles still work. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.68</title>
+<title>Chainmail — Battlefield · v0.11.69</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -28,9 +28,13 @@
   .sec-head { font-family: var(--sans); font-size: 12px; letter-spacing: 3px; text-transform: uppercase;
     font-weight: 700; color: var(--ink); margin: 0 0 10px; }
 
-  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  .toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 6px;
     background: var(--panel); border: 1px solid var(--rule); padding: 8px 12px;
     border-radius: 6px; margin-bottom: 10px; font-family: var(--sans); }
+  .toolbar .tb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toolbar .tb-setup { padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+  .toolbar .tb-now { background: rgba(216,178,90,0.07); border-radius: 5px; padding: 4px 5px; margin: -2px -3px; }
+  .toolbar .tb-pin-right { margin-left: auto; }
   .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
@@ -51,7 +55,7 @@
   @keyframes litpulse { 0%, 100% { border-color: #b8923a; } 50% { border-color: #e7ca7e; } }
   .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
   .toolbar .phase-rail { display: flex; align-items: center; gap: 3px; }
-  .toolbar .phase-nav { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .toolbar .phase-nav { display: flex; align-items: center; gap: 8px; }
   .toolbar .phase-arrow { font-size: 13px; letter-spacing: 0; padding: 3px 9px; line-height: 1; }
   .phase-rail .step { font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase; font-weight: 700;
     padding: 2px 7px; border-radius: 3px; color: var(--ink-soft); background: rgba(255,250,230,0.5);
@@ -251,54 +255,57 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Cannon dowel fire + lateral variation</div>
+    <div class="sub">Chainmail HTML Sim · Two-row toolbar (setup over play)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.68</span>
+    <span class="version-tag">v0.11.69</span>
   </div>
 
   <div class="toolbar">
-    <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
-    <button id="btn-elect-order" class="gold" hidden>Move winner last</button>
-    <button id="btn-melee" disabled>Resolve melee</button>
-    <button id="btn-missile" disabled>Fire missiles</button>
-    <button id="btn-fire-engine" disabled hidden>Fire engine</button>
-    <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
-    <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
-    <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
-    <button id="btn-escalade" disabled hidden>Escalade</button>
-    <button id="btn-rock" disabled hidden>Drop rock</button>
-    <button id="btn-oil" disabled hidden>Pour oil</button>
-    <button id="btn-breach" disabled hidden>Breach</button>
-    <button id="btn-end-round" class="gold">End turn</button>
-    <span class="tb-sep" aria-hidden="true"></span>
-    <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
-    <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
-    <button id="btn-clear-sel" class="secondary">Clear selection</button>
-    <span class="tb-sep" aria-hidden="true"></span>
-    <button id="btn-grid" class="secondary">Grid: off</button>
-    <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
-    <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
-    <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
-    <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
-    <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
-    <span class="tb-sep" aria-hidden="true"></span>
-    <button id="btn-save" class="secondary" title="Save the board (units, engines, terrain, turn state) to a JSON file">Save</button>
-    <button id="btn-load" class="secondary" title="Load a board from a JSON file">Load</button>
-    <input id="file-load" type="file" accept="application/json,.json" hidden>
-    <select id="map-preset" title="Load a built-in map" style="height:26px; padding:2px 6px; font:inherit;"><option value="">Maps ▾</option></select>
-    <span class="tb-sep" aria-hidden="true"></span>
-    <button id="btn-settings" class="secondary">Settings</button>
-    <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
-    <button id="btn-reset" class="danger">Reset board</button>
-    <span class="tb-sep" aria-hidden="true"></span>
-    <span class="phase-tag" id="phase">Turn 1 · Side A</span>
-    <span class="phase-nav">
-      <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
-      <span class="phase-rail" id="phase-rail"></span>
-      <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
-    </span>
-    <span class="phase-hint" id="phase-hint" hidden></span>
-    <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid · a → fire arcs</span>
+    <div class="tb-row tb-setup">
+      <button id="btn-grid" class="secondary">Grid: off</button>
+      <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
+      <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
+      <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
+      <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
+      <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-save" class="secondary" title="Save the board (units, engines, terrain, turn state) to a JSON file">Save</button>
+      <button id="btn-load" class="secondary" title="Load a board from a JSON file">Load</button>
+      <input id="file-load" type="file" accept="application/json,.json" hidden>
+      <select id="map-preset" title="Load a built-in map" style="height:26px; padding:2px 6px; font:inherit;"><option value="">Maps ▾</option></select>
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-settings" class="secondary">Settings</button>
+      <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
+      <button id="btn-reset" class="danger tb-pin-right">Reset board</button>
+    </div>
+    <div class="tb-row tb-now">
+      <span class="phase-tag" id="phase">Turn 1 · Side A</span>
+      <span class="phase-nav">
+        <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
+        <span class="phase-rail" id="phase-rail"></span>
+        <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
+      </span>
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
+      <button id="btn-elect-order" class="gold" hidden>Move winner last</button>
+      <button id="btn-melee" disabled>Resolve melee</button>
+      <button id="btn-missile" disabled>Fire missiles</button>
+      <button id="btn-fire-engine" disabled hidden>Fire engine</button>
+      <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
+      <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
+      <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
+      <button id="btn-escalade" disabled hidden>Escalade</button>
+      <button id="btn-rock" disabled hidden>Drop rock</button>
+      <button id="btn-oil" disabled hidden>Pour oil</button>
+      <button id="btn-breach" disabled hidden>Breach</button>
+      <button id="btn-end-round" class="gold">End turn</button>
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
+      <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+      <button id="btn-clear-sel" class="secondary">Clear selection</button>
+      <span class="phase-hint" id="phase-hint" hidden></span>
+      <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid · a → fire arcs</span>
+    </div>
   </div>
 
   <div class="layout">
@@ -545,7 +552,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.68';
+const SIM_VERSION = '0.11.69';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
