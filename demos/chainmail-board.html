@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.70 · Phase rail becomes the action surface (the integrated-tracker mockup, built). renderTurnUI now relocates the persistent action buttons each render instead of leaving them in a floating row: all twelve (roll-init, elect-order, melee, missile, fire-engine, cannon-shot, batter-ram/creature, escalade, rock, oil, breach — TURN_ACTION_BTNS) live in a stable hidden #action-bank, are parked there before the rail innerHTML is rebuilt (so listeners/gating are never orphaned), then re-homed: the phase PRIMARY (primaryActionId → roll-init/missile/melee) is appended into the live rail cell as its action button; situational verbs append into #phase-dock beneath the rail. End turn sits inline after ▶ (▶ = one phase, End turn = whole turn). The dock auto-collapses when it holds no visible button (synced at the end of updateButtons, so selection changes update it too). Enforced mode docks only the current phase’s verbs; advisory mode docks every combat verb so nothing is unreachable off-phase. No resolver/gating/handler logic changed — primaryActionId, applyPhaseEmphasis, updateButtons, and every listener are untouched; this is purely where the buttons live. cellHint() supplies the live-cell prompt for phases with no in-cell action (move/artillery/post-roll-init/melee-done). Initiative answer: after Roll, the primary auto-lights as advance ▶ (winner moves first by default); Move winner last stays a dock toggle (a real first/last choice, p.9), not an auto-click. -->
+<!-- chainmail-board.html · v0.11.71 · Suggested Point Values (p.27) costing engine + live readouts. New pure data: TROOP_PV (per-figure troop costs: Peasant ½ / Levy ¾ / Light Foot 1 / Heavy Foot 2 / Armored Foot 2½ / Light Horse 3 / Medium Horse 4 / Heavy Horse 5; sim types EHF→HF, SP→HF, MK→HH; fantasy races Sprite 4 / Dwarf-Gnome 2 / Goblin-Kobold 1½ / Elf 4 / Orc 2 / Hobbit —), WEAPON_PV (per-figure adders: Bow 3, Longbow/composite 4, arquebus/any crossbow 1½, pike 1, thrown 0), WORKS_PV (light cat/cannon 15, heavy 20, bombard 30; other works 0). unitPointValue(u) is pure: mass = (troop PV + weapon adders) × figures; individual = fantasy PV / fantasy-race PV / armor-mapped man PV (manFootMountPV); engine = flat; mercenaries (note 1) cost half (men only). armyPoints(side) sums live units; fmtPts trims float noise. New per-unit mercenary flag (f-merc checkbox, .f-troop-only so it shows for mass+individual, persisted through build/edit/hydrate). Add-unit form gains a live "Points: N" readout (#f-points via formUnitSpec + updateFormPoints, wired to every cost-affecting control). Roster now shows per-unit pts in row tooltips, per-side totals in each group header, and a grand total in the roster count. 20 RAW cases pass in an isolation harness; 7 assertions added to the in-file tests(). Faithful omissions: thrown-weapon and siege-equipment (tower/ram/ladder/mantlet/abatis) costs not in RAW → 0; the per-man individual cost is an armor→troop mapping (RAW has no per-man table); no budget cap yet. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.70</title>
+<title>Chainmail — Battlefield · v0.11.71</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -264,9 +264,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Phase rail drives the actions</div>
+    <div class="sub">Chainmail HTML Sim · Point-value army costing (p.27)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.70</span>
+    <span class="version-tag">v0.11.71</span>
   </div>
 
   <div class="toolbar">
@@ -380,6 +380,8 @@
           <option value="throwing_spear">Throwing Spear (3″)</option>
           <option value="javelin">Javelin (6″)</option>
         </select></div>
+        <div class="field f-troop-only"><label>Mercenary</label><input type="checkbox" id="f-merc"><span class="field-note">½ cost (p.27)</span></div>
+        <div class="field"><label>Points</label><span class="field-note" id="f-points">—</span></div>
         <div class="field f-works-only"><label>Engine / Structure</label><select id="f-works-type"></select></div>
         <div class="field f-works-only f-works-engine"><label>Crew</label><input type="number" id="f-works-crew" value="4" min="0" max="12"></div>
         <div class="field f-works-only f-works-struct"><label>Defense</label><input type="number" id="f-works-defense" value="30" min="1" max="60"></div>
@@ -563,7 +565,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.70';
+const SIM_VERSION = '0.11.71';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -807,6 +809,56 @@ const FANTASTIC_TYPES = Object.freeze([
   { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
 ]);
 const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
+
+// --- Suggested Point Values (p.27) --------------------------------------
+// Troops are per-figure; weapon adders are per-figure; mercenaries cost half
+// (note 1). Sim-only types map onto the nearest RAW troop: Elite Heavy Foot →
+// Heavy Foot, Swiss Pikemen → Heavy Foot (note 2 — "Heavy Foot plus weapon", so
+// the pike comes from the weapon adder), Mounted Knights → Heavy Horse. Fantasy
+// races use the Appendix-D values (Sprite 4, Dwarf/Gnome 2, Goblin/Kobold 1½,
+// Elf 4, Orc 2, Hobbit —, costed 0).
+const TROOP_PV = Object.freeze({
+  PE:0.5, LV:0.75, LF:1, HF:2, EHF:2, AF:2.5, LH:3, MH:4, HH:5, SP:2, MK:5,
+  ORC:2, GOBLIN:1.5, KOBOLD:1.5, DWARF:2, GNOME:2, ELF:4, HOBBIT:0, SPRITE:4,
+});
+// Weapon adders (p.27), per figure. Thrown weapons carry no listed cost (0).
+const WEAPON_PV = Object.freeze({
+  short_bow:3, horsebow:3, longbow:4, composite:4,
+  light_crossbow:1.5, heavy_crossbow:1.5, arquebus:1.5,
+  throwing_axe:0, throwing_spear:0, javelin:0, pike:1,
+});
+// Engine costs (p.27): light catapult/cannon 15, heavy 20, bombard 30. Other
+// works (towers, rams, mantlets, ladders, abatis, structures) have no RAW PV (0).
+const WORKS_PV = Object.freeze({ catLight:15, catHeavy:20, gunLight:15, gunHeavy:20, bombard:30 });
+
+// An ordinary man-to-man figure has no per-man cost table in RAW; map his armor
+// (and mount) tier onto the nearest p.27 troop value.
+function manFootMountPV(u) {
+  const a = u.armor || 'none';
+  if (u.mounted) return (a === 'plate' || a === 'plate_sh' || a === 'horse_barded') ? 5
+                      : (a === 'chain' || a === 'chain_sh') ? 4 : 3;
+  return (a === 'plate' || a === 'plate_sh') ? 2.5 : (a === 'chain' || a === 'chain_sh') ? 2 : 1;
+}
+// Point value of one unit (p.27). Pure. Mass = (troop PV + weapon adders) ×
+// figures; individual = fantasy PV, fantasy-race PV, or armor-mapped man PV;
+// engine = flat. Mercenaries (note 1) cost half — men only, not fantastic types.
+function unitPointValue(u) {
+  if (!u) return 0;
+  if (u.kind === 'works') return WORKS_PV[u.worksType] || 0;
+  if (u.kind === 'individual') {
+    const ft = fantasticTypeById(u.type);
+    if (ft) return typeof ft.point === 'number' ? ft.point : 0;
+    const racePV = (u.type !== 'MAN' && u.type !== 'BERSERKER') ? TROOP_PV[u.type] : undefined;
+    const v = racePV != null ? racePV : manFootMountPV(u);
+    return u.mercenary ? v / 2 : v;
+  }
+  const base = TROOP_PV[u.type] ?? 0;
+  const wpn = (WEAPON_PV[u.weapon] || 0) + (u.polearm ? WEAPON_PV.pike : 0);
+  const v = (base + wpn) * (u.count || 1);
+  return u.mercenary ? v / 2 : v;
+}
+const armyPoints = (side) => state.units.filter(u => u.side === side && !u.destroyed).reduce((s, u) => s + unitPointValue(u), 0);
+const fmtPts = (n) => (Math.round(n * 100) / 100).toString();
 
 // Man-to-man base figures (p.25-26). A man is defined by weapon class × armor;
 // the only named special men in the rules are the Leader (modeled as a +1 flag,
@@ -2946,6 +2998,30 @@ function syncKindFields() {
 }
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
+
+// Live point-value readout for the unit being configured (p.27). Mirrors the
+// fields the spawn builder reads, so the cost shown is the cost that lands.
+function formUnitSpec() {
+  const kind = $('#f-kind').value;
+  const merc = $('#f-merc') ? $('#f-merc').checked : false;
+  if (kind === 'works') return { kind: 'works', worksType: $('#f-works-type').value };
+  if (kind === 'individual') return { kind: 'individual', type: $('#f-type').value,
+    armor: $('#f-armor').value, mounted: $('#f-mounted').checked, mercenary: merc };
+  const type = $('#f-type').value;
+  const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
+  return { kind: 'mass', type, weapon: $('#f-weapon').value || null,
+    count: Math.max(1, parseInt($('#f-count').value, 10) || 0),
+    polearm: pikeable ? $('#f-pike').checked : false, mercenary: merc };
+}
+function updateFormPoints() {
+  const el = $('#f-points'); if (!el) return;
+  el.textContent = `${fmtPts(unitPointValue(formUnitSpec()))} pts`;
+}
+['f-kind', 'f-type', 'f-count', 'f-weapon', 'f-pike', 'f-mtm-weapon', 'f-armor', 'f-mounted', 'f-works-type', 'f-merc'].forEach(id => {
+  const el = $('#' + id);
+  if (el) { el.addEventListener('change', updateFormPoints); el.addEventListener('input', updateFormPoints); }
+});
+updateFormPoints();
 // Toggle crew (engines) vs defense (structures) and seed the defense range when the
 // selected works type changes.
 function syncWorksType() {
@@ -3032,7 +3108,7 @@ function rosterRowHtml(u) {
     if (u.id === state.targetId) cls.push('tgt');
     if (u.defenseMax > 0 && u.defenseLeft <= 0) cls.push('out');
     const def = u.defenseMax > 0 ? `${Math.max(0, u.defenseLeft)}/${u.defenseMax}` : '—';
-    return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${wt.name} · engine">` +
+    return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${wt.name} · engine — ${fmtPts(unitPointValue(u))} pts">` +
       `<span class="rsw" style="background:var(--side-${u.side === 'A' ? 'a' : 'b'})"></span>` +
       `<span class="nm">${wt.name}${u.crew ? ` · crew ${u.crew}` : ''}</span>` +
       `<span class="chips"><span class="chip" style="background:rgba(255,250,230,0.65);color:rgba(0,0,0,0.45);border:0.6px solid rgba(0,0,0,0.35)">⚙</span></span>` +
@@ -3060,7 +3136,7 @@ function rosterRowHtml(u) {
   const note = (u.status && u.status !== 'ready') ? ` · ${u.status}`
              : u.charged ? ' · ⚔' : u.fatigued ? ' · fatig' : '';
   const mv = out ? '0″' : `${rem.toFixed(rem < 10 ? 1 : 0)}″`;
-  return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${T.name}${note} — ${rem.toFixed(1)}″ of ${allow}″ left">` +
+  return `<div class="${cls.join(' ')}" data-id="${u.id}" title="${T.name}${note} — ${rem.toFixed(1)}″ of ${allow}″ left · ${fmtPts(unitPointValue(u))} pts">` +
     `<span class="rsw" style="background:var(--side-${u.side === 'A' ? 'a' : 'b'})"></span>` +
     `<span class="nm">${name}${note}</span>` +
     `<span class="chips">${chip('M', acted.moved)}${chip('F', acted.fired)}${chip('X', acted.fought)}</span>` +
@@ -3072,14 +3148,15 @@ function renderRoster() {
   const sum = rosterSummary(state.units);
   const cnt = $('#roster-count');
   if (cnt) cnt.textContent = (sum.A + sum.B) === 0 ? ''
-    : `A ${sum.A} · B ${sum.B}` + (state.settings.enforcePhases ? ` · ${sum.toMoveA + sum.toMoveB} to move` : '');
+    : `A ${sum.A} · B ${sum.B}` + (state.settings.enforcePhases ? ` · ${sum.toMoveA + sum.toMoveB} to move` : '') + ` · ${fmtPts(armyPoints('A') + armyPoints('B'))} pts`;
   const live = state.units.filter(u => !u.destroyed);
   if (!live.length) { list.innerHTML = `<div class="roster-empty">No units on the board.</div>`; return; }
   let html = '';
   for (const side of ['A', 'B']) {
     const arr = live.filter(u => u.side === side);
     if (!arr.length) continue;
-    html += `<div class="roster-grp"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length}</div>`;
+    const sidePts = arr.reduce((acc, u) => acc + unitPointValue(u), 0);
+    html += `<div class="roster-grp"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length} · ${fmtPts(sidePts)} pts</div>`;
     html += arr.map(rosterRowHtml).join('');
   }
   list.innerHTML = html;
@@ -5159,6 +5236,7 @@ function hydrateUnit(u) {
     movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
     fatigued: false, moveStreak: 0, charged: false, chargedLastTurn: false,
     prisoners: 0, indirect: false, cover: 'none', breathsUsed: 0, facing: 0,
+    mercenary: false,
   };
   for (const k in def) if (u[k] === undefined) u[k] = def[k];
   if (u.turnStartFacing === undefined) u.turnStartFacing = u.facing || 0;
@@ -6979,6 +7057,7 @@ function spawnUnit() {
     id: reEdit ? orig.id : state.nextId++,
     side, kind, type,
     weapon,
+    mercenary: $('#f-merc').checked,
     acted: { moved: false, fired: false, fought: false },
     movedThisTurn: 0,   // Slice 8A: inches moved this turn (accumulated on drag/nudge; reset in endRound)
     shotsThisTurn: 0, lastFiredTurn: null,
@@ -7062,6 +7141,7 @@ function spawnUnit() {
 // stay on the board (drag / rotate). Live battle state is out of scope here.
 function loadUnitIntoPanel(u) {
   $('#f-side').value = u.side;
+  $('#f-merc').checked = !!u.mercenary;
   $('#f-kind').value = u.kind;
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
@@ -8780,6 +8860,14 @@ renderBoard();
     console.assert(tA === batch.total.A && tB === batch.total.B && played === batch.ridesPlayed, 'joust ride-by-ride accumulation matches runJoust batch'); }
   { const st = joustStandings({ a:{ score:20, jousts:1 }, b:{ score:-3, jousts:1 } }, ['a', 'b', 'c']);
     console.assert(st[0].id === 'a' && st[0].score === 20 && st[1].id === 'c' && st[1].score === 0 && st[2].id === 'b' && st[2].score === -3, 'tournament standings rank by score desc; unscored = 0'); }
+  // Point values (p.27)
+  console.assert(unitPointValue({ kind:'mass', type:'HF', count:20 }) === 40, 'PV: 20 Heavy Foot = 40');
+  console.assert(unitPointValue({ kind:'mass', type:'HF', count:20, weapon:'longbow' }) === 120, 'PV: 20 HF + longbow = 120');
+  console.assert(unitPointValue({ kind:'mass', type:'HF', count:20, mercenary:true }) === 20, 'PV: mercenary halves');
+  console.assert(unitPointValue({ kind:'mass', type:'SP', count:10, polearm:true }) === 30, 'PV: 10 Swiss + pike = 30 (HF+pike)');
+  console.assert(unitPointValue({ kind:'mass', type:'PE', count:4 }) === 2 && unitPointValue({ kind:'mass', type:'LV', count:4 }) === 3, 'PV: peasant ½ / levy ¾');
+  console.assert(unitPointValue({ kind:'works', worksType:'catLight' }) === 15 && unitPointValue({ kind:'works', worksType:'bombard' }) === 30, 'PV: light catapult 15, bombard 30');
+  console.assert(unitPointValue({ kind:'individual', type:'DRAGON' }) === 100 && unitPointValue({ kind:'individual', type:'HERO' }) === 20, 'PV: Dragon 100, Hero 20');
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
