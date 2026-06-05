@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.73 · Fix: global keyboard shortcuts swallowed keystrokes typed into form fields. onKeyDown now early-returns when the focused element is an INPUT/SELECT/TEXTAREA, so the field owns every key. Before, the single-key hotkeys ran first: "0" → Recenter ate the trailing zero of a budget (so round numbers like 50/100/150 lost digits), and with a unit selected Backspace deleted it and arrows/[ ] moved or rotated it while you were typing. The only key still acted on from inside a field is Escape, which closes an open Help/Settings overlay. No other behavior changed. -->
+<!-- chainmail-board.html · v0.11.74 · Setup / deployment phase. New state.setup (default true) = the sim opens in Deployment: both sides place, drag, rotate, spawn and delete freely with no phase gate and no allowance clamp, while the roster/budget guide army-building; combat is inert. The phase rail shows a leading gold Setup cell hosting Begin battle → (in #action-bank, re-homed into the cell), with the Init…Melee sequence greyed ahead; the phase tag reads Deployment and ◀ ▶ / End turn are off. beginBattle() locks each unit’s deployed count as the casualty baseline, clears per-turn flags, and starts Turn 1 at initiative. A small Back to setup button (beside Reset board, top row, hidden during setup) calls backToSetup() to rearrange forces; reversible. Movement gating: canSideMoveNow is free during setup; unitMayMoveNow adds a per-unit rule so a mid-battle reinforcement (spawnTurn === turn) is freely placeable the turn it arrives, then phase-gated — the drag/nudge/rotate gates and the enforce-movement clamps honor both. spawnTurn is set on spawn (0 in setup), defaulted in hydrate, and setup rides in captureSnapshot/applySnapshot (so save/load/undo round-trip it) and in presets (open in deployment). resetBoard returns to setup. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.73</title>
+<title>Chainmail — Battlefield · v0.11.74</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -265,9 +265,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Typing in fields no longer triggers hotkeys</div>
+    <div class="sub">Chainmail HTML Sim · Setup / deployment phase before battle</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.73</span>
+    <span class="version-tag">v0.11.74</span>
   </div>
 
   <div class="toolbar">
@@ -286,7 +286,8 @@
       <span class="tb-sep" aria-hidden="true"></span>
       <button id="btn-settings" class="secondary">Settings</button>
       <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
-      <button id="btn-reset" class="danger tb-pin-right">Reset board</button>
+      <button id="btn-back-setup" class="secondary tb-pin-right" hidden>↩ Setup</button>
+      <button id="btn-reset" class="danger">Reset board</button>
     </div>
     <div class="tb-row tb-now">
       <span class="phase-tag" id="phase">Turn 1 · Side A</span>
@@ -314,6 +315,7 @@
         <button id="btn-rock" disabled hidden>Drop rock</button>
         <button id="btn-oil" disabled hidden>Pour oil</button>
         <button id="btn-breach" disabled hidden>Breach</button>
+        <button id="btn-begin-battle" class="gold">Begin battle →</button>
       </div>
       <span class="phase-hint" id="phase-hint" hidden></span>
       <span class="hint">click → select · shift+click → target · drag → move · [ ] or ctrl+wheel → rotate · arrows → nudge · wheel → zoom · middle-drag → pan · g → grid · a → fire arcs</span>
@@ -575,7 +577,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.73';
+const SIM_VERSION = '0.11.74';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1961,6 +1963,7 @@ const state = {
   phaseIdx: 0,          // Slice 8D: index into PHASES
   firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
   initiativeRoll: null, // { a, b, winner } for display
+  setup: true,          // deployment mode: free placement before turn 1; Begin battle starts the sequence
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -2203,7 +2206,10 @@ const isCavalryCharge = (u) => !!u.charged && (isMountedType(u.type) || u.mounte
 const CHARGE_CURVE_RAD = 45 * Math.PI / 180;
 // Slice 8D: gate a unit's movement on the current phase when enforcement is on.
 const canSideMoveNow = (side) =>
-  phaseAllowsMove(PHASES[state.phaseIdx].id, state.firstMover, side, state.settings.enforcePhases);
+  state.setup ? true : phaseAllowsMove(PHASES[state.phaseIdx].id, state.firstMover, side, state.settings.enforcePhases);
+// A unit may move now if its side's phase allows it OR it was spawned this turn —
+// a reinforcement is freely placeable the turn it arrives, then phase-gated.
+const unitMayMoveNow = (u) => !!u && (canSideMoveNow(u.side) || u.spawnTurn === state.turn);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function unitBounds(u) {
@@ -4836,7 +4842,7 @@ function onUnitMouseDown(evt, unitId) {
   // Held at the half-move checkpoint — select (to fire/resume via menu) but don't drag.
   if (u.halfMovePaused) { renderBoard(); return; }
   // Slice 8D: when phases are enforced, only the active mover's side may move now.
-  if (!canSideMoveNow(u.side)) { renderBoard(); return; }
+  if (!unitMayMoveNow(u)) { renderBoard(); return; }
   // Begin drag
   const pt = svgPoint(evt);
   const dragTag = 'drag:' + u.id + ':' + Date.now();
@@ -4919,7 +4925,7 @@ function onBoardMouseMove(evt) {
   // Slice 8A: in hard-enforce mode, cap this drag's straight-line distance at
   // the allowance still remaining for the unit this turn (advisory mode never
   // clamps — it only warns via the ruler/pane colour).
-  if (state.settings.enforceMovement) {
+  if (state.settings.enforceMovement && !state.setup && u.spawnTurn !== state.turn) {
     let vx = nx - state.dragging.originX, vy = ny - state.dragging.originY;
     // Slice 8C: a cavalry charge is held to ≤45° of the unit's facing.
     if (isCavalryCharge(u)) {
@@ -5192,7 +5198,7 @@ function captureSnapshot() {
     terrain: structuredClone(state.terrain),
     hazards: structuredClone(state.hazards),
     selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
-    nextId: state.nextId, turn: state.turn,
+    nextId: state.nextId, turn: state.turn, setup: state.setup,
     phaseIdx: state.phaseIdx, firstMover: state.firstMover,
     initiativeRoll: state.initiativeRoll ? { ...state.initiativeRoll } : null,
     rngSeed: state.rngSeed,
@@ -5205,7 +5211,7 @@ function applySnapshot(s) {
   state.terrain = structuredClone(s.terrain || []);
   state.hazards = structuredClone(s.hazards || []);
   state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
-  state.nextId = s.nextId; state.turn = s.turn;
+  state.nextId = s.nextId; state.turn = s.turn; state.setup = !!s.setup;
   state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
   state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
   state.rngSeed = s.rngSeed;
@@ -5250,7 +5256,7 @@ function hydrateUnit(u) {
     movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
     fatigued: false, moveStreak: 0, charged: false, chargedLastTurn: false,
     prisoners: 0, indirect: false, cover: 'none', breathsUsed: 0, facing: 0,
-    mercenary: false,
+    mercenary: false, spawnTurn: 0,
   };
   for (const k in def) if (u[k] === undefined) u[k] = def[k];
   if (u.turnStartFacing === undefined) u.turnStartFacing = u.facing || 0;
@@ -5337,7 +5343,7 @@ function _makePreset(units, terrain, wIn, hIn) {
     state: {
       units, engagements: [], terrain,
       selectedId: null, targetId: null, ctxUnitId: null,
-      nextId: n, turn: 1, phaseIdx: 0, firstMover: 'A',
+      nextId: n, turn: 1, setup: true, phaseIdx: 0, firstMover: 'A',
       initiativeRoll: null, rngSeed: (Date.now() >>> 0) || 1, logHtml: '',
     },
   };
@@ -5478,12 +5484,13 @@ function canPassThroughFire(firer, target) {
 // hard-enforce mode a nudge that would exceed the remaining allowance is blocked
 // (returns false); otherwise the step distance is added to movedThisTurn.
 function nudgeUnit(u, dxPx, dyPx) {
-  if (!canSideMoveNow(u.side)) return false;   // Slice 8D phase gate
+  if (!unitMayMoveNow(u)) return false;        // phase gate (free in setup / for fresh reinforcements)
   if (u.halfMovePaused) return false;          // held at the half-move checkpoint; resume first
+  const freeMove = state.setup || u.spawnTurn === state.turn;
   const stepCost = pathMoveCost(u.x, u.y, dxPx, dyPx, u).cost;   // T2b: path-aware (slow terrain + crossings)
-  if (state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
-  if (state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
-  if (state.settings.enforceMovement && riverBlockScale(u.x, u.y, dxPx, dyPx) < 1 - 1e-9) return false;      // p.9: halt at a river bank (use Cross river)
+  if (!freeMove && state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
+  if (!freeMove && state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
+  if (!freeMove && state.settings.enforceMovement && riverBlockScale(u.x, u.y, dxPx, dyPx) < 1 - 1e-9) return false;      // p.9: halt at a river bank (use Cross river)
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
@@ -5496,10 +5503,10 @@ function nudgeUnit(u, dxPx, dyPx) {
 // cost against the move budget. In hard-enforce mode a rotation whose resulting
 // tier would push the total budget past the allowance is blocked (returns false).
 function rotateUnit(u, deltaDeg) {
-  if (!canSideMoveNow(u.side)) return false;   // Slice 8D: facing change is part of the move phase
+  if (!unitMayMoveNow(u)) return false;        // facing change is part of the move phase (free in setup)
   if (u.reform) return false;                  // committed to a formation change — can't pivot
   const newFacing = (u.facing + deltaDeg + 360) % 360;
-  if (state.settings.enforceMovement) {
+  if (!state.setup && u.spawnTurn !== state.turn && state.settings.enforceMovement) {
     if (u.turnStartFacing == null) u.turnStartFacing = u.facing;
     const projFacingCost = facingCostInches(u, angDist(newFacing, u.turnStartFacing));
     if ((u.movedThisTurn || 0) + projFacingCost > moveAllowanceOf(u) + 1e-9) return false;
@@ -7083,6 +7090,7 @@ function spawnUnit() {
     side, kind, type,
     weapon,
     mercenary: $('#f-merc').checked,
+    spawnTurn: state.setup ? 0 : state.turn,
     acted: { moved: false, fired: false, fought: false },
     movedThisTurn: 0,   // Slice 8A: inches moved this turn (accumulated on drag/nudge; reset in endRound)
     shotsThisTurn: 0, lastFiredTurn: null,
@@ -7457,6 +7465,7 @@ function resetBoard() {
   syncMeasureButton();
   state.nextId = 1;
   state.turn = 1;
+  state.setup = true;   // a reset returns to fresh deployment
   state.engagements = [];
   state.undoStack = []; state.redoStack = []; state._lastUndoTag = null; state._suppressUndo = false;
   state.rngSeed = ((Date.now() & 0xffffffff) >>> 0) || 1;   // fresh dice stream for a new game
@@ -7616,6 +7625,32 @@ function renderTurnUI() {
   const ph = PHASES[state.phaseIdx];
   const mover = moverForPhase(ph.id, state.firstMover);
   const enf = state.settings.enforcePhases;
+  if (state.setup) {
+    // Deployment: no turn yet. The rail's leading Setup cell hosts Begin battle;
+    // the turn sequence shows greyed ahead. Movement is free for both sides.
+    $('#phase').innerHTML = 'Deployment \u00b7 <span style="color:var(--ink-soft)">place &amp; arrange both armies</span>';
+    $('#btn-phase-back').disabled = true;
+    $('#btn-phase-fwd').disabled = true;
+    $('#btn-phase-back').title = $('#btn-phase-fwd').title = 'The battle has not begun';
+    $('#btn-back-setup').hidden = true;
+    $('#btn-end-round').hidden = true;
+    $('#btn-roll-init').hidden = true;
+    $('#btn-elect-order').hidden = true;
+    const bank = $('#action-bank');
+    [...TURN_ACTION_BTNS, 'btn-begin-battle'].forEach(id => bank.appendChild($('#' + id)));
+    const railLbls = ['Setup', ...PHASE_RAIL];
+    $('#phase-rail').innerHTML = railLbls.map((lbl, k) => {
+      const sep = k < railLbls.length - 1 ? '<span class="sep">\u203a</span>' : '';
+      if (k === 0) return `<span class="step now act"><span class="ph">${lbl}</span><span class="liveact" id="live-act"></span></span>${sep}`;
+      return `<span class="step">${lbl}</span>${sep}`;
+    }).join('');
+    $('#live-act').appendChild($('#btn-begin-battle'));
+    const hintEl = $('#phase-hint');
+    hintEl.textContent = '\u25b8 deploy both armies, lay terrain, build to budget \u2014 then Begin battle';
+    hintEl.hidden = false;
+    updateButtons();
+    return;
+  }
   const sideTag = (s) => {
     const c = s === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
     return `<b style="color:${c}">${s}</b>`;
@@ -7633,6 +7668,8 @@ function renderTurnUI() {
     body = ph.label;
   }
   $('#phase').innerHTML = `Turn ${state.turn} · ${body}${enf ? ' · <span style="color:var(--rear)">enforced</span>' : ''}`;
+  $('#btn-end-round').hidden = false;
+  $('#btn-back-setup').hidden = false;
   // Phase arrows: forward advances within the turn (off at Melee — End turn crosses
   // the boundary); back steps within the turn (off at Init). Titles name the target.
   const atMelee = state.phaseIdx >= PHASES.length - 1;
@@ -7657,6 +7694,7 @@ function renderTurnUI() {
   // so rebuilding the rail's innerHTML can never orphan their listeners/gating.
   const bank = $('#action-bank');
   TURN_ACTION_BTNS.forEach(id => bank.appendChild($('#' + id)));
+  bank.appendChild($('#btn-begin-battle'));
   const primary = primaryActionId();
   const inCell = ['btn-roll-init', 'btn-missile', 'btn-melee'].includes(primary) ? primary : null;
   $('#phase-rail').innerHTML = PHASE_RAIL.map((lbl, k) => {
@@ -7691,6 +7729,34 @@ function renderTurnUI() {
 // via the Roll-initiative button (rollInitiativeAction) — so a freshly reset or
 // empty board no longer shows a meaningless auto-roll. 'A' is a neutral default
 // until the dice are cast (matters only if phases are advanced without rolling).
+// Leave deployment and start Turn 1. Locks each unit's deployed strength as the
+// casualty baseline, clears per-turn flags, and opens at initiative (unrolled).
+function beginBattle() {
+  if (!state.setup) return;
+  pushUndo('begin-battle');
+  state.setup = false;
+  state.turn = 1;
+  for (const u of state.units) {
+    u.startCount = u.count;
+    u.movedThisTurn = 0; u.charged = false; u.chargedLastTurn = false;
+    u.fatigued = false; u.moveStreak = 0;
+    u.turnStartFacing = u.facing || 0;
+    clearActed(u);
+  }
+  startTurnInitiative();
+  renderTurnUI();
+  renderBoard();
+}
+// Return to deployment to rearrange forces; reversible (units keep their state).
+function backToSetup() {
+  if (state.setup) return;
+  pushUndo('back-to-setup');
+  state.setup = true;
+  state.initiativeRoll = null;
+  state.phaseIdx = 0;
+  renderTurnUI();
+  renderBoard();
+}
 function startTurnInitiative() {
   state.initiativeRoll = null;
   state.firstMover = 'A';
@@ -7779,6 +7845,8 @@ $('#btn-phase-back').addEventListener('click', phaseBack);
 $('#btn-elect-order').addEventListener('click', toggleInitiativeOrder);
 $('#btn-roll-init').addEventListener('click', rollInitiativeAction);
 $('#btn-end-round').addEventListener('click', endRound);
+$('#btn-begin-battle').addEventListener('click', beginBattle);
+$('#btn-back-setup').addEventListener('click', backToSetup);
 $('#btn-spawn').addEventListener('click', (e) => { e.stopPropagation(); spawnUnit(); });
 $('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state.selectedId != null) beginEditUnit(state.selectedId); });
 $('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
@@ -8902,6 +8970,7 @@ renderBoard();
   console.assert(unitPointValue({ kind:'mass', type:'PE', count:4 }) === 2 && unitPointValue({ kind:'mass', type:'LV', count:4 }) === 3, 'PV: peasant ½ / levy ¾');
   console.assert(unitPointValue({ kind:'works', worksType:'catLight' }) === 15 && unitPointValue({ kind:'works', worksType:'bombard' }) === 30, 'PV: light catapult 15, bombard 30');
   console.assert(unitPointValue({ kind:'individual', type:'DRAGON' }) === 100 && unitPointValue({ kind:'individual', type:'HERO' }) === 20, 'PV: Dragon 100, Hero 20');
+  { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
 </script>
