@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.66 · Boiling oil as the first persistent board hazard (p.23, roadmap threads #1/#2). New state.hazards[] layer: a hazard is a placed polygon footprint with a turn timer, and a HAZARD_KINDS table supplies per-kind behaviour (affects(unit) predicate, ignitesWood, blocksEntry, render style) — deliberately general so persistent-area SPELLS (p.30-32 Cloudkill etc.) can drop in later as new kinds reusing the same footprint/timer/figure-overlap machinery (there is no spell engine yet; the seam is documented, not built). Boiling oil is kind #1: a defender holding a wall pours it on besiegers at the foot — resolvePourOil builds a puddleWideIn×puddleDeepIn (4×3″) oriented rect at the wall's outer face toward the target (oilFootprint via the new worksHalfExtent, since unitBounds/footprintSupport only know troop bounds), kills every figure whose cell-centre falls inside (figuresInPoly + pointInPoly, mirroring figuresUnderCircle), ignites overlapping flammable works via igniteWorks(viaOil), and persists BOILING_OIL.burnTurns (3) turns. tickHazards() in endRound re-applies the kill to anything still standing in it and counts the timer down; renderHazards() draws the translucent flame polygon + a turn label. New Pour-oil toolbar button, updateButtons gate (melee phase + canMeleeThisTurn, like rock-drop), and listener; hazards round-trip through captureSnapshot/applySnapshot (so undo + Save/Load carry them). FAITHFUL SIMPLIFICATIONS: the 2″ vertical sweep down the wall is folded into the base puddle (a 2-D board has no wall height); "prevents troops from entering" is enforced by lethality (anything in the oil dies at end of turn) rather than a hard movement block; oil-loss morale is omitted (area hazard, not melee). -->
+<!-- chainmail-board.html · v0.11.67 · Mine breach (p.23, roadmap thread #1/#2) + the covered-piece rock tooltip polish folded in. MINE BREACH: a Breach toolbar action on a selected defense-value structure collapses a ≤6″ (BREECH.widthIn) section to defense 0 regardless of its defense value — the distinctive thing a mine does that battering cannot (it bypasses the pool). Mining itself is a paper procedure in Chainmail (sappers, counter-mining, a judge); structureBreach() applies the adjudicated RESULT to the tabletop piece (sets defenseLeft 0, breached, breechWidthIn = min(wall length, 6″)). breachState() gates the button (shown for any defense-value structure, disabled once already breached). renderStructure now punches a dark rubble gap of the breach width into any ruined wall — whether breached by a mine or battered to 0 — so the breach reads spatially. ROCK TOOLTIP POLISH: the Drop-rock notBatterable message now routes through rockImmunityNote(d) — a peak-roofed ram or roofed siege tower reports "Covered — rocks slide off the roof (p.23)", a scaling ladder reports indestructible, and anything else keeps the generic "no defense value" — so a correct refusal reads as a rule, not a bug (the confusion that flagged this). FAITHFUL SIMPLIFICATIONS: the paper sapper/counter-mine procedure is not simulated (only its result); the breach is already passable because structures do not block troop movement in this sim, so the "passable at Rough Terrain speed" crossing SLOW (p.23) and the abatis block are deferred (constants exist in BREECH). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.66</title>
+<title>Chainmail — Battlefield · v0.11.67</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Boiling oil (hazard system)</div>
+    <div class="sub">Chainmail HTML Sim · Mine breach + covered-piece note</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.66</span>
+    <span class="version-tag">v0.11.67</span>
   </div>
 
   <div class="toolbar">
@@ -267,6 +267,7 @@
     <button id="btn-escalade" disabled hidden>Escalade</button>
     <button id="btn-rock" disabled hidden>Drop rock</button>
     <button id="btn-oil" disabled hidden>Pour oil</button>
+    <button id="btn-breach" disabled hidden>Breach</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -543,7 +544,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.66';
+const SIM_VERSION = '0.11.67';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1694,6 +1695,31 @@ const mineFoiled = (counterDistIn) => counterDistIn <= MINE.counterProximityMaxI
 // Breech: passable at Rough Terrain speed; defender blocks with abatis (3 turns to
 // build, behaves as a movable mantlet, 3 uninterrupted turns to tear down).
 const BREECH = { widthIn: 6, abatisBuildTurns: 3, abatisTearDownTurns: 3 };
+// A successful mine — or a demolition — collapses a breech (≤ BREECH.widthIn) in a
+// wall (p.23) regardless of its defense value, bypassing the battering grind.
+// Mining itself is a paper procedure (sappers, counter-mining); this applies the
+// adjudicated RESULT to the tabletop piece. Returns the breach width, or null.
+function structureBreach(u) {
+  if (!u || u.kind !== 'works' || WORKS_TYPES[u.worksType]?.cat !== 'structure' || !(u.defenseMax > 0)) return null;
+  u.defenseLeft = 0;
+  u.breached = true;
+  u.breechWidthIn = Math.min(ftToIn(u.lengthFt || 90), BREECH.widthIn);
+  return { breechWidthIn: u.breechWidthIn };
+}
+// Breach-button gating: shown for any defense-value structure, enabled until breached.
+function breachState(u) {
+  if (!u || u.kind !== 'works' || WORKS_TYPES[u.worksType]?.cat !== 'structure' || !(u.defenseMax > 0)) return { show: false };
+  if (u.defenseLeft <= 0) return { show: true, ok: false, reason: 'alreadyBreached' };
+  return { show: true, ok: true };
+}
+// Why a zero-defense works piece shrugs off a dropped rock (p.23): a peak-roofed
+// ram or a roofed siege tower sheds it; a scaling ladder is indestructible.
+function rockImmunityNote(u) {
+  const cat = WORKS_TYPES[u && u.worksType]?.cat;
+  if (cat === 'ram' || cat === 'tower') return 'Covered — rocks slide off the roof (p.23)';
+  if (cat === 'ladder') return 'Scaling ladders are indestructible (p.23)';
+  return 'That piece has no defense value to damage';
+}
 
 /* === C.8 WORKS — artillery & siege equipment as map pieces (cross-refs C.6/C.7) === */
 /* A "works" piece is a positioned object with a defense value and a role: it fires      */
@@ -3188,10 +3214,17 @@ function renderStructure(u, wt) {
   const labelSvg = showInfo
     ? `<text x="${u.x}" y="${(u.y + halfHWorld + 14).toFixed(1)}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${sideD}" text-anchor="middle" pointer-events="none">${u.side} · ${wt.name}</text>`
     : '';
+  // Breach gap (p.23): a collapsed ≤6″ section punched out of a ruined wall —
+  // shown whether the breach came from a mine or sustained battering.
+  const breachGap = ruined ? (() => {
+    const gh = Math.min(hw, inchesToPx(u.breechWidthIn || BREECH.widthIn) / 2);
+    return `<rect x="${(-gh).toFixed(1)}" y="${(-hh - 4).toFixed(1)}" width="${(2 * gh).toFixed(1)}" height="${(2 * hh + 4).toFixed(1)}" fill="#2a2722" opacity="0.62"/>` +
+           `<rect x="${(-gh).toFixed(1)}" y="${(hh - 1).toFixed(1)}" width="${(2 * gh).toFixed(1)}" height="2" fill="#a3322a"/>`;
+  })() : '';
   return `
     <g class="unit-group" data-id="${u.id}" style="cursor:grab">
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing || 0})">
-        ${body}${courses}${merlons}${strip}${outline}
+        ${body}${courses}${merlons}${breachGap}${strip}${outline}
       </g>
       ${bar}
       ${burnOverlaySvg(u, u.y - halfHWorld - 30)}
@@ -4118,6 +4151,18 @@ function resolvePourOil() {
   appendTurn(`Boiling oil · ${aT.name} (${a.side})`, html);
   renderBoard();
 }
+function resolveBreach() {
+  const u = state.units.find(x => x.id === state.selectedId);
+  const bs = breachState(u);
+  if (!bs.show || !bs.ok) return;
+  pushUndo('breach');
+  const r = structureBreach(u);
+  const wt = WORKS_TYPES[u.worksType];
+  appendTurn(`Mine breach · ${u.side} · ${wt.name}`,
+    `<div class="step">A mine collapses a ${r.breechWidthIn.toFixed(1)}″ breach in the ${wt.name} (p.23) — the section is rubble; troops pour through (rough going).</div>` +
+    `<div class="verdict v-rout">${wt.name} breached — defense → 0</div>`);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -4215,7 +4260,7 @@ function updateButtons() {
     rkBtn.title = !showRock || !rk ? '' :
       rk.reason === 'target' ? 'Shift-click an enemy climber on a ladder at this wall, or an enemy engine at its base' :
       rk.reason === 'noClimb' ? 'That enemy is not climbing a ladder against this wall' :
-      rk.reason === 'notBatterable' ? 'That piece has no defense value to damage' :
+      rk.reason === 'notBatterable' ? rockImmunityNote(d) :
       rk.reason === 'reach' ? 'Bring the engine against the wall first' :
       !meleePhaseOk ? 'Resolve in the Melee phase' :
       !canMeleeThisTurn(a) ? 'These defenders already acted this turn' :
@@ -4236,6 +4281,15 @@ function updateButtons() {
       !meleePhaseOk ? 'Resolve in the Melee phase' :
       !canMeleeThisTurn(a) ? 'These defenders already acted this turn' :
       `Pour boiling oil — a ${BOILING_OIL.puddleWideIn}″×${BOILING_OIL.puddleDeepIn}″ kill puddle that burns ${BOILING_OIL.burnTurns} turns (p.23)`;
+  }
+  const bs = breachState(a);
+  const brBtn = $('#btn-breach');
+  if (brBtn) {
+    brBtn.hidden = !bs.show;
+    brBtn.disabled = !(bs.show && bs.ok);
+    brBtn.title = !bs.show ? '' :
+      bs.reason === 'alreadyBreached' ? 'This section is already breached' :
+      `Collapse a mined breach (≤${BREECH.widthIn}″) — bypasses the wall’s defense value (p.23)`;
   }
   updateResolverPane();
 }
@@ -7473,6 +7527,7 @@ $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatte
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
 $('#btn-rock').addEventListener('click', () => { resolveRockDrop(); renderTurnUI(); });
 $('#btn-oil').addEventListener('click', () => { resolvePourOil(); renderTurnUI(); });
+$('#btn-breach').addEventListener('click', () => { resolveBreach(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -8334,6 +8389,17 @@ renderBoard();
     const poly = oilFootprint(wall, 0, 1);   // pour straight down (+y, toward the besiegers)
     console.assert(figuresInPoly(foe, poly) > 0, 'oil: besiegers at the foot fall inside the puddle');
     console.assert(figuresInPoly(farFoe, poly) === 0, 'oil: a distant unit is clear of the puddle');
+  }
+  // Mine breach + rock immunity (p.23)
+  console.assert(rockImmunityNote({ worksType:'ram' }).includes('Covered') && rockImmunityNote({ worksType:'tower' }).includes('Covered'), 'breach: covered ram/tower shed dropped rocks');
+  console.assert(rockImmunityNote({ worksType:'ladder' }).includes('indestructible'), 'breach: scaling ladders are indestructible vs rocks');
+  console.assert(rockImmunityNote({ worksType:'mantlet' }) === 'That piece has no defense value to damage', 'breach: generic note for other pieces');
+  { const w = { kind:'works', worksType:'curtain', defenseMax:33, defenseLeft:33, lengthFt:90 };
+    console.assert(breachState(w).show && breachState(w).ok, 'breach: an intact defense-value wall can be mined');
+    const r = structureBreach(w);
+    console.assert(w.defenseLeft === 0 && w.breached && Math.abs(r.breechWidthIn - Math.min(ftToIn(90), BREECH.widthIn)) < 1e-9, 'breach: a mine drops the section to defense 0 with a ≤6″ breach');
+    console.assert(!breachState(w).ok && breachState(w).reason === 'alreadyBreached', 'breach: a breached wall cannot be breached again');
+    console.assert(structureBreach({ kind:'works', worksType:'ram', defenseMax:0 }) === null, 'breach: a ram (no defense value) cannot be mined');
   }
 
   // Man-to-man character creation (p.25-26) + Leader / Berserker modifiers
