@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.65 · Throwing rocks wired into siege play (p.23, roadmap thread #1). The engine already had rockOnLadder (head climber killed; 2nd saves on 1-3, 3rd on 1-5) and a rockOnEquipment siege-weapon entry (1 defense point) but neither was reachable in play. New: a Drop-rock toolbar button + rockDropState(a,d) precondition and resolveRockDrop() handler. The selected unit is a DEFENDER holding a friendly wall (in contact with a friendly structure piece); the target is either an enemy troop climbing an enemy ladder/tower that touches that wall (LADDER mode → rockOnLadder casualties, head climber + failed saves, applied to the climbing unit with loss-morale, or to an individual's hp pool) or an enemy siege engine at the wall base (EQUIPMENT mode → batterTarget 1 point). A new pure helper rockLadderKills(r) derives the casualty count from a rockOnLadder result. Gated to the melee phase and to canMeleeThisTurn (one defensive action per turn), mirroring the escalade button. In-file tests() cover rockLadderKills and rockDropState mode/precondition detection on the fabricated escalade geometry. FAITHFUL NOTE: rocks are modelled as a deliberate defender action that consumes the unit's melee action for the turn; the "men on a wall claim only soft cover from outside missiles" note (p.23) is tracked separately by the cover system. -->
+<!-- chainmail-board.html · v0.11.66 · Boiling oil as the first persistent board hazard (p.23, roadmap threads #1/#2). New state.hazards[] layer: a hazard is a placed polygon footprint with a turn timer, and a HAZARD_KINDS table supplies per-kind behaviour (affects(unit) predicate, ignitesWood, blocksEntry, render style) — deliberately general so persistent-area SPELLS (p.30-32 Cloudkill etc.) can drop in later as new kinds reusing the same footprint/timer/figure-overlap machinery (there is no spell engine yet; the seam is documented, not built). Boiling oil is kind #1: a defender holding a wall pours it on besiegers at the foot — resolvePourOil builds a puddleWideIn×puddleDeepIn (4×3″) oriented rect at the wall's outer face toward the target (oilFootprint via the new worksHalfExtent, since unitBounds/footprintSupport only know troop bounds), kills every figure whose cell-centre falls inside (figuresInPoly + pointInPoly, mirroring figuresUnderCircle), ignites overlapping flammable works via igniteWorks(viaOil), and persists BOILING_OIL.burnTurns (3) turns. tickHazards() in endRound re-applies the kill to anything still standing in it and counts the timer down; renderHazards() draws the translucent flame polygon + a turn label. New Pour-oil toolbar button, updateButtons gate (melee phase + canMeleeThisTurn, like rock-drop), and listener; hazards round-trip through captureSnapshot/applySnapshot (so undo + Save/Load carry them). FAITHFUL SIMPLIFICATIONS: the 2″ vertical sweep down the wall is folded into the base puddle (a 2-D board has no wall height); "prevents troops from entering" is enforced by lethality (anything in the oil dies at end of turn) rather than a hard movement block; oil-loss morale is omitted (area hazard, not melee). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.65</title>
+<title>Chainmail — Battlefield · v0.11.66</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Throwing rocks (siege defense)</div>
+    <div class="sub">Chainmail HTML Sim · Boiling oil (hazard system)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.65</span>
+    <span class="version-tag">v0.11.66</span>
   </div>
 
   <div class="toolbar">
@@ -266,6 +266,7 @@
     <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
     <button id="btn-escalade" disabled hidden>Escalade</button>
     <button id="btn-rock" disabled hidden>Drop rock</button>
+    <button id="btn-oil" disabled hidden>Pour oil</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -542,7 +543,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.65';
+const SIM_VERSION = '0.11.66';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1834,6 +1835,7 @@ const state = {
   viewBox: { x: 0, y: 0, w: BOARD_W, h: BOARD_H },
   showGrid: false,
   terrain: [],            // T1: placed terrain regions { id, type, x, y, w, h } (centre + size, px)
+  hazards: [],            // persistent board area-effects (boiling oil p.23): { id, kind, side, sourceId, poly:[{x,y}], turnsLeft }
   terrainMode: false,     // T1: terrain placement mode (parity with the measure tool)
   terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
   terrainSelId: null,     // T4-edit: id of the selected placed region (move/rotate/delete target)
@@ -2678,6 +2680,121 @@ function pointInBreathCone(ox, oy, dx, dy, ptX, ptY) {
   const perpPx = Math.abs((ptX - ox) * (-dy) + (ptY - oy) * dx);
   return { hit: perpPx <= inchesToPx(dragonBreathHalfWidthIn(rIn)), rIn };
 }
+
+/* === HAZARDS — persistent board area-effects (boiling oil p.23; seam for      */
+/* the persistent-area spells p.30-32, e.g. Cloudkill). A hazard is a placed     */
+/* polygon footprint with a turn timer; the kind supplies its behaviour. ======= */
+// Oriented half-extent (px) of a works STRUCTURE toward (ux,uy): length is the
+// local x-axis (rotated by facing), thickness the local y-axis — mirrors
+// footprintSupport, which only knows troop bounds.
+function worksHalfExtent(u, ux, uy) {
+  const f = (u.facing || 0) * Math.PI / 180, cf = Math.cos(f), sf = Math.sin(f);
+  const hw = ftToPx(u.lengthFt || 90) / 2, hh = ftToPx(u.thickFt || 10) / 2;
+  return hw * Math.abs(cf * ux + sf * uy) + hh * Math.abs(-sf * ux + cf * uy);
+}
+const pieceHalfExtent = (u, ux, uy) => u.kind === 'works' ? worksHalfExtent(u, ux, uy) : footprintSupport(u, ux, uy);
+// Point-in-convex-polygon: every edge cross-product shares one sign.
+function pointInPoly(x, y, poly) {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const cross = (q.x - p.x) * (y - p.y) - (q.y - p.y) * (x - p.x);
+    if (cross !== 0) { const s = cross > 0 ? 1 : -1; if (!sign) sign = s; else if (s !== sign) return false; }
+  }
+  return true;
+}
+const polyCentroid = (poly) => ({ x: poly.reduce((s, p) => s + p.x, 0) / poly.length, y: poly.reduce((s, p) => s + p.y, 0) / poly.length });
+// Boiling-oil puddle (p.23): a rect at the wall's outer face toward (dx,dy) —
+// puddleDeepIn outward × puddleWideIn along the face. The 2″ vertical sweep down
+// the wall is folded into this base puddle (a 2-D board has no wall height).
+function oilFootprint(wall, dx, dy) {
+  const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+  const px2 = -uy, py2 = ux;                                   // along the wall face
+  const support = worksHalfExtent(wall, ux, uy);               // wall edge toward the target
+  const nx = wall.x + ux * support, ny = wall.y + uy * support;
+  const deep = inchesToPx(BOILING_OIL.puddleDeepIn), halfW = inchesToPx(BOILING_OIL.puddleWideIn) / 2;
+  return [
+    { x: nx + px2 * halfW,           y: ny + py2 * halfW },
+    { x: nx - px2 * halfW,           y: ny - py2 * halfW },
+    { x: nx - px2 * halfW + ux * deep, y: ny - py2 * halfW + uy * deep },
+    { x: nx + px2 * halfW + ux * deep, y: ny + py2 * halfW + uy * deep },
+  ];
+}
+// Figures of `target` whose cell centre lies inside `poly` (mirrors the grid walk
+// in figuresUnderCircle, swapping the circle test for point-in-poly).
+function figuresInPoly(target, poly) {
+  if (!target || target.destroyed) return 0;
+  if (target.kind === 'individual') return pointInPoly(target.x, target.y, poly) ? 1 : 0;
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  const cols = target.cols, f = (target.facing || 0) * Math.PI / 180, cos = Math.cos(f), sin = Math.sin(f);
+  let n = 0;
+  for (let i = 0; i < target.count; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+    const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+    const wx = target.x + lx * cos - ly * sin, wy = target.y + lx * sin + ly * cos;
+    if (pointInPoly(wx, wy, poly)) n++;
+  }
+  return Math.min(n, target.count);
+}
+const HAZARD_KINDS = {
+  // Boiling oil: kills EVERY figure it covers (both sides, p.23), ignites wood,
+  // and burns BOILING_OIL.burnTurns turns.
+  oil: { label: 'Boiling oil', fill: 'rgba(207,108,47,0.34)', stroke: '#a8400f', ignitesWood: true, blocksEntry: true, affects: () => true },
+  // Seam for persistent-area spells: a Cloudkill kind would add
+  // { drift:{speedIn:6, fromId}, affects: u => SMALL_FOLK.has(u.type) } and reuse
+  // this same footprint/timer/figure-overlap machinery (no spell engine yet).
+};
+// Apply a hazard to everything overlapping it: figure-granular casualties on
+// affected troops, ignition on flammable works it touches. Returns what changed.
+function applyHazardToUnits(hz) {
+  const kind = HAZARD_KINDS[hz.kind]; const killed = [], lit = [];
+  if (!kind) return { killed, lit };
+  for (const u of state.units) {
+    if (u.destroyed) continue;
+    if (u.kind === 'works') {
+      if (kind.ignitesWood && !u.burning && WORKS_TYPES[u.worksType]?.flammable) {
+        const reach = inchesToPx(worksPad(u));
+        if (pointInPoly(u.x, u.y, hz.poly) || hz.poly.some(c => Math.hypot(c.x - u.x, c.y - u.y) <= reach)) {
+          if (igniteWorks(u, { viaOil: true }).ignited) lit.push(u);
+        }
+      }
+      continue;
+    }
+    if (!kind.affects(u)) continue;
+    const n = figuresInPoly(u, hz.poly);
+    if (n > 0) { applyCasualties(u, n); killed.push({ u, n }); if (u.destroyed) cleanupEngagementsForUnit(u.id); }
+  }
+  return { killed, lit };
+}
+// End-of-turn: a burning hazard kills whatever is still in it, then counts down.
+function tickHazards() {
+  if (!state.hazards || !state.hazards.length) return;
+  for (const hz of state.hazards) {
+    const res = applyHazardToUnits(hz);
+    if (res.killed.length || res.lit.length) {
+      const k = HAZARD_KINDS[hz.kind];
+      let html = `<div class="step">${k.label} still burning (${hz.turnsLeft} turn${hz.turnsLeft === 1 ? '' : 's'} left)</div>`;
+      if (res.killed.length) html += `<div class="verdict v-killed">` + res.killed.map(x => `${x.u.side} ${typeById(x.u.type)?.name || 'unit'} −${x.n}${x.u.destroyed ? ' (destroyed)' : ''}`).join(' · ') + `</div>`;
+      if (res.lit.length) html += `<div class="step" style="color:#a8400f">sets ${res.lit.map(u => WORKS_TYPES[u.worksType]?.name || 'works').join(', ')} alight</div>`;
+      appendTurn(`${k.label} burns`, html);
+    }
+  }
+  for (const hz of state.hazards) hz.turnsLeft -= 1;
+  state.hazards = state.hazards.filter(hz => hz.turnsLeft > 0);
+}
+function renderHazards() {
+  if (!state.hazards || !state.hazards.length) return '';
+  let s = '';
+  for (const hz of state.hazards) {
+    const k = HAZARD_KINDS[hz.kind]; if (!k) continue;
+    const pts = hz.poly.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const c = polyCentroid(hz.poly);
+    s += `<polygon points="${pts}" fill="${k.fill}" stroke="${k.stroke}" stroke-width="1.5" stroke-dasharray="4 3" pointer-events="none"/>` +
+         `<text x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" font-family="sans-serif" font-size="8.5" font-weight="700" fill="${k.stroke}" text-anchor="middle" pointer-events="none">${k.label.toUpperCase()} ${hz.turnsLeft}</text>`;
+  }
+  return `<g id="hazards">${s}</g>`;
+}
 // World-space centers of every placed figure in a mass unit (honors facing).
 function massFigureCenters(u) {
   const { w, h, pip, gap, pad } = unitBounds(u);
@@ -2807,6 +2924,7 @@ function renderBoard() {
   board.innerHTML =
     renderBg() +
     renderTerrain() +
+    renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
     `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderMeasure()}${renderDragRuler()}</g>`;
@@ -3965,6 +4083,41 @@ function resolveRockDrop() {
   appendTurn(`Rock · ${aT.name} (${a.side}) → ${dName} (${d.side})`, html);
   renderBoard();
 }
+// Pour boiling oil (p.23): a defender holding a wall dumps it on besiegers at the
+// foot. The selected unit is the defender; the target sets the direction and must
+// be within the puddle's depth of the wall's outer face.
+function pourOilState(a, d, units = state.units) {
+  if (!a || a.kind === 'works' || a.destroyed) return null;
+  const wall = units.find(u => u.kind === 'works' && !u.destroyed && u.side === a.side &&
+    WORKS_TYPES[u.worksType]?.cat === 'structure' && u.defenseMax > 0 && piecesInContact(a, u));
+  if (!wall) return { ok: false, reason: 'noWall' };
+  if (!d || d.destroyed || d.side === a.side) return { ok: false, reason: 'target', wall };
+  const dx = d.x - wall.x, dy = d.y - wall.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+  const gapIn = pxToInches(Math.max(0, len - worksHalfExtent(wall, ux, uy) - pieceHalfExtent(d, -ux, -uy)));
+  if (gapIn > BOILING_OIL.puddleDeepIn) return { ok: false, reason: 'reach', wall, gapIn };
+  return { ok: true, wall };
+}
+function resolvePourOil() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'melee') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const os = pourOilState(a, d);
+  if (!os || !os.ok) return;
+  if (!canMeleeThisTurn(a)) return;
+  pushUndo('oil');
+  const wall = os.wall, aT = typeById(a.type);
+  const hz = { id: `hz${state.nextId++}`, kind: 'oil', side: a.side, sourceId: a.id,
+    poly: oilFootprint(wall, d.x - wall.x, d.y - wall.y), turnsLeft: BOILING_OIL.burnTurns };
+  state.hazards.push(hz);
+  const res = applyHazardToUnits(hz);
+  let html = `<div class="step">${a.side} · ${aT.name} pours boiling oil from the wall — a ${BOILING_OIL.puddleWideIn}″×${BOILING_OIL.puddleDeepIn}″ puddle, burns ${BOILING_OIL.burnTurns} turns (p.23)</div>`;
+  if (res.killed.length) html += `<div class="verdict v-killed">` + res.killed.map(x => `${x.u.side} ${typeById(x.u.type)?.name || 'unit'} −${x.n}${x.u.destroyed ? ' (destroyed)' : ''}`).join(' · ') + `</div>`;
+  else html += `<div class="verdict v-noeffect">no figures caught at the foot — the puddle burns for ${BOILING_OIL.burnTurns} turns</div>`;
+  if (res.lit.length) html += `<div class="step" style="color:#a8400f">the oil sets ${res.lit.map(u => WORKS_TYPES[u.worksType]?.name || 'works').join(', ')} alight</div>`;
+  a.acted.fought = true;
+  appendTurn(`Boiling oil · ${aT.name} (${a.side})`, html);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -4069,6 +4222,20 @@ function updateButtons() {
       rk.mode === 'equipment'
         ? `Drop a rock on the ${WORKS_TYPES[d.worksType]?.name || 'engine'} — ${SIEGE_WEAPONS.rockOnEquipment.points} pt (p.23)`
         : 'Drop a rock down the ladder — kills the head climber; 2nd saves ≤3, 3rd ≤5 (p.23)';
+  }
+  const oil = pourOilState(a, d);
+  const oilBtn = $('#btn-oil');
+  if (oilBtn) {
+    const showOil = !!(oil && oil.wall);   // selected unit holds a friendly wall
+    const meleePhaseOk = !state.settings.enforcePhases || phaseId === 'melee';
+    oilBtn.hidden = !showOil;
+    oilBtn.disabled = !(oil && oil.ok && meleePhaseOk && canMeleeThisTurn(a));
+    oilBtn.title = !showOil || !oil ? '' :
+      oil.reason === 'target' ? 'Shift-click the besiegers (or an engine) at the foot of this wall' :
+      oil.reason === 'reach' ? `Target must be at the wall base — within ${BOILING_OIL.puddleDeepIn}″ (now ${oil.gapIn.toFixed(1)}″)` :
+      !meleePhaseOk ? 'Resolve in the Melee phase' :
+      !canMeleeThisTurn(a) ? 'These defenders already acted this turn' :
+      `Pour boiling oil — a ${BOILING_OIL.puddleWideIn}″×${BOILING_OIL.puddleDeepIn}″ kill puddle that burns ${BOILING_OIL.burnTurns} turns (p.23)`;
   }
   updateResolverPane();
 }
@@ -4749,6 +4916,7 @@ function captureSnapshot() {
     units: structuredClone(state.units),
     engagements: structuredClone(state.engagements),
     terrain: structuredClone(state.terrain),
+    hazards: structuredClone(state.hazards),
     selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
     nextId: state.nextId, turn: state.turn,
     phaseIdx: state.phaseIdx, firstMover: state.firstMover,
@@ -4761,6 +4929,7 @@ function applySnapshot(s) {
   state.units = structuredClone(s.units);
   state.engagements = structuredClone(s.engagements);
   state.terrain = structuredClone(s.terrain || []);
+  state.hazards = structuredClone(s.hazards || []);
   state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
   state.nextId = s.nextId; state.turn = s.turn;
   state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
@@ -7255,6 +7424,7 @@ function endRound() {
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   state.lastCatapultHit = null;
+  tickHazards();
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
@@ -7302,6 +7472,7 @@ $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); rende
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
 $('#btn-rock').addEventListener('click', () => { resolveRockDrop(); renderTurnUI(); });
+$('#btn-oil').addEventListener('click', () => { resolvePourOil(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -8148,6 +8319,21 @@ renderBoard();
     console.assert(rockDropState(climber, def, [climber, ladder, def]).reason === 'noWall', 'rock: a unit not holding a wall cannot drop rocks');
     console.assert(rockDropState(def, null, [climber, ladder, wall, def]).reason === 'target', 'rock: no target → target');
     console.assert(rockDropState(def, ram, [climber, ladder, wall, def, ram]).mode === 'equipment', 'rock: enemy engine at the wall → equipment mode (1 pt)');
+  }
+  // Boiling oil (p.23)
+  console.assert(pointInPoly(5, 5, [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}]) && !pointInPoly(15, 5, [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}]), 'oil: point-in-poly inside vs outside');
+  { const px = inchesToPx;
+    const wall = { id:'w', kind:'works', side:'B', worksType:'curtain', defenseMax:33, defenseLeft:33, lengthFt:90, thickFt:10, facing:0, x:px(20), y:px(10) };
+    const def  = { id:'d', kind:'mass', side:'B', count:10, x:px(20), y:px(10) - 6, facing:0 };
+    const foe  = { id:'c', kind:'mass', side:'A', count:20, cols:5, rows:4, spacing:'close', facing:0, x:px(20), y:px(10) + px(1.5) };
+    const farFoe = { id:'c2', kind:'mass', side:'A', count:20, cols:5, rows:4, spacing:'close', facing:0, x:px(20), y:px(10) + px(8) };
+    console.assert(pourOilState(def, foe, [wall, def, foe]).ok, 'oil: defender@wall + besiegers at the foot → ok');
+    console.assert(pourOilState(def, farFoe, [wall, def, farFoe]).reason === 'reach', 'oil: a target beyond the puddle depth → reach');
+    console.assert(pourOilState(def, null, [wall, def]).reason === 'target', 'oil: no target → target');
+    console.assert(pourOilState(foe, def, [wall, def, foe]).reason === 'noWall', 'oil: a unit not holding a wall cannot pour');
+    const poly = oilFootprint(wall, 0, 1);   // pour straight down (+y, toward the besiegers)
+    console.assert(figuresInPoly(foe, poly) > 0, 'oil: besiegers at the foot fall inside the puddle');
+    console.assert(figuresInPoly(farFoe, poly) === 0, 'oil: a distant unit is clear of the puddle');
   }
 
   // Man-to-man character creation (p.25-26) + Leader / Berserker modifiers
