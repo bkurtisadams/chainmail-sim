@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.71 · Suggested Point Values (p.27) costing engine + live readouts. New pure data: TROOP_PV (per-figure troop costs: Peasant ½ / Levy ¾ / Light Foot 1 / Heavy Foot 2 / Armored Foot 2½ / Light Horse 3 / Medium Horse 4 / Heavy Horse 5; sim types EHF→HF, SP→HF, MK→HH; fantasy races Sprite 4 / Dwarf-Gnome 2 / Goblin-Kobold 1½ / Elf 4 / Orc 2 / Hobbit —), WEAPON_PV (per-figure adders: Bow 3, Longbow/composite 4, arquebus/any crossbow 1½, pike 1, thrown 0), WORKS_PV (light cat/cannon 15, heavy 20, bombard 30; other works 0). unitPointValue(u) is pure: mass = (troop PV + weapon adders) × figures; individual = fantasy PV / fantasy-race PV / armor-mapped man PV (manFootMountPV); engine = flat; mercenaries (note 1) cost half (men only). armyPoints(side) sums live units; fmtPts trims float noise. New per-unit mercenary flag (f-merc checkbox, .f-troop-only so it shows for mass+individual, persisted through build/edit/hydrate). Add-unit form gains a live "Points: N" readout (#f-points via formUnitSpec + updateFormPoints, wired to every cost-affecting control). Roster now shows per-unit pts in row tooltips, per-side totals in each group header, and a grand total in the roster count. 20 RAW cases pass in an isolation harness; 7 assertions added to the in-file tests(). Faithful omissions: thrown-weapon and siege-equipment (tower/ram/ladder/mantlet/abatis) costs not in RAW → 0; the per-man individual cost is an armor→troop mapping (RAW has no per-man table); no budget cap yet. -->
+<!-- chainmail-board.html · v0.11.72 · Point-value budget cap (p.27 army building). New setting armyBudget (per-side points target, 0 = no cap) added to state.settings.defaults, with an "Army points" section in the Settings modal (data-setting-num="armyBudget", min 0). The data-setting-num change handler is generalized: board keys (boardWIn/boardHIn) keep the setBoardSize path; any other numeric setting is now stored to state.settings[key], clamped ≥0, persisted via saveSettings, and the roster re-rendered. The Units roster headers are budget-aware: with a cap set, each side reads "Side A · n · pts / budget" and, when a side exceeds the cap, gains the .over class (bold red #b23030) plus an "over X" amount. With no cap (0) the header keeps the plain "pts" total. Siege equipment and thrown weapons remain costed 0 (no RAW value; per Kurt). No combat/resolver changes; pure settings + roster display. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.71</title>
+<title>Chainmail — Battlefield · v0.11.72</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -90,6 +90,7 @@
   .roster-empty { font-size: 11px; color: var(--ink-soft); font-style: italic; padding: 4px 2px; }
   .roster-grp { font-family: var(--sans); font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase;
     color: var(--ink-soft); margin: 6px 2px 2px; display: flex; align-items: center; gap: 5px; }
+  .roster-grp.over { color: #b23030; font-weight: 700; }
   .roster-row { display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 4px;
     cursor: pointer; font-size: 12px; line-height: 1.15; }
   .roster-row:hover { background: var(--rank-hi); }
@@ -264,9 +265,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Point-value army costing (p.27)</div>
+    <div class="sub">Chainmail HTML Sim · Per-side points budget cap</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.71</span>
+    <span class="version-tag">v0.11.72</span>
   </div>
 
   <div class="toolbar">
@@ -535,6 +536,15 @@
     </section>
 
     <section>
+      <h3>Army points (p.27)</h3>
+      <label style="justify-content:space-between; gap:12px;"><span>Budget per side — 0 = no cap</span>
+        <input type="number" min="0" max="100000" step="1" data-setting-num="armyBudget" style="flex:0 0 90px;"></label>
+      <p>Set a points target and the Units roster totals each side against it,
+         flagging a side that goes over. Suggested Point Values are Chainmail
+         p.27; siege equipment and thrown weapons carry no RAW cost (counted 0).</p>
+    </section>
+
+    <section>
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
@@ -565,7 +575,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.71';
+const SIM_VERSION = '0.11.72';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1970,6 +1980,7 @@ const state = {
     mountedRoadBonus: false,  // House rule (NOT RAW): mounted individuals get the Heavy-Horse road bonus (+3). p.9 lists horse only.
     boardWIn: 96,             // playing-area width in tabletop inches (8 ft default per Chainmail p.5; resizable; clamped 24–600)
     boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
+    armyBudget: 0,            // p.27 point-value cap per side (0 = no cap); roster flags a side over budget
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rngSeed: ((Date.now() & 0xffffffff) >>> 0) || 1,   // mulberry32 counter; plain data so undo can restore the dice stream
@@ -3156,7 +3167,10 @@ function renderRoster() {
     const arr = live.filter(u => u.side === side);
     if (!arr.length) continue;
     const sidePts = arr.reduce((acc, u) => acc + unitPointValue(u), 0);
-    html += `<div class="roster-grp"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length} · ${fmtPts(sidePts)} pts</div>`;
+    const budget = state.settings.armyBudget || 0;
+    const over = budget > 0 && sidePts > budget;
+    const ptsLabel = budget > 0 ? `${fmtPts(sidePts)} / ${budget}` : `${fmtPts(sidePts)} pts`;
+    html += `<div class="roster-grp${over ? ' over' : ''}"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length} · ${ptsLabel}${over ? ` · over ${fmtPts(sidePts - budget)}` : ''}</div>`;
     html += arr.map(rosterRowHtml).join('');
   }
   list.innerHTML = html;
@@ -7815,9 +7829,18 @@ $('#help-modal').addEventListener('click', e => { if (e.target.dataset.act === '
 document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
 document.querySelectorAll('[data-setting-range]').forEach(el => el.addEventListener('input', onSettingRange));
 document.querySelectorAll('[data-setting-num]').forEach(el => el.addEventListener('change', e => {
-  setBoardSize(
-    e.target.dataset.settingNum === 'boardWIn' ? e.target.value : state.settings.boardWIn,
-    e.target.dataset.settingNum === 'boardHIn' ? e.target.value : state.settings.boardHIn);
+  const key = e.target.dataset.settingNum;
+  if (key === 'boardWIn' || key === 'boardHIn') {
+    setBoardSize(
+      key === 'boardWIn' ? e.target.value : state.settings.boardWIn,
+      key === 'boardHIn' ? e.target.value : state.settings.boardHIn);
+  } else {
+    const n = Math.max(0, parseInt(e.target.value, 10) || 0);
+    state.settings[key] = n;
+    e.target.value = n;
+    saveSettings();
+    renderRoster();
+  }
   syncSettingsCheckboxes();
 }));
 document.querySelectorAll('[data-board-preset]').forEach(b => b.addEventListener('click', () => {
