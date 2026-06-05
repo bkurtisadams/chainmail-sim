@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.64 · Arquebus wired into missile resolution (p.13 gunpowder). Arquebusiers previously fired through the generic armour-based missile table; now arquebus fire routes through the dedicated resolveArquebus engine, which IGNORES armour and rolls a per-man accuracy d6 against a range-band hit number (0–6″ hit on 2+, 6–12″ on 4+, 12–18″ on 5+) — a hit kills any figure. New onArquebusFire handles every firer/target combination (individual or massed shooter; individual or mass target), intercepted ahead of the bow/thrown dispatch in onResolveMissile by an a.weapon==='arquebus' branch. Front-two-ranks firing cap (p.11), the every-other-turn cadence and the over-half-move opposed-die gate ("treat as Heavy Crossbowmen", already in place via halfRoF + overHalfMoveFire), the 45° foot arc, the no-indirect rule, and the simultaneous-missile-phase deferral + loss-morale checks all carry through the existing machinery. Hard cover deducts from the accuracy die per p.13 (up to ½ concealed −1, over ½ −2), mapped from the sim's cover model (soft/woods → −1, hard/mantlet → −2) via the new arquebusCover helper. FAITHFUL OMISSION: the rested-weapon +1 has no UI toggle and is left off; "treat as Heavy Crossbowmen" is read as rate-of-fire cadence only, so the heavy-crossbow +1-to-fire bonus is NOT applied to the arquebus accuracy die. -->
+<!-- chainmail-board.html · v0.11.65 · Throwing rocks wired into siege play (p.23, roadmap thread #1). The engine already had rockOnLadder (head climber killed; 2nd saves on 1-3, 3rd on 1-5) and a rockOnEquipment siege-weapon entry (1 defense point) but neither was reachable in play. New: a Drop-rock toolbar button + rockDropState(a,d) precondition and resolveRockDrop() handler. The selected unit is a DEFENDER holding a friendly wall (in contact with a friendly structure piece); the target is either an enemy troop climbing an enemy ladder/tower that touches that wall (LADDER mode → rockOnLadder casualties, head climber + failed saves, applied to the climbing unit with loss-morale, or to an individual's hp pool) or an enemy siege engine at the wall base (EQUIPMENT mode → batterTarget 1 point). A new pure helper rockLadderKills(r) derives the casualty count from a rockOnLadder result. Gated to the melee phase and to canMeleeThisTurn (one defensive action per turn), mirroring the escalade button. In-file tests() cover rockLadderKills and rockDropState mode/precondition detection on the fabricated escalade geometry. FAITHFUL NOTE: rocks are modelled as a deliberate defender action that consumes the unit's melee action for the turn; the "men on a wall claim only soft cover from outside missiles" note (p.23) is tracked separately by the cover system. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.64</title>
+<title>Chainmail — Battlefield · v0.11.65</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -251,9 +251,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Arquebus gunpowder fire wired</div>
+    <div class="sub">Chainmail HTML Sim · Throwing rocks (siege defense)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.64</span>
+    <span class="version-tag">v0.11.65</span>
   </div>
 
   <div class="toolbar">
@@ -265,6 +265,7 @@
     <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
     <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
     <button id="btn-escalade" disabled hidden>Escalade</button>
+    <button id="btn-rock" disabled hidden>Drop rock</button>
     <button id="btn-end-round" class="gold">End turn</button>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
@@ -541,7 +542,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.64';
+const SIM_VERSION = '0.11.65';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1677,6 +1678,9 @@ function ladderPushOff(die) {
 function rockOnLadder(die2, die3) {
   return { first: 'killed', secondSurvives: die2 <= 3, thirdSurvives: die3 <= 5 };
 }
+// Casualties from a rock down the ladder: the head climber always dies, plus the
+// 2nd / 3rd man whenever their save roll failed.
+const rockLadderKills = (r) => 1 + (r.secondSurvives ? 0 : 1) + (r.thirdSurvives ? 0 : 1);
 // Boiling oil: 2" path + 4"x3" puddle, kills all within, burns 3 turns; struck
 // wood (except ladders / peak-roofed rams) ignites, abandoned next turn, burns 5.
 const BOILING_OIL = {
@@ -3874,6 +3878,93 @@ function resolveEscalade() {
   appendTurn(`Escalade · ${aT ? aT.name : 'climber'} (${a.side}) → ${dT ? dT.name : 'defender'} (${d.side}) · round ${round}`, html);
   renderBoard();
 }
+// Throwing rocks (p.23): a defender holding a wall heaves a rock either DOWN a
+// ladder against it (head climber killed; 2nd saves on 1-3, 3rd on 1-5) or onto
+// an enemy siege engine at the base (1 defense point). The selected unit is the
+// defender; the target is the enemy climber or engine.
+function rockDropState(a, d, units = state.units) {
+  if (!a || a.kind === 'works' || a.destroyed) return null;
+  const wall = units.find(u => u.kind === 'works' && !u.destroyed && u.side === a.side &&
+    WORKS_TYPES[u.worksType]?.cat === 'structure' && u.defenseMax > 0 && piecesInContact(a, u));
+  if (!wall) return { ok: false, reason: 'noWall' };
+  if (!d || d.destroyed || d.side === a.side) return { ok: false, reason: 'target', wall };
+  if (d.kind === 'works') {
+    if (!(d.defenseMax > 0)) return { ok: false, reason: 'notBatterable', wall };
+    if (!piecesInContact(d, wall) && !piecesInContact(a, d)) return { ok: false, reason: 'reach', wall };
+    return { ok: true, mode: 'equipment', wall };
+  }
+  const ladder = units.find(L => L.kind === 'works' && !L.destroyed && L.side === d.side &&
+    ['ladder', 'tower'].includes(WORKS_TYPES[L.worksType]?.cat) &&
+    piecesInContact(L, wall) && piecesInContact(L, d));
+  if (!ladder) return { ok: false, reason: 'noClimb', wall };
+  return { ok: true, mode: 'ladder', wall, ladder };
+}
+function resolveRockDrop() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'melee') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const rs = rockDropState(a, d);
+  if (!rs || !rs.ok) return;
+  if (!canMeleeThisTurn(a)) return;
+  pushUndo('rock');
+  const aT = typeById(a.type), dT = typeById(d.type);
+  const dName = dT ? dT.name : (WORKS_TYPES[d.worksType]?.name || 'target');
+
+  if (rs.mode === 'equipment') {
+    const before = d.defenseLeft;
+    const res = batterTarget(d, SIEGE_WEAPONS.rockOnEquipment.points);
+    let html = `<div class="step">${a.side} · ${aT.name} drops a rock on ${d.side} · ${dName} — ${SIEGE_WEAPONS.rockOnEquipment.points} pt of damage (p.23)</div>`;
+    if (res && res.destroyed) {
+      html += `<div class="verdict v-rout">${dName} wrecked — defense ${before} → 0</div>`;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="verdict v-stable">defense ${before} → ${res ? res.remaining : d.defenseLeft}</div>`;
+    }
+    a.acted.fought = true;
+    appendTurn(`Rock · ${aT.name} (${a.side}) → ${dName} (${d.side})`, html);
+    renderBoard();
+    return;
+  }
+
+  const die2 = d6(state.rng), die3 = d6(state.rng);
+  const rr = rockOnLadder(die2, die3);
+  const killed = Math.min(rockLadderKills(rr), d.kind === 'individual' ? (d.hp || 1) : activeFigures(d));
+  let html = `<div class="step">${a.side} · ${aT.name} heaves a rock down the ladder at ${d.side} · ${dName} (p.23)</div>` +
+    `<div class="step">head climber killed · 2nd man save ≤3: rolled ${die2} → ${rr.secondSurvives ? 'survives' : 'killed'} · 3rd man save ≤5: rolled ${die3} → ${rr.thirdSurvives ? 'survives' : 'killed'}</div>`;
+  if (d.kind === 'individual') {
+    const hpBefore = d.hp;
+    d.hp = Math.max(0, (d.hp || 0) - killed);
+    if (d.hp <= 0) {
+      html += `<div class="verdict v-rout">${d.side} · ${dName} → killed (hp ${hpBefore}/${d.maxHp})</div>`;
+      d.count = 0; d.destroyed = true;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    } else html += `<div class="verdict v-killed">${d.side} · ${dName} takes ${killed} → hp ${d.hp}/${d.maxHp}</div>`;
+  } else {
+    applyCasualties(d, killed);
+    capParalysisToCount(d);
+    if (d.destroyed) {
+      html += `<div class="verdict v-rout">${d.side} ${dName} swept off the ladder — ${killed} killed, unit destroyed</div>`;
+      cleanupEngagementsForUnit(d.id);
+      if (d.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="verdict v-killed">${killed} climber${killed === 1 ? '' : 's'} killed → ${d.count}/${d.startCount}</div>`;
+      const cas = d.startCount - d.count;
+      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue });
+      if (lr.triggered) {
+        const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
+        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        html += `<div class="step">${d.side} · ${dName} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+        html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
+        if (!lr.passed) d.destroyed = true;
+      }
+    }
+  }
+  a.acted.fought = true;
+  appendTurn(`Rock · ${aT.name} (${a.side}) → ${dName} (${d.side})`, html);
+  renderBoard();
+}
 function updateButtons() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -3960,6 +4051,24 @@ function updateButtons() {
       !meleePhaseOk ? 'Resolve in the Melee phase' :
       !canMeleeThisTurn(a) ? 'Already fought this turn — the next round is next turn' :
       `Escalade via ${es.via === 'tower' ? 'siege tower' : 'ladder'} — the defender strikes first from above (p.25)`;
+  }
+  const rk = rockDropState(a, d);
+  const rkBtn = $('#btn-rock');
+  if (rkBtn) {
+    const showRock = !!(rk && rk.wall);   // selected unit holds a friendly wall
+    const meleePhaseOk = !state.settings.enforcePhases || phaseId === 'melee';
+    rkBtn.hidden = !showRock;
+    rkBtn.disabled = !(rk && rk.ok && meleePhaseOk && canMeleeThisTurn(a));
+    rkBtn.title = !showRock || !rk ? '' :
+      rk.reason === 'target' ? 'Shift-click an enemy climber on a ladder at this wall, or an enemy engine at its base' :
+      rk.reason === 'noClimb' ? 'That enemy is not climbing a ladder against this wall' :
+      rk.reason === 'notBatterable' ? 'That piece has no defense value to damage' :
+      rk.reason === 'reach' ? 'Bring the engine against the wall first' :
+      !meleePhaseOk ? 'Resolve in the Melee phase' :
+      !canMeleeThisTurn(a) ? 'These defenders already acted this turn' :
+      rk.mode === 'equipment'
+        ? `Drop a rock on the ${WORKS_TYPES[d.worksType]?.name || 'engine'} — ${SIEGE_WEAPONS.rockOnEquipment.points} pt (p.23)`
+        : 'Drop a rock down the ladder — kills the head climber; 2nd saves ≤3, 3rd ≤5 (p.23)';
   }
   updateResolverPane();
 }
@@ -7192,6 +7301,7 @@ $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); ren
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
+$('#btn-rock').addEventListener('click', () => { resolveRockDrop(); renderTurnUI(); });
 $('#btn-missile').addEventListener('click', () => {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
@@ -8021,6 +8131,23 @@ renderBoard();
     console.assert(escaladeState(climber, null, [climber, ladder, wall, def]).reason === 'target', 'escalade: no defender targeted → target');
     const farDef = { id:'d2', kind:'mass', side:'B', count:10, x:px(40), y:0 };
     console.assert(escaladeState(climber, farDef, [climber, ladder, wall, farDef]).reason === 'defNotAtWall', 'escalade: defender away from the wall → defNotAtWall');
+  }
+  // Throwing rocks (p.23)
+  console.assert(rockLadderKills(rockOnLadder(3, 5)) === 1, 'rock: both saves hold → only the head climber dies');
+  console.assert(rockLadderKills(rockOnLadder(4, 6)) === 3, 'rock: both saves fail → head + 2nd + 3rd die');
+  console.assert(rockLadderKills(rockOnLadder(3, 6)) === 2, 'rock: 2nd saves, 3rd fails → 2 die');
+  { // rockDropState from the defender's side, reusing the escalade geometry
+    const px = inchesToPx;
+    const climber = { id:'c', kind:'mass', side:'A', count:20, x:0, y:0 };
+    const ladder  = { id:'l', kind:'works', side:'A', worksType:'ladder', x:px(1), y:0 };
+    const wall    = { id:'w', kind:'works', side:'B', worksType:'curtain', defenseMax:33, defenseLeft:33, lengthFt:90, thickFt:10, x:px(3), y:0 };
+    const def     = { id:'d', kind:'mass', side:'B', count:10, x:px(4), y:0 };
+    const ram     = { id:'r', kind:'works', side:'A', worksType:'ram', defenseMax:5, defenseLeft:5, x:px(3.5), y:0 };
+    const lad = rockDropState(def, climber, [climber, ladder, wall, def]);
+    console.assert(lad.ok && lad.mode === 'ladder', 'rock: defender@wall vs a climber on a ladder → ladder mode');
+    console.assert(rockDropState(climber, def, [climber, ladder, def]).reason === 'noWall', 'rock: a unit not holding a wall cannot drop rocks');
+    console.assert(rockDropState(def, null, [climber, ladder, wall, def]).reason === 'target', 'rock: no target → target');
+    console.assert(rockDropState(def, ram, [climber, ladder, wall, def, ram]).mode === 'equipment', 'rock: enemy engine at the wall → equipment mode (1 pt)');
   }
 
   // Man-to-man character creation (p.25-26) + Leader / Berserker modifiers
