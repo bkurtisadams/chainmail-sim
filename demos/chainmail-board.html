@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.72 · Point-value budget cap (p.27 army building). New setting armyBudget (per-side points target, 0 = no cap) added to state.settings.defaults, with an "Army points" section in the Settings modal (data-setting-num="armyBudget", min 0). The data-setting-num change handler is generalized: board keys (boardWIn/boardHIn) keep the setBoardSize path; any other numeric setting is now stored to state.settings[key], clamped ≥0, persisted via saveSettings, and the roster re-rendered. The Units roster headers are budget-aware: with a cap set, each side reads "Side A · n · pts / budget" and, when a side exceeds the cap, gains the .over class (bold red #b23030) plus an "over X" amount. With no cap (0) the header keeps the plain "pts" total. Siege equipment and thrown weapons remain costed 0 (no RAW value; per Kurt). No combat/resolver changes; pure settings + roster display. -->
+<!-- chainmail-board.html · v0.11.73 · Fix: global keyboard shortcuts swallowed keystrokes typed into form fields. onKeyDown now early-returns when the focused element is an INPUT/SELECT/TEXTAREA, so the field owns every key. Before, the single-key hotkeys ran first: "0" → Recenter ate the trailing zero of a budget (so round numbers like 50/100/150 lost digits), and with a unit selected Backspace deleted it and arrows/[ ] moved or rotated it while you were typing. The only key still acted on from inside a field is Escape, which closes an open Help/Settings overlay. No other behavior changed. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.72</title>
+<title>Chainmail — Battlefield · v0.11.73</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -265,9 +265,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Per-side points budget cap</div>
+    <div class="sub">Chainmail HTML Sim · Typing in fields no longer triggers hotkeys</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.72</span>
+    <span class="version-tag">v0.11.73</span>
   </div>
 
   <div class="toolbar">
@@ -575,7 +575,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.72';
+const SIM_VERSION = '0.11.73';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -5514,6 +5514,17 @@ function rotateUnit(u, deltaDeg) {
 function onKeyDown(evt) {
   // Undo / redo (global). Let native text-undo win inside form fields.
   const typingField = /^(INPUT|SELECT|TEXTAREA)$/.test(evt.target.tagName);
+  // While a form field (settings inputs, the new-unit form) is focused, let it
+  // own every keystroke — otherwise global hotkeys swallow keys (e.g. "0" →
+  // Recenter ate the trailing zero of a budget; Backspace deleted the selected
+  // unit; arrows nudged it). Escape still closes an open overlay from inside it.
+  if (typingField) {
+    if (evt.key === 'Escape') {
+      if (!$('#help-modal').hidden) { closeHelp(); evt.preventDefault(); }
+      else if (!$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); }
+    }
+    return;
+  }
   if (!typingField && (evt.ctrlKey || evt.metaKey) && (evt.key === 'z' || evt.key === 'Z')) {
     evt.shiftKey ? redo() : undo();
     evt.preventDefault(); return;
