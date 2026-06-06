@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.74 · Setup / deployment phase. New state.setup (default true) = the sim opens in Deployment: both sides place, drag, rotate, spawn and delete freely with no phase gate and no allowance clamp, while the roster/budget guide army-building; combat is inert. The phase rail shows a leading gold Setup cell hosting Begin battle → (in #action-bank, re-homed into the cell), with the Init…Melee sequence greyed ahead; the phase tag reads Deployment and ◀ ▶ / End turn are off. beginBattle() locks each unit’s deployed count as the casualty baseline, clears per-turn flags, and starts Turn 1 at initiative. A small Back to setup button (beside Reset board, top row, hidden during setup) calls backToSetup() to rearrange forces; reversible. Movement gating: canSideMoveNow is free during setup; unitMayMoveNow adds a per-unit rule so a mid-battle reinforcement (spawnTurn === turn) is freely placeable the turn it arrives, then phase-gated — the drag/nudge/rotate gates and the enforce-movement clamps honor both. spawnTurn is set on spawn (0 in setup), defaulted in hydrate, and setup rides in captureSnapshot/applySnapshot (so save/load/undo round-trip it) and in presets (open in deployment). resetBoard returns to setup. -->
+<!-- chainmail-board.html · v0.11.75 · Strength / casualty tracker (p.27 victory check — a readout, never an enforcer). New sideStrength(side) sums surviving vs starting figures and points: destroyed units stay flagged in state.units so they count toward the starting denominator but not the current total; structures (walls/gates) are excluded as defenses, not strength. unitPointValue(u, countOverride) gained an optional figure-count argument so starting points use startCount and current points use the live count. The Units roster shows a per-side strength line once the battle begins (hidden during setup): "▸ 12/20 figures (60%) · 84/120 pts". New setting breakPoint (0 = off) with a Victory check section in Settings: a side below that % of starting strength is flagged red ("below 50% break"). The sim never declares a winner or ends the game — the call stays with the players (Chainmail p.27). Off-board elimination and terrain-objective scoring are deliberately out of scope. node + isolation harness verify sideStrength and the count-override; 2 assertions added to tests(). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.74</title>
+<title>Chainmail — Battlefield · v0.11.75</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -91,6 +91,8 @@
   .roster-grp { font-family: var(--sans); font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase;
     color: var(--ink-soft); margin: 6px 2px 2px; display: flex; align-items: center; gap: 5px; }
   .roster-grp.over { color: #b23030; font-weight: 700; }
+  .roster-strength { font-family: var(--sans); font-size: 10px; color: var(--ink-soft); margin: 1px 2px 4px; letter-spacing: 0.3px; }
+  .roster-strength.over { color: #b23030; font-weight: 700; }
   .roster-row { display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 4px;
     cursor: pointer; font-size: 12px; line-height: 1.15; }
   .roster-row:hover { background: var(--rank-hi); }
@@ -265,9 +267,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Setup / deployment phase before battle</div>
+    <div class="sub">Chainmail HTML Sim · Strength / casualty tracker</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.74</span>
+    <span class="version-tag">v0.11.75</span>
   </div>
 
   <div class="toolbar">
@@ -547,6 +549,16 @@
     </section>
 
     <section>
+      <h3>Victory check (p.27)</h3>
+      <label style="justify-content:space-between; gap:12px;"><span>Break point — % of starting strength (0 = off)</span>
+        <input type="number" min="0" max="100" step="5" data-setting-num="breakPoint" style="flex:0 0 90px;"></label>
+      <p>Once the battle begins, the roster shows each side's surviving strength —
+         figures and points — against its starting strength. With a break point
+         set, a side that drops below it is flagged. The sim never declares a
+         winner or ends the game; that call stays yours (Chainmail p.27).</p>
+    </section>
+
+    <section>
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
@@ -577,7 +589,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.74';
+const SIM_VERSION = '0.11.75';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -854,7 +866,7 @@ function manFootMountPV(u) {
 // Point value of one unit (p.27). Pure. Mass = (troop PV + weapon adders) ×
 // figures; individual = fantasy PV, fantasy-race PV, or armor-mapped man PV;
 // engine = flat. Mercenaries (note 1) cost half — men only, not fantastic types.
-function unitPointValue(u) {
+function unitPointValue(u, countOverride) {
   if (!u) return 0;
   if (u.kind === 'works') return WORKS_PV[u.worksType] || 0;
   if (u.kind === 'individual') {
@@ -866,11 +878,30 @@ function unitPointValue(u) {
   }
   const base = TROOP_PV[u.type] ?? 0;
   const wpn = (WEAPON_PV[u.weapon] || 0) + (u.polearm ? WEAPON_PV.pike : 0);
-  const v = (base + wpn) * (u.count || 1);
+  const n = countOverride != null ? countOverride : (u.count || 1);
+  const v = (base + wpn) * n;
   return u.mercenary ? v / 2 : v;
 }
 const armyPoints = (side) => state.units.filter(u => u.side === side && !u.destroyed).reduce((s, u) => s + unitPointValue(u), 0);
 const fmtPts = (n) => (Math.round(n * 100) / 100).toString();
+// Surviving vs starting strength for a side (figures + points). Destroyed units
+// stay flagged in state.units, so they count toward the starting denominator but
+// not the current total. Structures (walls/gates) are defenses, not strength.
+function sideStrength(side) {
+  let figNow = 0, figStart = 0, ptsNow = 0, ptsStart = 0;
+  for (const u of state.units) {
+    if (u.side !== side) continue;
+    const wt = u.kind === 'works' ? WORKS_TYPES[u.worksType] : null;
+    if (wt && wt.cat === 'structure') continue;
+    const start = u.startCount || u.count || 1;
+    figStart += start;
+    ptsStart += unitPointValue(u, start);
+    if (!u.destroyed) { figNow += (u.count || 0); ptsNow += unitPointValue(u, u.count || 0); }
+  }
+  return { figNow, figStart, ptsNow, ptsStart,
+    figPct: figStart ? Math.round(100 * figNow / figStart) : 0,
+    ptsPct: ptsStart ? Math.round(100 * ptsNow / ptsStart) : 0 };
+}
 
 // Man-to-man base figures (p.25-26). A man is defined by weapon class × armor;
 // the only named special men in the rules are the Leader (modeled as a +1 flag,
@@ -1984,6 +2015,7 @@ const state = {
     boardWIn: 96,             // playing-area width in tabletop inches (8 ft default per Chainmail p.5; resizable; clamped 24–600)
     boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
     armyBudget: 0,            // p.27 point-value cap per side (0 = no cap); roster flags a side over budget
+    breakPoint: 0,            // victory check: flag a side below this % of starting strength (0 = off; never enforced)
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rngSeed: ((Date.now() & 0xffffffff) >>> 0) || 1,   // mulberry32 counter; plain data so undo can restore the dice stream
@@ -3177,6 +3209,12 @@ function renderRoster() {
     const over = budget > 0 && sidePts > budget;
     const ptsLabel = budget > 0 ? `${fmtPts(sidePts)} / ${budget}` : `${fmtPts(sidePts)} pts`;
     html += `<div class="roster-grp${over ? ' over' : ''}"><span class="rsw" style="background:var(--side-${side === 'A' ? 'a' : 'b'})"></span>Side ${side} · ${arr.length} · ${ptsLabel}${over ? ` · over ${fmtPts(sidePts - budget)}` : ''}</div>`;
+    if (!state.setup) {
+      const st = sideStrength(side);
+      const bp = state.settings.breakPoint || 0;
+      const broke = bp > 0 && st.figStart > 0 && st.figPct < bp;
+      html += `<div class="roster-strength${broke ? ' over' : ''}">▸ ${st.figNow}/${st.figStart} figures (${st.figPct}%) · ${fmtPts(st.ptsNow)}/${fmtPts(st.ptsStart)} pts${broke ? ` · below ${bp}% break` : ''}</div>`;
+    }
     html += arr.map(rosterRowHtml).join('');
   }
   list.innerHTML = html;
@@ -8970,6 +9008,7 @@ renderBoard();
   console.assert(unitPointValue({ kind:'mass', type:'PE', count:4 }) === 2 && unitPointValue({ kind:'mass', type:'LV', count:4 }) === 3, 'PV: peasant ½ / levy ¾');
   console.assert(unitPointValue({ kind:'works', worksType:'catLight' }) === 15 && unitPointValue({ kind:'works', worksType:'bombard' }) === 30, 'PV: light catapult 15, bombard 30');
   console.assert(unitPointValue({ kind:'individual', type:'DRAGON' }) === 100 && unitPointValue({ kind:'individual', type:'HERO' }) === 20, 'PV: Dragon 100, Hero 20');
+  console.assert(unitPointValue({ kind:'mass', type:'HF', count:20 }, 10) === 20, 'PV: countOverride scales mass (10 HF = 20)');
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
