@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.91 · Cloudkill (Complexity 5, p.32): the 6th spell. A 3″ deep × 6″ wide killing cloud cast through the spell picker, aimed by a bearing target (SPELL_TARGET cloudkill:’any’ — the target only sets the direction; the gas then runs itself). On an immediate cast it forms half its depth in front of the caster and resolveCloudkillKills slays every non-immune figure it covers (friend or foe). Each end of turn tickCloudkill (run from endRound right after tickHazards, before the per-unit move reset so the caster’s movement still reads) creeps it CLOUD_SPEED_IN=6″ away from the caster while he concentrates (alive + stationary), or in a random heading on any turn he moved; it persists even if the caster falls and disperses only when it drifts off the board. cloudkillKills = not works and not in CLOUDKILL_IMMUNE (Hero/Super-Hero/Wizard/Dragon/Giant/Balrog/Troll/Ent/Roc/Wraith/Wight/Elemental/Lycanthrope) — so men, orcs, dwarves “and the like” die; immune set is an adjudication call, tune to taste. Reuses figuresUnderRect for the cloud rectangle and renders a translucent green drifting box (renderCloudkill in the overlay). Faithful simplifications: singleton cloud; bearing-target aim (no free-point); random drift is a uniform heading. node harness: kill/immune classification across all types + works, and the 3×6 footprint geometry (half-depth along travel, half-width across). 5 of 16 spells → 6 of 16. -->
+<!-- chainmail-board.html · v0.11.92 · Deferred-spell fix: a cast that lands in the Complexity table’s D (deferred) band now actually takes effect at the start of the FOLLOWING turn instead of silently evaporating (bug: a deferred Cloudkill — or Darkness/Haste/etc. — never appeared next round). castNamedSpell’s inline immediate-effect chain is extracted into applySpellEffect(spellKey,a,d), which both an immediate cast and the new deferred path share so they can’t drift. A deferred cast is queued on state.pendingSpells {casterId, spellKey, targetId, castTurn}; endRound drains the queue via resolvePendingSpells() at the new turn’s start (after the ticks + per-unit reset, before initiative), re-finding caster and target by id from their CURRENT positions — a fallen caster’s spell unravels, a vanished bearing/target lapses. The queue is plain state data, so undo/redo and save/load carry it. node harness: deferred Darkness lands with castTurn = the new turn, deferred Haste sets moveSpell, fallen-caster unravel applies nothing, dead-target lapse is clean, and the queue always drains. Faithful simplification: a deferred spell completes next turn regardless of whether the Wizard kept concentrating (no mid-delay disruption model yet). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.91</title>
+<title>Chainmail — Battlefield · v0.11.92</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Cloudkill drifting gas</div>
+    <div class="sub">Chainmail HTML Sim · Deferred spells resolve next turn</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.91</span>
+    <span class="version-tag">v0.11.92</span>
   </div>
 
   <div class="toolbar">
@@ -657,7 +657,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.91';
+const SIM_VERSION = '0.11.92';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1279,26 +1279,55 @@ function castNamedSpell(spellKey) {
   const roll = roll2d6(state.rng).sum, res = resolveSpellCast(magicClassOf(a), spell.complexity, roll);
   a.acted.fired = true;
   let body = `<div class="step">${a.side} ${magicMeta(a).label} casts ${spell.name} (Complexity ${spell.complexity}) — rolled ${roll} → ${res}</div>`;
-  if (res === 'immediate') {
-    if (spellKey === 'darkness') { state.darkness = { casterId: a.id, side: a.side, castTurn: state.turn }; body += `<div class="verdict v-rout">gloom gathers over the field — full darkness in two turns</div>`; }
-    else if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
-    else if (spellKey === 'haste' || spellKey === 'slowness') {
-      const dur = spellKey === 'haste' ? 3 : 2;
-      d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
-      body += `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
-    }
-    else if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a 12″ ward rings the caster — Chaos creatures are kept out</div>`; }
-    else if (spellKey === 'cloudkill') {
-      const vx = d.x - a.x, vy = d.y - a.y, len = Math.hypot(vx, vy) || 1, ux = vx / len, uy = vy / len;
-      const half = inchesToPx(CLOUD_DEPTH_IN) / 2;
-      state.cloudkill = { casterId: a.id, side: a.side, x: a.x + ux * half, y: a.y + uy * half, dirX: ux, dirY: uy };
-      const k = resolveCloudkillKills(state.cloudkill);
-      body += `<div class="verdict v-rout">a ${CLOUD_DEPTH_IN}″×${CLOUD_WIDTH_IN}″ killing cloud forms and rolls away from the caster</div>` + k.html;
-    }
-  } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
+  if (res === 'immediate') body += applySpellEffect(spellKey, a, d);
+  else if (res === 'deferred') {
+    if (!state.pendingSpells) state.pendingSpells = [];
+    state.pendingSpells.push({ casterId: a.id, spellKey, targetId: d ? d.id : null, castTurn: state.turn });
+    body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — it takes shape next turn (RAW delay, p.33)</div>`;
+  }
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
   appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
   renderBoard();
+}
+// Apply one spell's effect now and return a log fragment. Shared by an immediate
+// cast and by resolvePendingSpells when a deferred cast lands the next turn, so the
+// two paths can't drift. Bearing/target spells re-find the target by id — it may have
+// moved or fallen between a deferred cast and its resolution.
+function applySpellEffect(spellKey, a, d) {
+  if (spellKey === 'darkness') { state.darkness = { casterId: a.id, side: a.side, castTurn: state.turn }; return `<div class="verdict v-rout">gloom gathers over the field — full darkness in two turns</div>`; }
+  if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; return `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
+  if (spellKey === 'haste' || spellKey === 'slowness') {
+    if (!d || d.destroyed) return `<div class="verdict v-noeffect">the target is gone — the spell lapses</div>`;
+    const dur = spellKey === 'haste' ? 3 : 2;
+    d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
+    return `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
+  }
+  if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; return `<div class="verdict v-rout">a 12″ ward rings the caster — Chaos creatures are kept out</div>`; }
+  if (spellKey === 'cloudkill') {
+    if (!d || d.destroyed) return `<div class="verdict v-noeffect">no bearing remains — the cloud fails to form</div>`;
+    const vx = d.x - a.x, vy = d.y - a.y, len = Math.hypot(vx, vy) || 1, ux = vx / len, uy = vy / len;
+    const half = inchesToPx(CLOUD_DEPTH_IN) / 2;
+    state.cloudkill = { casterId: a.id, side: a.side, x: a.x + ux * half, y: a.y + uy * half, dirX: ux, dirY: uy };
+    const k = resolveCloudkillKills(state.cloudkill);
+    return `<div class="verdict v-rout">a ${CLOUD_DEPTH_IN}″×${CLOUD_WIDTH_IN}″ killing cloud forms and rolls away from the caster</div>` + k.html;
+  }
+  return '';
+}
+// Deferred casts (the Complexity table's D band, p.33) take effect at the start of
+// the following turn. endRound drains the queue; each spell re-resolves from its
+// caster's CURRENT position, and a fallen caster's spell unravels.
+function resolvePendingSpells() {
+  if (!state.pendingSpells || !state.pendingSpells.length) return;
+  const due = state.pendingSpells; state.pendingSpells = [];
+  for (const ps of due) {
+    const a = state.units.find(u => u.id === ps.casterId);
+    const d = ps.targetId != null ? state.units.find(u => u.id === ps.targetId) : null;
+    const spell = SPELL_BY_KEY[ps.spellKey];
+    const who = a ? `${a.side} ${magicMeta(a).label}` : 'a fallen caster';
+    let body = `<div class="step">${who}'s delayed ${spell ? spell.name : 'spell'} takes shape</div>`;
+    body += (!a || a.destroyed) ? `<div class="verdict v-noeffect">the caster is gone — the spell unravels</div>` : applySpellEffect(ps.spellKey, a, d);
+    appendTurn(`Delayed spell${a ? ` · ${magicMeta(a).label} (${a.side})` : ''}`, body);
+  }
 }
 function populateSpellPicker() {
   const sel = $('#dock-spell'); if (!sel) return;
@@ -2542,6 +2571,7 @@ const state = {
   wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
   protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
   cloudkill: null,      // active Cloudkill { casterId, side, x, y, dirX, dirY } — drifting killing gas (p.32)
+  pendingSpells: [],    // deferred casts (Complexity D band, p.33) awaiting next-turn resolution
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -8574,6 +8604,7 @@ function endRound() {
     if (u.type === 'DRAGON' && !u.acted.moved) u.breathsUsed = 0;
     clearActed(u);
   }
+  resolvePendingSpells();   // deferred casts (Complexity D band, p.33) land at the start of the new turn
   startTurnInitiative();   // Slice 8D: new turn begins at initiative
   renderTurnUI();
   renderBoard();
