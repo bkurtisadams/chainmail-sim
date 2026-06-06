@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.82 · Wizard missiles, slice 2b: casting UI over the slice-2a resolver. A Wizard (individual magic-user) now picks its missile before play — a Missile field (Fire ball / Lightning bolt) beside Magic class — and an Elemental picks its subtype (Air/Earth/Fire/Water) so its drive-back resolves. Cast: select the Wizard, shift-click a target to aim, then the “Fire ball / Lightning bolt” dock button (Missile phase) lays the pattern at the called point (the target, ≤ 24″) and resolves every figure under it, friend or foe, via resolveMissileHit. Fire ball = a circle of the heavy/large-catapult radius (CATAPULTS.heavy.hitArea/2 = 1.75″) centred on the target. Lightning bolt = a 3/4″ x 6″ rectangle (new figuresUnderRect), head at the target, body 6″ back toward the caster. Mass units lose every figure caught (ordinary troops are destroyed outright); individuals roll the p.31 table — destroyed / saved / driven_back (driveBackUnit shoves them one full move directly away, board-clamped) / routed (removed). Magic ignores the overhead-cover rule that spares troops from physical artillery. One missile per Wizard per turn (acted.fired). state.lastMissile renders the circle or rotated rectangle in the overlay (renderWizardMissile). missileType/element persist through spawn, edit-load, undo, and save. Faithful simplifications: aim is target-based (no free-point cast yet) and direct-vs-indirect (LOS) is deferred, same as the cannon’s terrain interposition — both missiles simply reach 24″. node harness: figuresUnderRect (individual edge/length/behind-head + diagonal + mass channel/wide); resolveMissileHit already covered (359 cases, 2a). 8 in-file asserts. -->
+<!-- chainmail-board.html · v0.11.83 · Wizard missile UX: a “Missile: fire ball / lightning” toggle now sits on the situational (dock) row beside the throw button, mirroring the cannon’s “Shot: short/long” — click it to flip the selected Wizard’s missile between the fire ball (circular area) and the lightning bolt (¾″×6″ line) live, without re-editing the unit (btn-missile-type, shown for any magic-user in the Missile phase). The throw button is relabelled “Throw fire ball / Throw lightning bolt” so the action verb is distinct from the selector. Missile type is still also settable on the unit form (Missile field) and persists through spawn, edit-load, undo, and save; the toggle just makes it reachable from where you cast. No rules/geometry change — lightning is still resolved as the rectangular figuresUnderRect line and rendered as the rotated polygon, fire ball as the circle (slice 2b). UI-only; node --check + brace balance verified. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.82</title>
+<title>Chainmail — Battlefield · v0.11.83</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Wizard missiles — cast &amp; resolve</div>
+    <div class="sub">Chainmail HTML Sim · Wizard missile type toggle</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.82</span>
+    <span class="version-tag">v0.11.83</span>
   </div>
 
   <div class="toolbar">
@@ -331,7 +331,8 @@
         <button id="btn-missile" disabled>Fire missiles</button>
         <button id="btn-fire-engine" disabled hidden>Fire engine</button>
         <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
-        <button id="btn-wizard-missile" class="secondary" disabled hidden>Fire ball</button>
+        <button id="btn-wizard-missile" class="secondary" disabled hidden>Throw fire ball</button>
+        <button id="btn-missile-type" class="secondary" disabled hidden>Missile: fire ball</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
         <button id="btn-escalade" disabled hidden>Escalade</button>
@@ -648,7 +649,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.82';
+const SIM_VERSION = '0.11.83';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -853,7 +854,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Miss
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -4758,13 +4759,21 @@ function updateButtons() {
     const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
     wmBtn.hidden = !showWm;
     wmBtn.disabled = !(wms && wms.ok && missilePhaseOk);
-    wmBtn.textContent = a && a.missileType === 'lightning' ? 'Lightning bolt' : 'Fire ball';
+    wmBtn.textContent = a && a.missileType === 'lightning' ? 'Throw lightning bolt' : 'Throw fire ball';
     wmBtn.title = !showWm ? '' :
       (!d || d.id === a.id) ? 'Target an enemy to aim the missile (shift-click)' :
       !wms.inRange ? `Out of range (${wms.r.toFixed(1)}″, max ${WIZARD_MISSILE_RANGE_IN}″)` :
       wms.fired ? 'This Wizard has already thrown a missile this turn' :
       !missilePhaseOk ? 'Throw in the Missile phase' :
       `Hurl a ${a.missileType === 'lightning' ? 'lightning bolt' : 'fire ball'} at ${d.side} ${typeById(d.type)?.name || 'target'}, ${wms.r.toFixed(1)}″ — destroys figures under the pattern (p.31)`;
+  }
+  const mtBtn = $('#btn-missile-type');
+  if (mtBtn) {
+    const mu = !!(a && isMagicUser(a));
+    mtBtn.hidden = !mu;
+    mtBtn.disabled = !mu;
+    mtBtn.textContent = `Missile: ${a && a.missileType === 'lightning' ? 'lightning' : 'fire ball'}`;
+    mtBtn.title = mu ? 'Switch this Wizard between fire ball (circular area) and lightning bolt (¾″×6″ line) before throwing (p.31)' : '';
   }
   const rb = ramBatterState(a, d);
   const rbBtn = $('#btn-batter-ram');
@@ -8067,10 +8076,10 @@ function renderTurnUI() {
   const dock = $('#phase-dock');
   let dockIds = enf
     ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile']
+      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type']
       : ph.id === 'melee' ? ['btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
+    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
   if (ph.id === 'initiative' && state.initiativeRoll) dockIds = dockIds.concat('btn-elect-order');
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
@@ -8212,6 +8221,7 @@ $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
 $('#btn-wizard-missile').addEventListener('click', () => { resolveWizardMissile(); renderTurnUI(); });
 $('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a) { a.cannonLong = !a.cannonLong; renderTurnUI(); } });
+$('#btn-missile-type').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a && isMagicUser(a)) { a.missileType = a.missileType === 'lightning' ? 'fireball' : 'lightning'; renderTurnUI(); } });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
