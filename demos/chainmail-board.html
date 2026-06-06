@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.75 · Strength / casualty tracker (p.27 victory check — a readout, never an enforcer). New sideStrength(side) sums surviving vs starting figures and points: destroyed units stay flagged in state.units so they count toward the starting denominator but not the current total; structures (walls/gates) are excluded as defenses, not strength. unitPointValue(u, countOverride) gained an optional figure-count argument so starting points use startCount and current points use the live count. The Units roster shows a per-side strength line once the battle begins (hidden during setup): "▸ 12/20 figures (60%) · 84/120 pts". New setting breakPoint (0 = off) with a Victory check section in Settings: a side below that % of starting strength is flagged red ("below 50% break"). The sim never declares a winner or ends the game — the call stays with the players (Chainmail p.27). Off-board elimination and terrain-objective scoring are deliberately out of scope. node + isolation harness verify sideStrength and the count-override; 2 assertions added to tests(). -->
+<!-- chainmail-board.html · v0.11.77 · Figure scale + default unit size (p.8). New Settings “Figures & scale” section. figureScale (default 1 = 30mm; 0.83/0.67/0.5/0.33 = 25/20/15/10mm) is a single multiplier applied inside unitBounds to pip, gap, pad and the drawn figure, so the WHOLE unit footprint shrinks coherently — markers and the proximity basis together. Because contact / missile / charge reach are measured edge-to-edge off that footprint, they tighten with the figures (faithful to smaller castings’ smaller bases); inch-based movement and weapon ranges are untouched since PX_PER_INCH stays 24. Fortifications and terrain are unchanged, so smaller figures finally sit in proportion to the works (the reason for the feature). 15mm = half the linear size = a quarter of the footprint area. defaultUnitFigures (default 10, was effectively 20) pre-fills the new-unit Count via applyDefaultUnitSize(), called at startup, on cancelEdit, and when the setting changes; never clobbers a unit loaded for editing. At 1 figure : 20 men the default is now ~200 men rather than 400. The figure-scale <select> has its own change listener (parseFloat → figureScale, save, renderBoard) since the integer data-setting-num path can’t carry a fractional multiplier; syncSettingsCheckboxes hydrates it. node --check + an isolation harness verify unitBounds halves footprint width/height and pip at 15mm for close and open order and shrinks individuals; 2 in-file asserts added. No combat math changed beyond the intended footprint scaling. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.75</title>
+<title>Chainmail — Battlefield · v0.11.77</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -57,21 +57,31 @@
   .toolbar .phase-rail { display: flex; align-items: center; gap: 3px; }
   .toolbar .phase-nav { display: flex; align-items: center; gap: 8px; }
   .toolbar .phase-arrow { font-size: 13px; letter-spacing: 0; padding: 3px 9px; line-height: 1; }
-  .phase-rail .step { font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase; font-weight: 700;
-    padding: 2px 7px; border-radius: 3px; color: var(--ink-soft); background: rgba(255,250,230,0.5);
-    border: 0.5px solid rgba(0,0,0,0.16); }
-  .phase-rail .step.done { color: var(--ink); background: rgba(216,178,90,0.12); }
-  .phase-rail .step.now { color: var(--ink); background: var(--gold); border-color: #b8923a; }
-  .phase-rail .sep { color: var(--rule); font-size: 11px; }
-  .phase-rail .step.now { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1.15; }
-  .phase-rail .step.now.act { background: transparent; border: 0; padding: 1px 3px; }
-  .phase-rail .step.now .ph { font-size: 9px; letter-spacing: 0.4px; text-transform: uppercase; font-weight: 700; }
-  .phase-rail .step.now.act .ph { color: #7a5c1e; }
-  .phase-rail .step.now .cellhint { font-size: 9px; font-style: italic; opacity: 0.82; }
-  .phase-rail .liveact { display: inline-flex; }
-  .phase-rail .liveact button { margin: 0; padding: 5px 11px; font-size: 11px; letter-spacing: 0.8px; }
-  .toolbar .phase-dock { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; }
-  .toolbar .phase-dock button { padding: 5px 9px; font-size: 10.5px; letter-spacing: 0.6px; }
+  /* Passive tracker: plain stepper text — never a button. The highlight moves as
+     phases advance; the controls below stay put. */
+  .toolbar .phase-rail { flex-wrap: wrap; }
+  .phase-rail .pstep { font-size: 11px; letter-spacing: 0.3px; padding: 1px 1px 2px; white-space: nowrap; }
+  .phase-rail .pstep.todo { color: #c2b48f; }
+  .phase-rail .pstep.done { color: var(--ink-soft); }
+  .phase-rail .pstep.now { color: var(--ink); font-weight: 600; border-bottom: 2px solid #8a6d2e; }
+  .phase-rail .sep { color: #cdbf9b; font-size: 11px; margin: 0 5px; }
+  /* Decoupled controls on their own rows: a fixed primary-action slot and a
+     reserved situational line, so nothing jumps location as phases advance. */
+  .toolbar .tn-track { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; flex-basis: 100%; }
+  .toolbar .tn-act { display: flex; align-items: center; gap: 8px; flex-basis: 100%; margin-top: 6px; }
+  .toolbar .tn-act #btn-end-round { margin-left: auto; }
+  .toolbar .tn-act #btn-end-round.quiet { background: var(--gold); color: var(--ink); border-color: #b8923a; }
+  .action-slot { display: inline-flex; align-items: center; min-width: 132px; }
+  .action-slot > button { min-width: 132px; justify-content: center; margin: 0;
+    background: var(--gold); border: 0.5px solid #b8923a; color: var(--ink); }
+  .action-slot .acthint { font-size: 11px; font-style: italic; color: var(--ink-soft); }
+  .toolbar .tn-dock { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; flex-basis: 100%;
+    margin-top: 6px; padding-top: 6px; border-top: 0.5px dashed var(--rule); min-height: 24px; }
+  .tn-dock .dock-label { font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--ink-soft); }
+  .tn-dock .dock-none { font-size: 11px; font-style: italic; color: #bcae8a; }
+  .toolbar .phase-dock { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .toolbar .phase-dock button { padding: 4px 9px; font-size: 10.5px; letter-spacing: 0.4px;
+    background: #faf6ea; border: 0.5px solid #b8923a; color: #7a5c1e; }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
   aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0;
@@ -267,9 +277,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Strength / casualty tracker</div>
+    <div class="sub">Chainmail HTML Sim · Figure scale + default unit size</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.75</span>
+    <span class="version-tag">v0.11.77</span>
   </div>
 
   <div class="toolbar">
@@ -292,18 +302,26 @@
       <button id="btn-reset" class="danger">Reset board</button>
     </div>
     <div class="tb-row tb-now">
-      <span class="phase-tag" id="phase">Turn 1 · Side A</span>
-      <span class="phase-nav">
-        <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
-        <span class="phase-rail" id="phase-rail"></span>
-        <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
-      </span>
-      <button id="btn-end-round" class="gold">End turn</button>
-      <span class="tb-sep" aria-hidden="true"></span>
-      <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
-      <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
-      <button id="btn-clear-sel" class="secondary">Clear selection</button>
-      <span class="phase-dock" id="phase-dock"></span>
+      <div class="tn-track">
+        <span class="phase-tag" id="phase">Turn 1 · Side A</span>
+        <span class="phase-nav">
+          <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
+          <span class="phase-rail" id="phase-rail"></span>
+          <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
+        </span>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <button id="btn-undo" class="secondary" title="Undo last action (Ctrl+Z)" disabled>Undo</button>
+        <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+        <button id="btn-clear-sel" class="secondary">Clear selection</button>
+      </div>
+      <div class="tn-act">
+        <span class="action-slot" id="action-slot"></span>
+        <button id="btn-end-round" class="gold">End turn</button>
+      </div>
+      <div class="tn-dock">
+        <span class="dock-label">Situational</span>
+        <span class="phase-dock" id="phase-dock"><span class="dock-none" id="dock-none" hidden>— none this phase —</span></span>
+      </div>
       <div id="action-bank" hidden>
         <button id="btn-roll-init" class="gold" hidden>Roll initiative</button>
         <button id="btn-elect-order" class="gold" hidden>Move winner last</button>
@@ -346,7 +364,7 @@
           <option value="works">Works (engine)</option>
         </select></div>
         <div class="field f-troop-only"><label>Type</label><select id="f-type"></select></div>
-        <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" class="wheel-num" value="20" min="1" max="200"></div>
+        <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" class="wheel-num" value="10" min="1" max="200"></div>
         <div class="field f-mass-only"><label>Formation</label><select id="f-form">
           <option value="line">Line</option>
           <option value="column">Column</option>
@@ -559,6 +577,27 @@
     </section>
 
     <section>
+      <h3>Figures &amp; scale (p.8)</h3>
+      <label style="justify-content:space-between; gap:12px;"><span>Figure scale</span>
+        <select id="set-figscale" style="flex:0 0 160px;">
+          <option value="1">30mm — full size</option>
+          <option value="0.83">25mm</option>
+          <option value="0.67">20mm</option>
+          <option value="0.5">15mm — half size</option>
+          <option value="0.33">10mm</option>
+        </select></label>
+      <label style="justify-content:space-between; gap:12px;"><span>Default unit size — figures per new unit</span>
+        <input type="number" min="1" max="200" step="1" data-setting-num="defaultUnitFigures" style="flex:0 0 90px;"></label>
+      <p>Figure scale shrinks the unit markers to mirror smaller castings — 15mm is
+         half the size of the default 30mm. Fortifications, terrain and all distances
+         stay put, so smaller figures sit in proportion to the works; and because
+         contact and ranges are measured edge to edge, they tighten with the figures,
+         exactly as smaller bases do on the table. Default unit size pre-fills the
+         Count field for a new unit (1 figure ≈ 20 men, p.8), so the default need not
+         be a 400-man block.</p>
+    </section>
+
+    <section>
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
@@ -589,7 +628,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.75';
+const SIM_VERSION = '0.11.77';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2016,6 +2055,8 @@ const state = {
     boardHIn: 48,             // playing-area depth in tabletop inches (resizable; clamped 24–600)
     armyBudget: 0,            // p.27 point-value cap per side (0 = no cap); roster flags a side over budget
     breakPoint: 0,            // victory check: flag a side below this % of starting strength (0 = off; never enforced)
+    figureScale: 1,           // casting scale: marker + footprint multiplier (1 = 30mm, 0.5 = 15mm). Shrinks units and their edge-to-edge contact/range together; inch movement/ranges stay fixed.
+    defaultUnitFigures: 10,   // figures pre-filled for a new mass unit (≈ men at 1:20). Lowered from 20 so the default isn't a 400-man block.
   },
   engagements: [],   // { aId, dId, round, startTurn }
   rngSeed: ((Date.now() & 0xffffffff) >>> 0) || 1,   // mulberry32 counter; plain data so undo can restore the dice stream
@@ -2247,18 +2288,22 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function unitBounds(u) {
   // Individual unit: single pip sized to fit one grid cell (24×24 = 1″).
   if (u.kind === 'individual') {
-    const pip = Math.round(20 * sizeScale(u.type)), gap = 0, pad = 2;
+    const fs = state.settings.figureScale || 1;
+    const pip = Math.max(3, Math.round(20 * sizeScale(u.type) * fs)), gap = 0, pad = 2 * fs;
     const w = pip + 2 * pad, h = pip + 2 * pad;
     return { w, h, pip, gap, pad };
   }
   // Chainmail scale: 1" = 10 yards; 1 figure = 1" frontage in close order, 2" in open.
-  // PX_PER_INCH = 24, so close-order step = 24, open-order step = 48.
-  const pip = 12;
-  const gap = u.spacing === 'close' ? 12 : 36;
-  const pad = 4;
-  // Drawn figure size scales with creature size (visual only). The cell/frontage
-  // stays a fixed 1"/2" per figure per Chainmail's ground scale, so formation
-  // footprint, contact, and missile range are unchanged. Min 3px to stay visible.
+  // At 30mm (figureScale 1) PX_PER_INCH = 24, so close-order step = 24, open = 48.
+  // figureScale (Settings) shrinks the whole footprint together — pip, gap, pad and
+  // the drawn figure — to model smaller castings (15mm = ×0.5, etc.). The footprint
+  // is the single basis for proximity, so contact / missile / charge reach tighten
+  // with the figures (faithful to smaller bases); inch movement and weapon ranges
+  // stay fixed (PX_PER_INCH is constant). Creature size also scales the drawn figure.
+  const fs = state.settings.figureScale || 1;
+  const pip = 12 * fs;
+  const gap = (u.spacing === 'close' ? 12 : 36) * fs;
+  const pad = 4 * fs;
   const fig = Math.max(3, Math.round(pip * sizeScale(u.type)));
   const w = u.cols * pip + (u.cols - 1) * gap + 2 * pad;
   const h = u.rows * pip + (u.rows - 1) * gap + 2 * pad;
@@ -4553,9 +4598,10 @@ function updateButtons() {
       `Collapse a mined breach (≤${BREECH.widthIn}″) — bypasses the wall’s defense value (p.23)`;
   }
   updateResolverPane();
-  // Collapse the situational-verb dock unless it currently holds a visible button.
-  const dockEl = $('#phase-dock');
-  if (dockEl) dockEl.style.display = [...dockEl.children].some(c => !c.hidden) ? 'flex' : 'none';
+  // The situational line is always shown; toggle its "none this phase" placeholder
+  // depending on whether the dock currently holds a visible verb.
+  const dockNone = $('#dock-none');
+  if (dockNone) { const dk = $('#phase-dock'); dockNone.hidden = [...dk.querySelectorAll('button')].some(b => !b.hidden); }
 }
 
 // v0.10.36: the resolver pane shows a contextual Joust trigger when a unit is selected and a
@@ -7251,6 +7297,14 @@ function beginEditUnit(id) {
 function cancelEdit() {
   state.editUnitId = null;
   syncEditMode();
+  applyDefaultUnitSize();
+}
+// Pre-fill the new-unit Count with the configured default (figures), but only in
+// fresh-spawn mode — never clobber a unit's count while it's loaded for editing.
+function applyDefaultUnitSize() {
+  if (state.editUnitId != null) return;
+  const el = $('#f-count');
+  if (el) el.value = Math.max(1, state.settings.defaultUnitFigures || 1);
 }
 function syncEditMode() {
   const editing = state.editUnitId != null;
@@ -7537,6 +7591,8 @@ function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting-num]').forEach(el => {
     el.value = state.settings[el.dataset.settingNum] ?? el.value;
   });
+  const figSel = $('#set-figscale');
+  if (figSel) figSel.value = String(state.settings.figureScale || 1);
 }
 // Settings persistence (localStorage). Wrapped in try/catch so a sandboxed
 // preview or a storage-disabled browser degrades cleanly to in-memory only. The
@@ -7666,7 +7722,7 @@ function renderTurnUI() {
   if (state.setup) {
     // Deployment: no turn yet. The rail's leading Setup cell hosts Begin battle;
     // the turn sequence shows greyed ahead. Movement is free for both sides.
-    $('#phase').innerHTML = 'Deployment \u00b7 <span style="color:var(--ink-soft)">place &amp; arrange both armies</span>';
+    $('#phase').innerHTML = 'Deployment · <span style="color:var(--ink-soft)">place &amp; arrange both armies</span>';
     $('#btn-phase-back').disabled = true;
     $('#btn-phase-fwd').disabled = true;
     $('#btn-phase-back').title = $('#btn-phase-fwd').title = 'The battle has not begun';
@@ -7678,13 +7734,14 @@ function renderTurnUI() {
     [...TURN_ACTION_BTNS, 'btn-begin-battle'].forEach(id => bank.appendChild($('#' + id)));
     const railLbls = ['Setup', ...PHASE_RAIL];
     $('#phase-rail').innerHTML = railLbls.map((lbl, k) => {
-      const sep = k < railLbls.length - 1 ? '<span class="sep">\u203a</span>' : '';
-      if (k === 0) return `<span class="step now act"><span class="ph">${lbl}</span><span class="liveact" id="live-act"></span></span>${sep}`;
-      return `<span class="step">${lbl}</span>${sep}`;
+      if (k === 0) return `<span class="pstep now">${lbl}</span>`;
+      return `<span class="sep">›</span><span class="pstep todo">${lbl}</span>`;
     }).join('');
-    $('#live-act').appendChild($('#btn-begin-battle'));
+    const slot = $('#action-slot');
+    slot.innerHTML = '';
+    slot.appendChild($('#btn-begin-battle'));
     const hintEl = $('#phase-hint');
-    hintEl.textContent = '\u25b8 deploy both armies, lay terrain, build to budget \u2014 then Begin battle';
+    hintEl.textContent = '▸ deploy both armies, lay terrain, build to budget — then Begin battle';
     hintEl.hidden = false;
     updateButtons();
     return;
@@ -7726,26 +7783,25 @@ function renderTurnUI() {
     electBtn.textContent = winnerFirst ? `Move ${winner} last` : `Move ${winner} first`;
     electBtn.title = `${winner} won initiative — currently moves ${winnerFirst ? 'first' : 'last'}; click to switch`;
   }
-  // Phase rail doubles as the action surface (p.9 sequence): the live cell hosts
-  // that phase's primary action button, situational verbs dock beneath, ◀ ▶ and
-  // End turn cap the row. Park the action buttons in the stable hidden bank first
-  // so rebuilding the rail's innerHTML can never orphan their listeners/gating.
+  // Decoupled controls: the rail is a passive stepper (the highlight moves, nothing
+  // in it is clickable); the phase's primary action sits in a FIXED slot and the
+  // situational verbs in a reserved dock line, so no control jumps as the phase
+  // advances. Park every action button in the hidden bank first so the rail rebuild
+  // can't orphan their listeners/gating.
   const bank = $('#action-bank');
-  TURN_ACTION_BTNS.forEach(id => bank.appendChild($('#' + id)));
-  bank.appendChild($('#btn-begin-battle'));
+  [...TURN_ACTION_BTNS, 'btn-begin-battle'].forEach(id => bank.appendChild($('#' + id)));
+  const accent = mover ? (mover === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)') : '#8a6d2e';
+  $('#phase-rail').innerHTML = PHASE_RAIL.map((lbl, k) => {
+    const sep = k > 0 ? '<span class="sep">›</span>' : '';
+    if (k < state.phaseIdx) return `${sep}<span class="pstep done">✓ ${lbl}</span>`;
+    if (k === state.phaseIdx) return `${sep}<span class="pstep now" style="border-bottom-color:${accent}">${lbl}</span>`;
+    return `${sep}<span class="pstep todo">${lbl}</span>`;
+  }).join('');
   const primary = primaryActionId();
   const inCell = ['btn-roll-init', 'btn-missile', 'btn-melee'].includes(primary) ? primary : null;
-  $('#phase-rail').innerHTML = PHASE_RAIL.map((lbl, k) => {
-    const sep = k < PHASE_RAIL.length - 1 ? '<span class="sep">›</span>' : '';
-    if (k === state.phaseIdx) {
-      const inner = inCell
-        ? `<span class="ph">${lbl}</span><span class="liveact" id="live-act"></span>`
-        : `<span class="ph">${lbl}</span><span class="cellhint">${cellHint(ph.id)}</span>`;
-      return `<span class="step now${inCell ? ' act' : ''}">${inner}</span>${sep}`;
-    }
-    return `<span class="step ${k < state.phaseIdx ? 'done' : ''}">${lbl}</span>${sep}`;
-  }).join('');
-  if (inCell) $('#live-act').appendChild($('#' + inCell));
+  const slot = $('#action-slot');
+  slot.innerHTML = inCell ? '' : `<span class="acthint">${cellHint(ph.id)}</span>`;
+  if (inCell) slot.appendChild($('#' + inCell));
   const dock = $('#phase-dock');
   let dockIds = enf
     ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
@@ -7957,9 +8013,16 @@ document.querySelectorAll('[data-setting-num]').forEach(el => el.addEventListene
     e.target.value = n;
     saveSettings();
     renderRoster();
+    if (key === 'defaultUnitFigures') applyDefaultUnitSize();
   }
   syncSettingsCheckboxes();
 }));
+const figSelEl = $('#set-figscale');
+if (figSelEl) figSelEl.addEventListener('change', e => {
+  state.settings.figureScale = parseFloat(e.target.value) || 1;
+  saveSettings();
+  renderBoard();
+});
 document.querySelectorAll('[data-board-preset]').forEach(b => b.addEventListener('click', () => {
   const [w, h] = b.dataset.boardPreset.split(',').map(Number);
   setBoardSize(w, h); syncSettingsCheckboxes();
@@ -8013,6 +8076,7 @@ applyBoardSize();            // size the playing area from persisted board dims
 state.viewBox = { x: 0, y: 0, w: BOARD_W, h: BOARD_H };
 loadTournament();            // restore persisted tournament scores
 syncSettingsCheckboxes();    // dialog controls reflect the restored state (not browser form-restore)
+applyDefaultUnitSize();      // new-unit Count starts at the configured default
 state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 syncMeasureButton();
@@ -9009,6 +9073,13 @@ renderBoard();
   console.assert(unitPointValue({ kind:'works', worksType:'catLight' }) === 15 && unitPointValue({ kind:'works', worksType:'bombard' }) === 30, 'PV: light catapult 15, bombard 30');
   console.assert(unitPointValue({ kind:'individual', type:'DRAGON' }) === 100 && unitPointValue({ kind:'individual', type:'HERO' }) === 20, 'PV: Dragon 100, Hero 20');
   console.assert(unitPointValue({ kind:'mass', type:'HF', count:20 }, 10) === 20, 'PV: countOverride scales mass (10 HF = 20)');
+  (() => { const sv = state.settings.figureScale;
+    const u = { kind:'mass', type:'HF', count:20, cols:5, rows:4, spacing:'close' };
+    state.settings.figureScale = 1;   const wFull = unitBounds(u).w;
+    state.settings.figureScale = 0.5; const wHalf = unitBounds(u).w;
+    console.assert(Math.abs(wHalf - wFull / 2) < 1e-6, 'figureScale: 15mm halves the footprint width');
+    console.assert(unitBounds(u).pip === 6, 'figureScale 0.5 -> pip 6 (was 12)');
+    state.settings.figureScale = sv; })();
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
