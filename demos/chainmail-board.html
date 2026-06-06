@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.90 · Alignment re-based to the Chainmail Fantasy “General Line-Up”: Law / Neutral / Chaos (supersedes the v0.11.89 Good/Neutral/Evil vocabulary). Per-unit u.alignment via the Alignment dropdown beside Side; defaultAlignment() seeds it from the table — LAW_DEFAULT (Hobbit, Dwarf, Gnome, Hero, Super-Hero, Ent, Elf, Sprite), CHAOS_DEFAULT (Goblin, Kobold, Orc, Wraith, Wight, Troll, Balrog, Dragon, Ogre), and Neutral for everything else, including the “appears in two lists” figures Wizards / Lycanthropes / Giants (player picks — dice for a side, ties stay neutral) plus Rocs, Elementals, and men. An anti-hero is just a Hero set Chaos. isChaos(u) (was isEvil) reads alignmentOf, so Protection from Evil keeps out Chaos. alignmentOf normalizes the older flag (good→law, evil→chaos) so saved units still load, and the edit panel restores via alignmentOf; the picker resets to the type default on a type/kind change. Note: Kobold is grouped with Goblin as default-Chaos (goblin-kin); Giants default Neutral per their two-list asterisk rather than Chaos — flip either in the sets if you prefer. node harness: defaultAlignment over all three columns, two-list figures + men Neutral, per-unit overrides, legacy good/evil + bad-value normalization; 4 in-file asserts. -->
+<!-- chainmail-board.html · v0.11.91 · Cloudkill (Complexity 5, p.32): the 6th spell. A 3″ deep × 6″ wide killing cloud cast through the spell picker, aimed by a bearing target (SPELL_TARGET cloudkill:’any’ — the target only sets the direction; the gas then runs itself). On an immediate cast it forms half its depth in front of the caster and resolveCloudkillKills slays every non-immune figure it covers (friend or foe). Each end of turn tickCloudkill (run from endRound right after tickHazards, before the per-unit move reset so the caster’s movement still reads) creeps it CLOUD_SPEED_IN=6″ away from the caster while he concentrates (alive + stationary), or in a random heading on any turn he moved; it persists even if the caster falls and disperses only when it drifts off the board. cloudkillKills = not works and not in CLOUDKILL_IMMUNE (Hero/Super-Hero/Wizard/Dragon/Giant/Balrog/Troll/Ent/Roc/Wraith/Wight/Elemental/Lycanthrope) — so men, orcs, dwarves “and the like” die; immune set is an adjudication call, tune to taste. Reuses figuresUnderRect for the cloud rectangle and renders a translucent green drifting box (renderCloudkill in the overlay). Faithful simplifications: singleton cloud; bearing-target aim (no free-point); random drift is a uniform heading. node harness: kill/immune classification across all types + works, and the 3×6 footprint geometry (half-depth along travel, half-width across). 5 of 16 spells → 6 of 16. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.90</title>
+<title>Chainmail — Battlefield · v0.11.91</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Law / Neutral / Chaos alignment</div>
+    <div class="sub">Chainmail HTML Sim · Cloudkill drifting gas</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.90</span>
+    <span class="version-tag">v0.11.91</span>
   </div>
 
   <div class="toolbar">
@@ -657,7 +657,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.90';
+const SIM_VERSION = '0.11.91';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1026,7 +1026,7 @@ const SPELLS = Object.freeze([
   { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: false },
   { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
   { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
-  { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: false },
+  { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: true  },
   { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: false },
 ]);
 const SPELL_BY_KEY = Object.freeze(Object.fromEntries(SPELLS.map(sp => [sp.key, sp])));
@@ -1066,10 +1066,11 @@ function moveSpellFactor(u) {
   return ms.kind === 'haste' ? 1.5 : ms.kind === 'slow' ? 0.5 : 1;
 }
 // Side a spell's target must be on (absent = no target needed).
-const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy' });
+const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any' });
 function spellTargetOk(spell, a, d) {
   const need = SPELL_TARGET[spell.key]; if (!need) return true;
-  if (!a || !d || d.destroyed || d.kind === 'works') return false;
+  if (!a || !d || d.destroyed || d.kind === 'works' || d.id === a.id) return false;
+  if (need === 'any') return true;   // the target only sets a bearing (Cloudkill)
   if (need === 'friend' && d.side !== a.side) return false;
   if (need === 'enemy' && d.side === a.side) return false;
   return (d.count || 1) <= 20;   // "up to 20 figures" (p.32)
@@ -1287,6 +1288,13 @@ function castNamedSpell(spellKey) {
       body += `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
     }
     else if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a 12″ ward rings the caster — Chaos creatures are kept out</div>`; }
+    else if (spellKey === 'cloudkill') {
+      const vx = d.x - a.x, vy = d.y - a.y, len = Math.hypot(vx, vy) || 1, ux = vx / len, uy = vy / len;
+      const half = inchesToPx(CLOUD_DEPTH_IN) / 2;
+      state.cloudkill = { casterId: a.id, side: a.side, x: a.x + ux * half, y: a.y + uy * half, dirX: ux, dirY: uy };
+      const k = resolveCloudkillKills(state.cloudkill);
+      body += `<div class="verdict v-rout">a ${CLOUD_DEPTH_IN}″×${CLOUD_WIDTH_IN}″ killing cloud forms and rolls away from the caster</div>` + k.html;
+    }
   } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
   appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
@@ -1295,6 +1303,77 @@ function castNamedSpell(spellKey) {
 function populateSpellPicker() {
   const sel = $('#dock-spell'); if (!sel) return;
   sel.innerHTML = SPELLS.filter(sp => sp.done).map(sp => `<option value="${sp.key}">${sp.name}</option>`).join('');
+}
+// --- Cloudkill (p.32) ----------------------------------------------------
+// A 3" deep x 6" wide gaseous cloud that kills men, orcs, dwarves "and the like"
+// on contact, then creeps CLOUD_SPEED_IN away from the caster each turn — drifting
+// in a random direction on any turn he isn't concentrating (i.e. moved). It is an
+// autonomous hazard: it persists even if the caster falls, and is removed only when
+// it drifts off the board. CLOUDKILL_IMMUNE is an adjudication call — the large /
+// powerful / undead / non-living types the gas can't fell; everything else (men and
+// the small living folk) dies. The cloud is aimed by a bearing target at cast and
+// then runs itself; multiple simultaneous clouds are a later refinement (singleton).
+const CLOUD_DEPTH_IN = 3, CLOUD_WIDTH_IN = 6, CLOUD_SPEED_IN = 6;
+const CLOUDKILL_IMMUNE = new Set(['HERO', 'SUPER_HERO', 'WIZARD', 'DRAGON', 'GIANT', 'BALROG', 'TROLL', 'ENT', 'ROC', 'WRAITH', 'WIGHT', 'ELEMENTAL', 'LYCAN']);
+const cloudkillKills = (u) => !!u && u.kind !== 'works' && !CLOUDKILL_IMMUNE.has(u.type);
+// Figures of `t` under the cloud: a CLOUD_DEPTH_IN x CLOUD_WIDTH_IN rectangle centred
+// at (cl.x,cl.y), depth along travel, width across — mapped onto figuresUnderRect
+// (head at the front edge, body extending back through the cloud).
+function cloudkillFiguresUnder(cl, t) {
+  const depthPx = inchesToPx(CLOUD_DEPTH_IN), halfW = inchesToPx(CLOUD_WIDTH_IN / 2);
+  const hx = cl.x + cl.dirX * depthPx / 2, hy = cl.y + cl.dirY * depthPx / 2;
+  return figuresUnderRect(t, hx, hy, -cl.dirX, -cl.dirY, depthPx, halfW);
+}
+// Kill every non-immune figure the cloud currently covers (friend or foe). Returns
+// the log html and whether anything was struck.
+function resolveCloudkillKills(cl) {
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  const drop = (t) => { cleanupEngagementsForUnit(t.id); if (t.id === state.selectedId) state.selectedId = null; if (t.id === state.targetId) state.targetId = null; };
+  let html = '', any = false;
+  for (const t of state.units.slice()) {
+    if (t.destroyed || !cloudkillKills(t)) continue;
+    const n = cloudkillFiguresUnder(cl, t);
+    if (n <= 0) continue;
+    any = true;
+    const fr = t.side === cl.side ? ' · friendly!' : '';
+    if (t.kind === 'individual') { t.destroyed = true; drop(t); html += `<div class="verdict v-rout">${t.side} ${nm(t)} slain by the cloud${fr}</div>`; }
+    else { applyCasualties(t, n); capParalysisToCount(t);
+      if (t.destroyed) { drop(t); html += `<div class="verdict v-rout">${t.side} ${nm(t)} choked out${fr}</div>`; }
+      else html += `<div class="step">${t.side} ${nm(t)}: <b>${n}</b> choke${fr} → ${t.count}/${t.startCount}</div>`; }
+  }
+  return { html, any };
+}
+// End-of-turn drift (called from endRound before the per-unit move reset, so the
+// caster's movedThisTurn still reflects the turn just ended). Concentrating (caster
+// alive and stationary) ⇒ creep CLOUD_SPEED_IN onward; otherwise a random heading.
+// Off the board ⇒ disperse.
+function tickCloudkill() {
+  const cl = state.cloudkill; if (!cl) return;
+  const c = state.units.find(u => u.id === cl.casterId);
+  const concentrating = !!c && !c.destroyed && (c.movedThisTurn || 0) === 0;
+  if (!concentrating) { const ang = nextRandom() * 2 * Math.PI; cl.dirX = Math.cos(ang); cl.dirY = Math.sin(ang); }
+  const stepPx = inchesToPx(CLOUD_SPEED_IN);
+  cl.x += cl.dirX * stepPx; cl.y += cl.dirY * stepPx;
+  if (cl.x < 0 || cl.x > BOARD_W || cl.y < 0 || cl.y > BOARD_H) {
+    state.cloudkill = null;
+    appendTurn('Cloudkill disperses', `<div class="step">the killing cloud drifts off the field and disperses</div>`);
+    return;
+  }
+  const k = resolveCloudkillKills(cl);
+  appendTurn('Cloudkill drifts',
+    `<div class="step">the cloud creeps ${CLOUD_SPEED_IN}″ ${concentrating ? 'onward' : 'at random (the caster is distracted)'}</div>` + k.html);
+}
+// The drifting gas: a translucent green rectangle (depth along travel, width across).
+function renderCloudkill() {
+  const cl = state.cloudkill; if (!cl) return '';
+  const depthPx = inchesToPx(CLOUD_DEPTH_IN), halfW = inchesToPx(CLOUD_WIDTH_IN / 2);
+  const fx = cl.dirX * depthPx / 2, fy = cl.dirY * depthPx / 2, px = -cl.dirY, py = cl.dirX;
+  const pts = [
+    [cl.x + fx + px * halfW, cl.y + fy + py * halfW], [cl.x + fx - px * halfW, cl.y + fy - py * halfW],
+    [cl.x - fx - px * halfW, cl.y - fy - py * halfW], [cl.x - fx + px * halfW, cl.y - fy + py * halfW],
+  ].map(q => `${q[0].toFixed(1)},${q[1].toFixed(1)}`).join(' ');
+  return `<polygon points="${pts}" fill="rgba(120,170,90,0.34)" stroke="#5f7d2f" stroke-width="1.5" stroke-dasharray="4 3" pointer-events="none"/>`
+       + `<text x="${cl.x.toFixed(1)}" y="${(cl.y + 3).toFixed(1)}" font-family="sans-serif" font-size="8.5" font-weight="700" fill="#3f5320" text-anchor="middle" pointer-events="none">CLOUDKILL</text>`;
 }
 
 // --- Suggested Point Values (p.27) --------------------------------------
@@ -2462,6 +2541,7 @@ const state = {
   darkness: null,       // active Darkness spell { casterId, side, castTurn } — global gloom (p.31)
   wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
   protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
+  cloudkill: null,      // active Cloudkill { casterId, side, x, y, dirX, dirY } — drifting killing gas (p.32)
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -3615,7 +3695,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -8465,6 +8545,7 @@ function endRound() {
   state.lastCannonShot = null;
   state.lastMissile = null;
   tickHazards();
+  tickCloudkill();
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
