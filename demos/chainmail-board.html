@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.88 · Spell: Protection from Evil (Complexity 3, p.31) — 5th of 16 implemented. A 12″-diameter (6″-radius) ward centred on the caster (state.protection { casterId, side }; PROTECTION_RADIUS_IN = 6) that keeps evil creatures out. protectionBlockScale(ox,oy,dx,dy,u) mirrors riverBlockScale: for an evil unit it path-samples the move and halts it at the ward boundary (a unit already inside is not trapped, non-evil units pass), and is folded into both the drag clamp chain and nudgeUnit so arrow-key steps obey it too. EVIL_TYPES (Orc, Goblin, Kobold, Wraith, Wight, Balrog, Lycanthrope, Troll) + isEvil() is an explicit adjudication call — tune to taste. Cast via the dock spell picker (no target; centred on the caster); the ward persists only while the caster lives and stays put (maintainSpells now prunes darkness/wizardLight/protection) and counter-magic’s dispel set is unchanged. renderProtection draws the warding ring (side-coloured, 7-4 dash, faint white fill) in the overlay. Faithful notes: the ward blocks ENTRY (movement) only — it does not shield against melee already in contact across the boundary; evil units of EITHER side are kept out; one ward at a time (singleton, multi is future). node harness: isEvil + protectionBlockScale (no-ward / into / away / inside / tangential / knight / wraith / caster-moved); 2 in-file asserts. -->
+<!-- chainmail-board.html · v0.11.89 · Per-unit Alignment flag (Good / Neutral / Evil). Replaces the hardcoded EVIL_TYPES set with an editable per-unit u.alignment: a new Alignment dropdown beside Side (all kinds) that defaults from type via defaultAlignment() but is freely overridable, so an anti-hero is simply a Hero set Evil and a Wizard / Dragon / Giant can be either. EVIL_DEFAULT (Orc, Goblin, Kobold, Wraith, Wight, Lycanthrope, Troll, Balrog, Giant, Dragon) seeds the default — Heroes/Super-Heroes default Good, everything else (men, elves, dwarves, magic-users, elementals, ents…) Neutral. alignmentOf(u) returns the explicit value when set, else the type default (junk values fall back); isEvil(u) now reads alignmentOf, so Protection from Evil keeps out whatever the player has marked Evil. The picker resets to the type default on a type/kind change (syncAlignmentDefault) and restores the saved value on edit-load; alignment persists through spawn, edit, undo, and save. NOTE: Kobold is included with Goblin as default-Evil (goblin-kin) though it wasn’t on the list — flip it in EVIL_DEFAULT if you’d rather it default Neutral. node harness: defaultAlignment over the evil set / heroes / neutral types, per-unit overrides both ways, alignmentOf precedence + bad-value fallback; 3 in-file asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.88</title>
+<title>Chainmail — Battlefield · v0.11.89</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Spell — Protection from Evil</div>
+    <div class="sub">Chainmail HTML Sim · Per-unit alignment flag</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.88</span>
+    <span class="version-tag">v0.11.89</span>
   </div>
 
   <div class="toolbar">
@@ -364,6 +364,11 @@
         <h2 class="collapsible" id="new-unit-toggle"><span><span id="new-unit-label">New unit</span> <span class="caret">▾</span></span><span class="nu-actions"><button id="btn-edit-cancel" class="cancel-btn" hidden>Cancel</button><button id="btn-spawn" class="gold spawn-btn" title="Spawn the unit at board centre">+ Spawn</button></span></h2>
         <div class="field"><label>Side</label><select id="f-side">
           <option value="A">A (blue)</option><option value="B">B (red)</option>
+        </select></div>
+        <div class="field"><label>Alignment</label><select id="f-alignment">
+          <option value="good">Good</option>
+          <option value="neutral">Neutral</option>
+          <option value="evil">Evil</option>
         </select></div>
         <div class="field"><label>Kind</label><select id="f-kind">
           <option value="mass">Mass</option>
@@ -652,7 +657,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.88';
+const SIM_VERSION = '0.11.89';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1079,8 +1084,17 @@ function canActInDark(u) {
 // that keeps evil creatures out. EVIL_TYPES is an adjudication call — the monstrous /
 // chaos / undead types; tune to taste.
 const PROTECTION_RADIUS_IN = 6;
-const EVIL_TYPES = new Set(['ORC', 'GOBLIN', 'KOBOLD', 'WRAITH', 'WIGHT', 'BALROG', 'LYCAN', 'TROLL']);
-function isEvil(u) { return !!u && EVIL_TYPES.has(u.type); }
+// Types that default to Evil; anything else defaults Good (Heroes) or Neutral.
+// Alignment is a per-unit flag (u.alignment), so an anti-hero is a Hero set Evil,
+// and a Wizard / Dragon / Giant can be either — this is just the starting value.
+const EVIL_DEFAULT = new Set(['ORC', 'GOBLIN', 'KOBOLD', 'WRAITH', 'WIGHT', 'BALROG', 'LYCAN', 'TROLL', 'GIANT', 'DRAGON']);
+function defaultAlignment(type) {
+  if (EVIL_DEFAULT.has(type)) return 'evil';
+  if (type === 'HERO' || type === 'SUPER_HERO') return 'good';
+  return 'neutral';
+}
+const alignmentOf = (u) => (u && ['good', 'neutral', 'evil'].includes(u.alignment)) ? u.alignment : defaultAlignment(u && u.type);
+function isEvil(u) { return !!u && alignmentOf(u) === 'evil'; }
 function protectionCircle() {
   maintainSpells();
   const pr = state.protection; if (!pr) return null;
@@ -3498,6 +3512,12 @@ function syncKindFields() {
   }
   syncPikeRow();
   syncMagicRow();
+  syncAlignmentDefault();
+}
+// Reset the Alignment picker to the current type's default (a manual choice is kept
+// until the type changes).
+function syncAlignmentDefault() {
+  const sel = $('#f-alignment'); if (sel) sel.value = defaultAlignment($('#f-type').value);
 }
 // The magic-class picker is only meaningful for a Wizard-type individual.
 function syncMagicRow() {
@@ -3577,6 +3597,7 @@ function syncPikeRow() {
 }
 $('#f-type').addEventListener('change', syncPikeRow);
 $('#f-type').addEventListener('change', syncMagicRow);
+$('#f-type').addEventListener('change', syncAlignmentDefault);
 syncPikeRow();
 
 function renderBoard() {
@@ -7696,6 +7717,7 @@ function spawnUnit() {
   const common = {
     id: reEdit ? orig.id : state.nextId++,
     side, kind, type,
+    alignment: $('#f-alignment').value || defaultAlignment(type),
     weapon,
     mercenary: $('#f-merc').checked,
     spawnTurn: state.setup ? 0 : state.turn,
@@ -7788,6 +7810,7 @@ function loadUnitIntoPanel(u) {
   $('#f-merc').checked = !!u.mercenary;
   $('#f-kind').value = u.kind;
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
+  $('#f-alignment').value = u.alignment || defaultAlignment(u.type);
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
@@ -9648,7 +9671,9 @@ renderBoard();
     const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
     console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
-  console.assert(isEvil({ type:'ORC' }) && isEvil({ type:'WRAITH' }) && !isEvil({ type:'HERO' }) && !isEvil({ type:'ELF' }), 'protection: orc/wraith evil, hero/elf not');
+  console.assert(isEvil({ type:'ORC' }) && isEvil({ type:'GIANT' }) && isEvil({ type:'DRAGON' }) && isEvil({ type:'WRAITH' }), 'align: orc/giant/dragon/wraith default evil');
+  console.assert(!isEvil({ type:'HERO' }) && !isEvil({ type:'WIZARD' }) && !isEvil({ type:'HF' }) && !isEvil({ type:'ELF' }), 'align: hero/wizard/men/elf not evil by default');
+  console.assert(isEvil({ type:'HERO', alignment:'evil' }) && !isEvil({ type:'ORC', alignment:'good' }) && defaultAlignment('HERO') === 'good', 'align: per-unit flag overrides type default');
   (() => { const sv = state.protection, su = state.units;
     state.units = [{ id: -2, type:'WIZARD', x:300, y:240, destroyed:false, movedThisTurn:0 }];
     state.protection = { casterId: -2, side:'A' };
