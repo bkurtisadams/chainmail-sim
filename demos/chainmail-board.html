@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.81 · Wizard missiles, slice 2a: data + pure hit-result resolver (p.31); no casting UI yet (placement/aim/render is the next slice). WIZARD_MISSILES: fire ball (kind fire; circular hit area = the heavy/large catapult’s radius, CATAPULTS.heavy.hitArea, resolved at placement) and lightning bolt (kind lightning; 3/4" x 6" rectangle, head at the called point, body 6" back toward the caster). Both reach WIZARD_MISSILE_RANGE_IN = 24", direct or indirect. resolveMissileHit(targetType, missileKind, roll, casterPenalty, element) returns destroyed | saved | driven_back | routed | no_effect for one figure struck: ordinary men/creatures are destroyed outright; Hero saved 9+, Super Hero 6+, Wraith 7+, Balrog 6+, Wizard 7+ (else destroyed); Giant <5 routs off board / <9 back 1 move / 9+ no effect; Dragon always driven back; an Elemental is driven back only by the matching missile (Air & Water by fire, Earth & Fire by lightning) per ELEMENTAL_DRIVEBACK, immune otherwise (and immune until a subtype is set — the element tag arrives with the casting UI). The caster class penalty (Sorcerer 1 … Seer 4) is added to the target’s save roll, since weaker magic-users throw less deadly missiles. node harness verifies all 359 cases — every save type x roll x penalty, Giant bands, Dragon, the full elemental matrix, and ordinary-creature destruction; 7 in-file asserts. Pure logic only — no UI, no board/combat changes. -->
+<!-- chainmail-board.html · v0.11.82 · Wizard missiles, slice 2b: casting UI over the slice-2a resolver. A Wizard (individual magic-user) now picks its missile before play — a Missile field (Fire ball / Lightning bolt) beside Magic class — and an Elemental picks its subtype (Air/Earth/Fire/Water) so its drive-back resolves. Cast: select the Wizard, shift-click a target to aim, then the “Fire ball / Lightning bolt” dock button (Missile phase) lays the pattern at the called point (the target, ≤ 24″) and resolves every figure under it, friend or foe, via resolveMissileHit. Fire ball = a circle of the heavy/large-catapult radius (CATAPULTS.heavy.hitArea/2 = 1.75″) centred on the target. Lightning bolt = a 3/4″ x 6″ rectangle (new figuresUnderRect), head at the target, body 6″ back toward the caster. Mass units lose every figure caught (ordinary troops are destroyed outright); individuals roll the p.31 table — destroyed / saved / driven_back (driveBackUnit shoves them one full move directly away, board-clamped) / routed (removed). Magic ignores the overhead-cover rule that spares troops from physical artillery. One missile per Wizard per turn (acted.fired). state.lastMissile renders the circle or rotated rectangle in the overlay (renderWizardMissile). missileType/element persist through spawn, edit-load, undo, and save. Faithful simplifications: aim is target-based (no free-point cast yet) and direct-vs-indirect (LOS) is deferred, same as the cannon’s terrain interposition — both missiles simply reach 24″. node harness: figuresUnderRect (individual edge/length/behind-head + diagonal + mass channel/wide); resolveMissileHit already covered (359 cases, 2a). 8 in-file asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.81</title>
+<title>Chainmail — Battlefield · v0.11.82</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Wizard-missile hit resolver</div>
+    <div class="sub">Chainmail HTML Sim · Wizard missiles — cast &amp; resolve</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.81</span>
+    <span class="version-tag">v0.11.82</span>
   </div>
 
   <div class="toolbar">
@@ -331,6 +331,7 @@
         <button id="btn-missile" disabled>Fire missiles</button>
         <button id="btn-fire-engine" disabled hidden>Fire engine</button>
         <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
+        <button id="btn-wizard-missile" class="secondary" disabled hidden>Fire ball</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
         <button id="btn-escalade" disabled hidden>Escalade</button>
@@ -372,6 +373,16 @@
           <option value="warlock">Warlock</option>
           <option value="magician">Magician</option>
           <option value="seer">Seer</option>
+        </select></div>
+        <div class="field" id="f-missile-row" style="display:none"><label>Missile</label><select id="f-missile-type">
+          <option value="fireball">Fire ball</option>
+          <option value="lightning">Lightning bolt</option>
+        </select></div>
+        <div class="field" id="f-element-row" style="display:none"><label>Element</label><select id="f-element">
+          <option value="air">Air</option>
+          <option value="earth">Earth</option>
+          <option value="fire">Fire</option>
+          <option value="water">Water</option>
         </select></div>
         <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" class="wheel-num" value="10" min="1" max="200"></div>
         <div class="field f-mass-only"><label>Formation</label><select id="f-form">
@@ -637,7 +648,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.81';
+const SIM_VERSION = '0.11.82';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -842,7 +853,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Miss
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -973,6 +984,105 @@ function resolveMissileHit(targetType, missileKind, roll, casterPenalty, element
     case 'ELEMENTAL':  return ELEMENTAL_DRIVEBACK[element] === missileKind ? 'driven_back' : 'no_effect';
     default:           return 'destroyed';
   }
+}
+// Count a unit's figures under the lightning bolt: a rotated rectangle whose head is
+// at (hx,hy) with (ux,uy) the unit vector along the body (head -> caster), lengthPx
+// long and halfWidthPx to each side. Mass cells get a half-cell of slack, matching
+// figuresUnderCircle's "partially under" rule.
+function figuresUnderRect(target, hx, hy, ux, uy, lengthPx, halfWidthPx) {
+  if (!target || target.destroyed) return 0;
+  const hit = (px, py, slack) => {
+    const rx = px - hx, ry = py - hy;
+    const along = rx * ux + ry * uy, perp = Math.abs(-rx * uy + ry * ux);
+    return along >= -slack && along <= lengthPx + slack && perp <= halfWidthPx + slack;
+  };
+  if (target.kind === 'individual') return hit(target.x, target.y, 0) ? 1 : 0;
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  const cols = target.cols, f = (target.facing || 0) * Math.PI / 180;
+  const cos = Math.cos(f), sin = Math.sin(f), slack = pip / 2;
+  let n = 0;
+  for (let i = 0; i < target.count; i++) {
+    const c = i % cols, r = Math.floor(i / cols);
+    const lx = c * (pip + gap) + pad - w / 2 + pip / 2;
+    const ly = r * (pip + gap) + pad - h / 2 + pip / 2;
+    const wx = target.x + lx * cos - ly * sin, wy = target.y + lx * sin + ly * cos;
+    if (hit(wx, wy, slack)) n++;
+  }
+  return Math.min(n, target.count);
+}
+// "Back 1 move": shove a unit one full move directly away from the caster, clamped
+// to the board (p.31 drive-back result).
+function driveBackUnit(u, from) {
+  const dx = u.x - from.x, dy = u.y - from.y, len = Math.hypot(dx, dy) || 1;
+  const movePx = inchesToPx(moveAllowanceOf(u));
+  u.x = Math.max(0, Math.min(BOARD_W, u.x + (dx / len) * movePx));
+  u.y = Math.max(0, Math.min(BOARD_H, u.y + (dy / len) * movePx));
+}
+// Eligibility for a Wizard (any magic-user class) to throw its chosen missile at the
+// targeted unit: within 24", not already thrown this turn.
+function wizardMissileState(a, d) {
+  if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
+  if (!d || d.destroyed || d.id === a.id) return { ok: false, reason: 'target' };
+  const r = pxToInches(Math.hypot(a.x - d.x, a.y - d.y));
+  const fired = !!(a.acted && a.acted.fired);
+  return { r, inRange: r <= WIZARD_MISSILE_RANGE_IN, fired, ok: r <= WIZARD_MISSILE_RANGE_IN && !fired };
+}
+// Throw the missile: lay the pattern at the called point (the target), then destroy /
+// save / drive back / rout every figure under it, friend or foe (p.31). Magic ignores
+// the overhead-cover rule that protects troops from physical artillery.
+function resolveWizardMissile() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const st = wizardMissileState(a, d);
+  if (!st || !st.ok) return;
+  pushUndo('wizard-missile');
+  const missile = WIZARD_MISSILES[a.missileType || 'fireball'], kind = missile.kind;
+  const penalty = magicMeta(a).penalty;
+  const impact = { x: d.x, y: d.y };
+  let underFn;
+  if (missile.shape === 'circle') {
+    const rPx = inchesToPx(CATAPULTS.heavy.hitArea / 2);
+    state.lastMissile = { shape: 'circle', x: impact.x, y: impact.y, rPx, side: a.side };
+    underFn = (t) => figuresUnderCircle(t, impact.x, impact.y, rPx);
+  } else {
+    const dx = a.x - impact.x, dy = a.y - impact.y, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const lengthPx = inchesToPx(missile.lengthIn), halfW = inchesToPx(missile.widthIn / 2);
+    state.lastMissile = { shape: 'rect', hx: impact.x, hy: impact.y, ux, uy, lengthPx, halfW, side: a.side };
+    underFn = (t) => figuresUnderRect(t, impact.x, impact.y, ux, uy, lengthPx, halfW);
+  }
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  let html = `<div class="step">${a.side} ${magicMeta(a).label} hurls a ${missile.label} — calls ${st.r.toFixed(1)}″</div>`;
+  let anyUnder = false, anyEffect = false;
+  const drop = (t) => { cleanupEngagementsForUnit(t.id); if (t.id === state.selectedId) state.selectedId = null; if (t.id === state.targetId) state.targetId = null; };
+  for (const t of state.units.slice()) {
+    if (t.destroyed || t.kind === 'works') continue;
+    const n = underFn(t);
+    if (n <= 0) continue;
+    anyUnder = true;
+    const fr = t.side === a.side ? ' · friendly!' : '';
+    if (t.kind === 'individual') {
+      const roll = roll2d6(state.rng).sum, adj = penalty ? ` ${roll}+${penalty}` : ` ${roll}`;
+      const res = resolveMissileHit(t.type, kind, roll, penalty, t.element);
+      if (res === 'destroyed' || res === 'routed') { t.destroyed = true; anyEffect = true; drop(t);
+        html += `<div class="verdict v-rout">${t.side} ${nm(t)} ${res === 'routed' ? 'routs off the board' : 'destroyed'}${fr} (rolled${adj})</div>`;
+      } else if (res === 'driven_back') { driveBackUnit(t, a); anyEffect = true;
+        html += `<div class="step">${t.side} ${nm(t)} driven back 1 move${fr} (rolled${adj})</div>`;
+      } else {
+        html += `<div class="step" style="color:var(--ink-soft)">${t.side} ${nm(t)} ${res === 'saved' ? 'saves' : 'unaffected'}${fr} (rolled${adj})</div>`;
+      }
+    } else {
+      applyCasualties(t, n); capParalysisToCount(t); anyEffect = true;
+      if (t.destroyed) { drop(t); html += `<div class="verdict v-rout">${t.side} ${nm(t)} wiped out${fr}</div>`; }
+      else html += `<div class="step">${t.side} ${nm(t)}: <b>${n}</b> destroyed${fr} → ${t.count}/${t.startCount}</div>`;
+    }
+  }
+  if (!anyUnder) html += `<div class="verdict v-noeffect">nothing caught under the ${missile.label}</div>`;
+  else if (!anyEffect) html += `<div class="verdict v-noeffect">no effect</div>`;
+  a.acted.fired = true;
+  appendTurn(`Wizard missile · ${magicMeta(a).label} (${a.side})`, html);
+  renderBoard();
 }
 
 // --- Suggested Point Values (p.27) --------------------------------------
@@ -3196,9 +3306,11 @@ function syncKindFields() {
 }
 // The magic-class picker is only meaningful for a Wizard-type individual.
 function syncMagicRow() {
-  const show = $('#f-kind').value === 'individual' && $('#f-type').value === 'WIZARD';
-  const row = $('#f-magic-row');
-  if (row) row.style.display = show ? '' : 'none';
+  const ind = $('#f-kind').value === 'individual';
+  const type = $('#f-type').value;
+  const wiz = ind && type === 'WIZARD', elem = ind && type === 'ELEMENTAL';
+  const set = (id, on) => { const r = $(id); if (r) r.style.display = on ? '' : 'none'; };
+  set('#f-magic-row', wiz); set('#f-missile-row', wiz); set('#f-element-row', elem);
 }
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
@@ -3281,7 +3393,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -3864,6 +3976,20 @@ function renderCatapultHit() {
   const fill = h.side === 'A' ? 'rgba(58,110,144,0.16)' : 'rgba(156,59,44,0.16)';
   return `<circle cx="${h.x}" cy="${h.y}" r="${h.rPx}" fill="${fill}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 3" pointer-events="none"/>`
        + `<circle cx="${h.x}" cy="${h.y}" r="2.2" fill="${col}" pointer-events="none"/>`;
+}
+
+function renderWizardMissile() {
+  const m = state.lastMissile;
+  if (!m) return '';
+  const col  = m.side === 'A' ? 'rgba(58,110,144,0.9)'  : 'rgba(156,59,44,0.9)';
+  const fill = m.side === 'A' ? 'rgba(58,110,144,0.16)' : 'rgba(156,59,44,0.16)';
+  if (m.shape === 'circle')
+    return `<circle cx="${m.x}" cy="${m.y}" r="${m.rPx}" fill="${fill}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 3" pointer-events="none"/>`
+         + `<circle cx="${m.x}" cy="${m.y}" r="2.2" fill="${col}" pointer-events="none"/>`;
+  const nx = -m.uy, ny = m.ux, tx = m.hx + m.ux * m.lengthPx, ty = m.hy + m.uy * m.lengthPx;
+  const pts = `${m.hx + nx*m.halfW},${m.hy + ny*m.halfW} ${m.hx - nx*m.halfW},${m.hy - ny*m.halfW} ${tx - nx*m.halfW},${ty - ny*m.halfW} ${tx + nx*m.halfW},${ty + ny*m.halfW}`;
+  return `<polygon points="${pts}" fill="${fill}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 3" pointer-events="none"/>`
+       + `<circle cx="${m.hx}" cy="${m.hy}" r="2.2" fill="${col}" pointer-events="none"/>`;
 }
 
 function renderCannonShot() {
@@ -4624,6 +4750,21 @@ function updateButtons() {
     csBtn.disabled = !isGun;
     csBtn.textContent = `Shot: ${a && a.cannonLong ? 'long' : 'short'}`;
     csBtn.title = isGun ? 'Call SHORT (white) or LONG (black) sections before firing the dowel (p.14)' : '';
+  }
+  const wms = wizardMissileState(a, d);
+  const wmBtn = $('#btn-wizard-missile');
+  if (wmBtn) {
+    const showWm = !!(a && isMagicUser(a));
+    const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
+    wmBtn.hidden = !showWm;
+    wmBtn.disabled = !(wms && wms.ok && missilePhaseOk);
+    wmBtn.textContent = a && a.missileType === 'lightning' ? 'Lightning bolt' : 'Fire ball';
+    wmBtn.title = !showWm ? '' :
+      (!d || d.id === a.id) ? 'Target an enemy to aim the missile (shift-click)' :
+      !wms.inRange ? `Out of range (${wms.r.toFixed(1)}″, max ${WIZARD_MISSILE_RANGE_IN}″)` :
+      wms.fired ? 'This Wizard has already thrown a missile this turn' :
+      !missilePhaseOk ? 'Throw in the Missile phase' :
+      `Hurl a ${a.missileType === 'lightning' ? 'lightning bolt' : 'fire ball'} at ${d.side} ${typeById(d.type)?.name || 'target'}, ${wms.r.toFixed(1)}″ — destroys figures under the pattern (p.31)`;
   }
   const rb = ramBatterState(a, d);
   const rbBtn = $('#btn-batter-ram');
@@ -7317,7 +7458,9 @@ function spawnUnit() {
       formation: null, customCols: null, spacing: 'close', polearm: false,
       meleeWeapon, armor, mounted, leader, prone: false, parry: false,
       hp: maxHp, maxHp,
-      magicClass: type === 'WIZARD' ? ($('#f-magic-class').value || 'wizard') : undefined };
+      magicClass: type === 'WIZARD' ? ($('#f-magic-class').value || 'wizard') : undefined,
+      missileType: type === 'WIZARD' ? ($('#f-missile-type').value || 'fireball') : undefined,
+      element: type === 'ELEMENTAL' ? ($('#f-element').value || 'air') : undefined };
   } else if (kind === 'works') {
     const worksType = $('#f-works-type').value;
     const wt = WORKS_TYPES[worksType];
@@ -7378,6 +7521,8 @@ function loadUnitIntoPanel(u) {
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
     $('#f-magic-class').value = u.magicClass || 'wizard';
+    $('#f-missile-type').value = u.missileType || 'fireball';
+    $('#f-element').value = u.element || 'air';
     syncMagicRow();
     $('#f-mtm-weapon').value = u.meleeWeapon || 'sword';
     $('#f-armor').value = u.armor || 'chain_sh';
@@ -7922,9 +8067,10 @@ function renderTurnUI() {
   const dock = $('#phase-dock');
   let dockIds = enf
     ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
+      : ph.id === 'missile' ? ['btn-wizard-missile']
       : ph.id === 'melee' ? ['btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-melee', 'btn-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
+    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
   if (ph.id === 'initiative' && state.initiativeRoll) dockIds = dockIds.concat('btn-elect-order');
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
@@ -8017,6 +8163,7 @@ function endRound() {
   state.turn += 1;
   state.lastCatapultHit = null;
   state.lastCannonShot = null;
+  state.lastMissile = null;
   tickHazards();
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
@@ -8063,6 +8210,7 @@ $('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state
 $('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
+$('#btn-wizard-missile').addEventListener('click', () => { resolveWizardMissile(); renderTurnUI(); });
 $('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a) { a.cannonLong = !a.cannonLong; renderTurnUI(); } });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
@@ -9211,6 +9359,10 @@ renderBoard();
   console.assert(resolveMissileHit('DRAGON','lightning',12,0) === 'driven_back', 'missile: Dragon always driven back');
   console.assert(resolveMissileHit('ELEMENTAL','fire',7,0,'air') === 'driven_back' && resolveMissileHit('ELEMENTAL','lightning',7,0,'air') === 'no_effect', 'missile: Air elemental yields to fire only');
   console.assert(resolveMissileHit('TROLL','fire',2,0) === 'destroyed' && resolveMissileHit('HF','lightning',12,0) === 'destroyed', 'missile: ordinary creatures/men destroyed');
+  (() => { const ind = { kind:'individual', type:'HERO', x:300, y:240 };
+    const on = figuresUnderRect(ind, 300, 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
+    const off = figuresUnderRect(ind, 300 + inchesToPx(10), 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
+    console.assert(on === 1 && off === 0, 'missile: lightning rect covers the head figure, misses a distant one'); })();
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
