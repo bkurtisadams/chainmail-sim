@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.86 · Spells, slice 4b: the move-rate pair Haste & Slowness (both Complexity 3, p.32) + a scalable spell picker. Haste: +50% move for 3 turns on a friendly unit; Slowness: ½ move for 2 turns on an enemy unit — each is a timed u.moveSpell = { kind, untilTurn } applied to the targeted unit, read by moveSpellFactor() (×1.5 / ×0.5 / ×1) which now multiplies moveAllowanceOf(); fixed-duration, so no caster concentration needed once cast. Capped at “up to 20 figures” (spellTargetOk: friendly≤ 20 for Haste, enemy≤ 20 for Slowness, SPELL_TARGET map). The two per-spell buttons are replaced by a dock spell PICKER — a #dock-spell dropdown (populateSpellPicker fills it from SPELLS where done) + one “Cast spell” button — which scales as more of the 16 land; darkness/light now cast through the same picker. Casting still routes through resolveSpellCast (class vs Complexity) and a stationary/unoccupied/unsuppressed caster (spellCastState); the button greys out with a reason (moved / occupied / suppressed / wrong-or-missing target). Faithful timing note: spells are cast in the Missile phase (after movement), so a move-rate spell takes effect from the following turn; the >20-figure split and the RAW deferred-cast delay remain simplifications. node harness: moveSpellFactor (haste/slow/expired/none + HF 13.5″/4.5″) and spellTargetOk (side/≤20/works/no-target); 3 in-file asserts. -->
+<!-- chainmail-board.html · v0.11.87 · Darkness combat gate (p.31): full darkness now bites. canActInDark(u) returns true at gloom levels 0-1, but at level 2 (full dark) only units with darkvision (seesInDark — Wizards, Goblins, Kobolds, Orcs) or standing inside a Wizard Light (litByWizardLight) may attack. The gate is applied to the acting unit in melee eligibility, missile eligibility, and the Giant boulder, and guarded again at the top of onResolveMelee / onResolveMissile; blinded units get a greyed Resolve-melee / Fire-missiles button with an explanatory tooltip. Visual: at full dark the existing veil darkens the field with the Wizard-Light circle cut clear, and units that can still fight in the gloom (darkvision) are ringed in faint amber so the player can read who is dangerous at a glance. Faithful simplification: the gate covers attacking; a seeing attacker vs a blind defender still resolves normally (RAW “can’t defend” advantage not modeled). node harness: canActInDark across no-dark / level 0 / level 1 / level 2, darkvision races + Wizard pass, HF/Elf blinded, HF in/out of a Wizard Light; 1 in-file assert. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.86</title>
+<title>Chainmail — Battlefield · v0.11.87</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Spells — Haste, Slowness &amp; a spell picker</div>
+    <div class="sub">Chainmail HTML Sim · Darkness combat gate</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.86</span>
+    <span class="version-tag">v0.11.87</span>
   </div>
 
   <div class="toolbar">
@@ -652,7 +652,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.86';
+const SIM_VERSION = '0.11.87';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1068,6 +1068,12 @@ function spellTargetOk(spell, a, d) {
   if (need === 'friend' && d.side !== a.side) return false;
   if (need === 'enemy' && d.side === a.side) return false;
   return (d.count || 1) <= 20;   // "up to 20 figures" (p.32)
+}
+// Combat gate for full darkness (p.31): at level 2, only units with darkvision or
+// standing in a Wizard Light can attack/defend. Levels 0-1 don't restrict combat.
+function canActInDark(u) {
+  if (!u || darknessLevel() < 2) return true;
+  return seesInDark(u) || litByWizardLight(u.x, u.y);
 }
 // Count a unit's figures under the lightning bolt: a rotated rectangle whose head is
 // at (hx,hy) with (ux,uy) the unit vector along the body (head -> caster), lengthPx
@@ -4163,6 +4169,11 @@ function renderDarkness() {
   }
   if (wl) { const r = inchesToPx(WIZARD_LIGHT_RANGE_IN);
     out += `<circle cx="${wl.x}" cy="${wl.y}" r="${r}" fill="none" stroke="rgba(244,224,140,0.7)" stroke-width="1.5" stroke-dasharray="3 4" pointer-events="none"/>`; }
+  if (lvl === 2) for (const u of state.units) {
+    if (u.destroyed || u.kind === 'works' || !seesInDark(u)) continue;
+    const r = Math.max(unitBounds(u).w, unitBounds(u).h) / 2 + 3;
+    out += `<circle cx="${u.x}" cy="${u.y}" r="${r}" fill="none" stroke="rgba(244,224,140,0.55)" stroke-width="1.5" pointer-events="none"/>`;
+  }
   return out;
 }
 
@@ -4887,12 +4898,14 @@ function updateButtons() {
   const splitFireCase   = !!(a && atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
   const passThroughCase = !!(a && d && canPassThroughFire(a, d));
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
-  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform);
-  const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d);
+  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform && canActInDark(a));
+  $('#btn-melee').title = (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fight (p.31)' : '';
+  const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d) && canActInDark(a);
   const gb = giantBoulderState(a, d);
-  const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile'));
+  const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile') && canActInDark(a));
   $('#btn-missile').disabled = !(missileEnabled || boulderReady);
   $('#btn-missile').title =
+    (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fire (p.31)' :
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
     (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' :
     (!missileEnabled && boulderReady) ? `Hurl a boulder — −${SIEGE_WEAPONS.smallCatapult.points} to the ${d && d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure'} (≤${GIANT_ROCK_RANGE_IN}″)` :
@@ -6404,6 +6417,7 @@ function onResolveMelee() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || a.destroyed || d.destroyed) return;
+  if (!canActInDark(a)) return;
   if (!canMeleeThisTurn(a)) {
     appendTurn(`Melee — already fought`,
       `<div class="step">${typeById(a.type).name} (${a.side}) has already meleed this turn. A melee is resolved once per turn (p.8) — the next round is next turn, so advance the turn to continue the fight. The only same-turn repeat is a victorious charger following through into fresh contact (p.16), which isn't automated yet.</div>`);
@@ -7117,6 +7131,7 @@ function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
   if (!a || !d || !a.weapon) return;
+  if (!canActInDark(a)) return;
   pushUndo('fire');
   if (activeFigures(a) === 0) {
     appendTurn(`Missile — skipped`,
@@ -9588,6 +9603,12 @@ renderBoard();
   console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins & wizards see in dark, heavy foot do not');
   console.assert(SPELL_BY_KEY.haste.done && SPELL_BY_KEY.slowness.done && SPELL_BY_KEY.haste.complexity === 3, 'spells: haste/slowness implemented at C3');
   console.assert(moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn } }) === 1.5 && moveSpellFactor({ moveSpell:{ kind:'slow', untilTurn: state.turn } }) === 0.5 && moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn - 1 } }) === 1 && moveSpellFactor({}) === 1, 'spells: haste 1.5 / slow 0.5 / expired & none 1');
+  (() => { const sv = state.darkness, su = state.units, st = state.turn;
+    state.units = [{ id: -1, type:'WIZARD', x:300, y:240, destroyed:false, movedThisTurn:0 }];
+    state.darkness = { casterId: -1, side:'A', castTurn: 1 }; state.turn = 3;   // level 2
+    const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
+    state.darkness = sv; state.units = su; state.turn = st;
+    console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
   (() => { const ind = { kind:'individual', type:'HERO', x:300, y:240 };
     const on = figuresUnderRect(ind, 300, 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
     const off = figuresUnderRect(ind, 300 + inchesToPx(10), 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
