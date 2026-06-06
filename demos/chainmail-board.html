@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.78 · Stop the phase area shifting when you advance (the v0.11.76 decouple fixed the action slot but two width-changers remained). (1) The status tag (#phase) was on the same flex row as the ◀ stepper ▶ and the undo/redo/clear buttons; its text swings from "Turn 1 · Side A" to "Initiative — A 5 vs B 3: A wins → A moves first", so its changing width shoved the controls sideways and, when long, wrapped the row and pushed the action button down. The tag now lives on its own line (new .tn-info wrapper, flex-basis 100%) so its width is isolated and the control rows never move. (2) The stepper itself changed width as phases advanced — the current step was bold (wider) and done steps gained a ✓ prefix (wider, accumulating), nudging the ▶ and trailing buttons. Now every step is constant width: the bold is gone (current step shown by ink colour + a side-colour underline only), the 2px underline is reserved as transparent on ALL steps (no height shift), and the ✓ sits in a fixed 11px .mk slot present on every step (done shows it, others blank), so the rail width is identical in every phase. Net: tag, stepper, ◀▶, the fixed action slot and End turn all hold their exact positions across the whole turn; only the situational dock (bottom line) and the tag text vary. CSS + render-markup only; no combat/gating/logic changes. -->
+<!-- chainmail-board.html · v0.11.79 · Spell casting / complexity resolver (p.30-33) — standalone groundwork for the wizardry subsystem; no spells wired yet. New SPELL_COMPLEXITY table holds the 2d6 thresholds {I, N} for every caster class (wizard, sorcerer, warlock, magician, seer) x spell complexity 1-6. resolveSpellCast(class, complexity, roll) is pure: roll >= I takes effect immediately, roll <= N is negated/no effect, anything between is deferred one turn. The book’s D row (delayed) is just I-1, the top of the deferred band, so it is not stored. null encodes the printed “—”: I null => immediate impossible (Seer at complexity 6, best result is deferred); N null => no fizzle band, so a low roll defers instead of failing (Wizard/Sorcerer on easy spells). Warlock at complexity 2 is normalized to I7/N4: the book prints D8/N6, putting the deferred bar above the immediate bar (a self-contradiction) and is the single cell that breaks an otherwise regular grid — confirmed misprint, corrected to the table’s own pattern. castSpell() wraps resolveSpellCast with a seeded 2d6 roll via state.rng. node harness checks all 30 cells against the rules’ regular pattern, every 2d6 total 2-12 (330 band checks), outcome-quality monotonicity, and the dash cells; 4 in-file asserts added. Pure data + logic only — no UI, no dialog, no board/combat changes; spells (missiles, the 16 effects, counter-magic) hang off this next. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.78</title>
+<title>Chainmail — Battlefield · v0.11.79</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Phase area holds still on advance</div>
+    <div class="sub">Chainmail HTML Sim · Spell casting / complexity resolver</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.78</span>
+    <span class="version-tag">v0.11.79</span>
   </div>
 
   <div class="toolbar">
@@ -630,7 +630,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.78';
+const SIM_VERSION = '0.11.79';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -874,6 +874,41 @@ const FANTASTIC_TYPES = Object.freeze([
   { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
 ]);
 const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
+
+// --- Spell casting: Complexity resolver (p.30-33) ------------------------
+// Magic-user classes, strongest to weakest. Spells, spell range and morale/point
+// scale down the list; the casting bars in SPELL_COMPLEXITY rise down it too.
+const MAGIC_USER_CLASSES = Object.freeze(['wizard', 'sorcerer', 'warlock', 'magician', 'seer']);
+// Spell Complexity table (Chainmail 3rd ed. p.33). For a caster class and a spell's
+// complexity (1-6) it gives the 2d6 thresholds {I, N}: roll >= I takes effect
+// immediately, roll <= N is negated, anything between is deferred one turn. The
+// book's D row is just I-1 (the top of the deferred band), so it isn't stored.
+// null is the printed "—": I null => immediate impossible (Seer at 6); N null =>
+// no fizzle band, so a low roll defers instead of failing. Warlock at complexity 2
+// is normalized to I7/N4 -- the book prints D8/N6, which puts the deferred bar
+// ABOVE the immediate bar (impossible) and is the lone cell that breaks an
+// otherwise perfectly regular grid; corrected here to the table's own pattern.
+const SPELL_COMPLEXITY = Object.freeze({
+  1: { wizard:{I:4,   N:null}, sorcerer:{I:5,  N:null}, warlock:{I:6,  N:3}, magician:{I:7,  N:4}, seer:{I:8,    N:5}  },
+  2: { wizard:{I:5,   N:null}, sorcerer:{I:6,  N:3},    warlock:{I:7,  N:4}, magician:{I:8,  N:5}, seer:{I:9,    N:6}  },
+  3: { wizard:{I:6,   N:3},    sorcerer:{I:7,  N:4},    warlock:{I:8,  N:5}, magician:{I:9,  N:6}, seer:{I:10,   N:7}  },
+  4: { wizard:{I:7,   N:4},    sorcerer:{I:8,  N:5},    warlock:{I:9,  N:6}, magician:{I:10, N:7}, seer:{I:11,   N:8}  },
+  5: { wizard:{I:8,   N:5},    sorcerer:{I:9,  N:6},    warlock:{I:10, N:7}, magician:{I:11, N:8}, seer:{I:12,   N:9}  },
+  6: { wizard:{I:9,   N:6},    sorcerer:{I:10, N:7},    warlock:{I:11, N:8}, magician:{I:12, N:9}, seer:{I:null, N:10} },
+});
+// Pure: classify a 2d6 total against the table -> 'immediate' | 'deferred' | 'negated'.
+function resolveSpellCast(casterClass, complexity, roll) {
+  const cell = SPELL_COMPLEXITY[complexity] && SPELL_COMPLEXITY[complexity][casterClass];
+  if (!cell) return 'negated';
+  if (cell.I != null && roll >= cell.I) return 'immediate';
+  if (cell.N != null && roll <= cell.N) return 'negated';
+  return 'deferred';
+}
+// Roll 2d6 (seeded) and resolve. Returns the dice and the outcome.
+function castSpell(casterClass, complexity, rng) {
+  const r = roll2d6(rng || state.rng);
+  return { a: r.a, b: r.b, roll: r.sum, result: resolveSpellCast(casterClass, complexity, r.sum) };
+}
 
 // --- Suggested Point Values (p.27) --------------------------------------
 // Troops are per-figure; weapon adders are per-figure; mercenaries cost half
@@ -9084,6 +9119,11 @@ renderBoard();
     console.assert(Math.abs(wHalf - wFull / 2) < 1e-6, 'figureScale: 15mm halves the footprint width');
     console.assert(unitBounds(u).pip === 6, 'figureScale 0.5 -> pip 6 (was 12)');
     state.settings.figureScale = sv; })();
+  // Spell Complexity resolver (p.33)
+  console.assert(resolveSpellCast('seer', 1, 8) === 'immediate' && resolveSpellCast('seer', 1, 6) === 'deferred' && resolveSpellCast('seer', 1, 5) === 'negated', 'spell: Seer C1 bands 8/6/5');
+  console.assert(resolveSpellCast('wizard', 1, 4) === 'immediate' && resolveSpellCast('wizard', 1, 2) === 'deferred', 'spell: Wizard C1 cannot fizzle (N dash -> low roll defers)');
+  console.assert(resolveSpellCast('seer', 6, 12) === 'deferred' && resolveSpellCast('seer', 6, 10) === 'negated', 'spell: Seer C6 never immediate (I dash)');
+  console.assert(resolveSpellCast('warlock', 2, 7) === 'immediate' && resolveSpellCast('warlock', 2, 5) === 'deferred' && resolveSpellCast('warlock', 2, 4) === 'negated', 'spell: Warlock C2 normalized (I7/N4)');
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
