@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.80 · Magic-user classes / per-class metadata (p.32) — step 1 of the wizardry build. New MAGIC_CLASS_META for all five tiers (Wizard, Sorcerer, Warlock, Magician, Seer): spells managed, spell range (null = unlimited for the Wizard), morale, point cost, and casting penalty (for Wizard-missile saves / counter-magic later; ordinary casting is already graded by SPELL_COMPLEXITY). Design choice: the four weaker tiers are NOT new unit types — they are a magicClass tag on a WIZARD-type individual, because all five fight identically in combat (2 Armored Foot / 2 Medium Horse, WIZARD row on the Fantasy Combat Table). So combat, the Fantasy Combat Table, paralysis, etc. are entirely untouched; only the magic stats key off the class. Helpers isMagicUser / magicClassOf / magicMeta / unitMorale added. Point value now returns the tier cost (Wizard 100 … Seer 50) and the info-panel Morale stat shows the tier rating (Seer 20, not the WIZARD 50). New-unit form gains a Magic class <select> (#f-magic-class) that appears only when placing a Wizard-type individual; magicClass is carried through formUnitSpec (live points), spawnUnit, edit-load, and undo/save via the unit object (older saved Wizards with no tag default to wizard, so behaviour is unchanged). node harness validates every tier’s stats + the wizard fallback + unitMorale; 3 in-file asserts. No spells wired yet — missiles next. -->
+<!-- chainmail-board.html · v0.11.81 · Wizard missiles, slice 2a: data + pure hit-result resolver (p.31); no casting UI yet (placement/aim/render is the next slice). WIZARD_MISSILES: fire ball (kind fire; circular hit area = the heavy/large catapult’s radius, CATAPULTS.heavy.hitArea, resolved at placement) and lightning bolt (kind lightning; 3/4" x 6" rectangle, head at the called point, body 6" back toward the caster). Both reach WIZARD_MISSILE_RANGE_IN = 24", direct or indirect. resolveMissileHit(targetType, missileKind, roll, casterPenalty, element) returns destroyed | saved | driven_back | routed | no_effect for one figure struck: ordinary men/creatures are destroyed outright; Hero saved 9+, Super Hero 6+, Wraith 7+, Balrog 6+, Wizard 7+ (else destroyed); Giant <5 routs off board / <9 back 1 move / 9+ no effect; Dragon always driven back; an Elemental is driven back only by the matching missile (Air & Water by fire, Earth & Fire by lightning) per ELEMENTAL_DRIVEBACK, immune otherwise (and immune until a subtype is set — the element tag arrives with the casting UI). The caster class penalty (Sorcerer 1 … Seer 4) is added to the target’s save roll, since weaker magic-users throw less deadly missiles. node harness verifies all 359 cases — every save type x roll x penalty, Giant bands, Dragon, the full elemental matrix, and ordinary-creature destruction; 7 in-file asserts. Pure logic only — no UI, no board/combat changes. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.80</title>
+<title>Chainmail — Battlefield · v0.11.81</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Magic-user classes (Wizard → Seer)</div>
+    <div class="sub">Chainmail HTML Sim · Wizard-missile hit resolver</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.80</span>
+    <span class="version-tag">v0.11.81</span>
   </div>
 
   <div class="toolbar">
@@ -637,7 +637,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.80';
+const SIM_VERSION = '0.11.81';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -938,6 +938,41 @@ function unitMorale(u) {
   if (isMagicUser(u)) return magicMeta(u).morale;
   const t = typeById(u.type);
   return t ? t.morale : '—';
+}
+
+// --- Wizard missiles (p.31) ----------------------------------------------
+// Two types, chosen before play. fire ball: a circular hit area equal to the
+// large (heavy) catapult's (radius CATAPULTS.heavy.hitArea, resolved at placement
+// time). lightning bolt: a 3/4" x 6" rectangle, head at the called point, body
+// extending 6" back toward the caster, attack value of a heavy field gun. Both
+// reach 24", direct or indirect, range called before the pattern is laid.
+const WIZARD_MISSILE_RANGE_IN = 24;
+const WIZARD_MISSILES = Object.freeze({
+  fireball:  { label: 'Fire ball',      kind: 'fire',      shape: 'circle', area: 'heavyCatapult' },
+  lightning: { label: 'Lightning bolt', kind: 'lightning', shape: 'rect', widthIn: 0.75, lengthIn: 6 },
+});
+// An elemental is driven back only by the matching missile kind, immune to the
+// other (p.31): Air & Water yield to fire, Earth & Fire yield to lightning.
+const ELEMENTAL_DRIVEBACK = Object.freeze({ air: 'fire', water: 'fire', earth: 'lightning', fire: 'lightning' });
+// Pure: result of one figure struck by a Wizard missile. missileKind is 'fire' or
+// 'lightning'; roll is a 2d6 total (only used where the table calls for a save);
+// casterPenalty is the caster class's value (Sorcerer 1 ... Seer 4) added to the
+// target's roll, since weaker magic-users throw less deadly missiles; element is the
+// elemental's subtype. Returns 'destroyed' | 'saved' | 'driven_back' | 'routed' |
+// 'no_effect'. Anything not listed (ordinary men and creatures) is destroyed.
+function resolveMissileHit(targetType, missileKind, roll, casterPenalty, element) {
+  const adj = (roll || 0) + (casterPenalty || 0);
+  switch (targetType) {
+    case 'HERO':       return adj >= 9 ? 'saved' : 'destroyed';
+    case 'SUPER_HERO': return adj >= 6 ? 'saved' : 'destroyed';
+    case 'WRAITH':     return adj >= 7 ? 'saved' : 'destroyed';
+    case 'BALROG':     return adj >= 6 ? 'saved' : 'destroyed';
+    case 'WIZARD':     return adj >= 7 ? 'saved' : 'destroyed';
+    case 'GIANT':      return adj < 5 ? 'routed' : adj < 9 ? 'driven_back' : 'no_effect';
+    case 'DRAGON':     return 'driven_back';
+    case 'ELEMENTAL':  return ELEMENTAL_DRIVEBACK[element] === missileKind ? 'driven_back' : 'no_effect';
+    default:           return 'destroyed';
+  }
 }
 
 // --- Suggested Point Values (p.27) --------------------------------------
@@ -9170,6 +9205,12 @@ renderBoard();
   console.assert(unitPointValue({ kind:'individual', type:'WIZARD' }) === 100 && unitPointValue({ kind:'individual', type:'WIZARD', magicClass:'seer' }) === 50, 'magic: Wizard 100, Seer 50 points');
   console.assert(unitMorale({ kind:'individual', type:'WIZARD', magicClass:'warlock' }) === 30, 'magic: Warlock morale 30');
   console.assert(magicMeta({ kind:'individual', type:'WIZARD', magicClass:'sorcerer' }).range === 60 && magicMeta({ kind:'individual', type:'WIZARD' }).range === null, 'magic: Sorcerer range 60, Wizard unlimited');
+  console.assert(resolveMissileHit('HERO','fire',9,0) === 'saved' && resolveMissileHit('HERO','fire',8,0) === 'destroyed', 'missile: Hero saved 9+');
+  console.assert(resolveMissileHit('HERO','fire',8,1) === 'saved', 'missile: weaker caster penalty lifts the save');
+  console.assert(resolveMissileHit('GIANT','fire',4,0) === 'routed' && resolveMissileHit('GIANT','fire',5,0) === 'driven_back' && resolveMissileHit('GIANT','fire',9,0) === 'no_effect', 'missile: Giant bands <5 / <9 / 9+');
+  console.assert(resolveMissileHit('DRAGON','lightning',12,0) === 'driven_back', 'missile: Dragon always driven back');
+  console.assert(resolveMissileHit('ELEMENTAL','fire',7,0,'air') === 'driven_back' && resolveMissileHit('ELEMENTAL','lightning',7,0,'air') === 'no_effect', 'missile: Air elemental yields to fire only');
+  console.assert(resolveMissileHit('TROLL','fire',2,0) === 'destroyed' && resolveMissileHit('HF','lightning',12,0) === 'destroyed', 'missile: ordinary creatures/men destroyed');
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
