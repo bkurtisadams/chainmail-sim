@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.79 · Spell casting / complexity resolver (p.30-33) — standalone groundwork for the wizardry subsystem; no spells wired yet. New SPELL_COMPLEXITY table holds the 2d6 thresholds {I, N} for every caster class (wizard, sorcerer, warlock, magician, seer) x spell complexity 1-6. resolveSpellCast(class, complexity, roll) is pure: roll >= I takes effect immediately, roll <= N is negated/no effect, anything between is deferred one turn. The book’s D row (delayed) is just I-1, the top of the deferred band, so it is not stored. null encodes the printed “—”: I null => immediate impossible (Seer at complexity 6, best result is deferred); N null => no fizzle band, so a low roll defers instead of failing (Wizard/Sorcerer on easy spells). Warlock at complexity 2 is normalized to I7/N4: the book prints D8/N6, putting the deferred bar above the immediate bar (a self-contradiction) and is the single cell that breaks an otherwise regular grid — confirmed misprint, corrected to the table’s own pattern. castSpell() wraps resolveSpellCast with a seeded 2d6 roll via state.rng. node harness checks all 30 cells against the rules’ regular pattern, every 2d6 total 2-12 (330 band checks), outcome-quality monotonicity, and the dash cells; 4 in-file asserts added. Pure data + logic only — no UI, no dialog, no board/combat changes; spells (missiles, the 16 effects, counter-magic) hang off this next. -->
+<!-- chainmail-board.html · v0.11.80 · Magic-user classes / per-class metadata (p.32) — step 1 of the wizardry build. New MAGIC_CLASS_META for all five tiers (Wizard, Sorcerer, Warlock, Magician, Seer): spells managed, spell range (null = unlimited for the Wizard), morale, point cost, and casting penalty (for Wizard-missile saves / counter-magic later; ordinary casting is already graded by SPELL_COMPLEXITY). Design choice: the four weaker tiers are NOT new unit types — they are a magicClass tag on a WIZARD-type individual, because all five fight identically in combat (2 Armored Foot / 2 Medium Horse, WIZARD row on the Fantasy Combat Table). So combat, the Fantasy Combat Table, paralysis, etc. are entirely untouched; only the magic stats key off the class. Helpers isMagicUser / magicClassOf / magicMeta / unitMorale added. Point value now returns the tier cost (Wizard 100 … Seer 50) and the info-panel Morale stat shows the tier rating (Seer 20, not the WIZARD 50). New-unit form gains a Magic class <select> (#f-magic-class) that appears only when placing a Wizard-type individual; magicClass is carried through formUnitSpec (live points), spawnUnit, edit-load, and undo/save via the unit object (older saved Wizards with no tag default to wizard, so behaviour is unchanged). node harness validates every tier’s stats + the wizard fallback + unitMorale; 3 in-file asserts. No spells wired yet — missiles next. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.79</title>
+<title>Chainmail — Battlefield · v0.11.80</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Spell casting / complexity resolver</div>
+    <div class="sub">Chainmail HTML Sim · Magic-user classes (Wizard → Seer)</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.79</span>
+    <span class="version-tag">v0.11.80</span>
   </div>
 
   <div class="toolbar">
@@ -366,6 +366,13 @@
           <option value="works">Works (engine)</option>
         </select></div>
         <div class="field f-troop-only"><label>Type</label><select id="f-type"></select></div>
+        <div class="field" id="f-magic-row" style="display:none"><label>Magic class</label><select id="f-magic-class">
+          <option value="wizard">Wizard</option>
+          <option value="sorcerer">Sorcerer</option>
+          <option value="warlock">Warlock</option>
+          <option value="magician">Magician</option>
+          <option value="seer">Seer</option>
+        </select></div>
         <div class="field f-mass-only"><label>Count</label><input type="number" id="f-count" class="wheel-num" value="10" min="1" max="200"></div>
         <div class="field f-mass-only"><label>Formation</label><select id="f-form">
           <option value="line">Line</option>
@@ -630,7 +637,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.79';
+const SIM_VERSION = '0.11.80';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -909,6 +916,29 @@ function castSpell(casterClass, complexity, rng) {
   const r = roll2d6(rng || state.rng);
   return { a: r.a, b: r.b, roll: r.sum, result: resolveSpellCast(casterClass, complexity, r.sum) };
 }
+// Per-class magic-user data (p.32). All five fight identically in combat (2 Armored
+// Foot / 2 Medium Horse, WIZARD row on the Fantasy Combat Table); they differ only
+// in how many spells they manage, spell range, morale, point cost, and a casting
+// penalty. The penalty applies to Wizard-missile saves and counter-magic; ordinary
+// spellcasting is already graded by SPELL_COMPLEXITY. range null = unlimited (Wizard);
+// spells: Wizard is 6-7 in the book, stored as its max. Modeled as a magicClass tag
+// on a WIZARD-type individual rather than four new types, so combat is untouched.
+const MAGIC_CLASS_META = Object.freeze({
+  wizard:   { label: 'Wizard',   spells: 7, range: null, morale: 50, point: 100, penalty: 0 },
+  sorcerer: { label: 'Sorcerer', spells: 5, range: 60,   morale: 40, point: 90,  penalty: 1 },
+  warlock:  { label: 'Warlock',  spells: 4, range: 48,   morale: 30, point: 80,  penalty: 2 },
+  magician: { label: 'Magician', spells: 3, range: 36,   morale: 25, point: 70,  penalty: 3 },
+  seer:     { label: 'Seer',     spells: 1, range: 24,   morale: 20, point: 50,  penalty: 4 },
+});
+const isMagicUser  = (u) => !!u && u.kind === 'individual' && u.type === 'WIZARD';
+const magicClassOf = (u) => (isMagicUser(u) && MAGIC_CLASS_META[u.magicClass]) ? u.magicClass : 'wizard';
+const magicMeta    = (u) => MAGIC_CLASS_META[magicClassOf(u)];
+// A unit's morale rating, honouring the magic-user tier (a Seer is 20, not the WIZARD 50).
+function unitMorale(u) {
+  if (isMagicUser(u)) return magicMeta(u).morale;
+  const t = typeById(u.type);
+  return t ? t.morale : '—';
+}
 
 // --- Suggested Point Values (p.27) --------------------------------------
 // Troops are per-figure; weapon adders are per-figure; mercenaries cost half
@@ -946,6 +976,7 @@ function unitPointValue(u, countOverride) {
   if (!u) return 0;
   if (u.kind === 'works') return WORKS_PV[u.worksType] || 0;
   if (u.kind === 'individual') {
+    if (isMagicUser(u)) return magicMeta(u).point;
     const ft = fantasticTypeById(u.type);
     if (ft) return typeof ft.point === 'number' ? ft.point : 0;
     const racePV = (u.type !== 'MAN' && u.type !== 'BERSERKER') ? TROOP_PV[u.type] : undefined;
@@ -3126,6 +3157,13 @@ function syncKindFields() {
     fillSelect('#f-type', TYPES, t => `${t.name} (${t.cls})`, 'HF');
   }
   syncPikeRow();
+  syncMagicRow();
+}
+// The magic-class picker is only meaningful for a Wizard-type individual.
+function syncMagicRow() {
+  const show = $('#f-kind').value === 'individual' && $('#f-type').value === 'WIZARD';
+  const row = $('#f-magic-row');
+  if (row) row.style.display = show ? '' : 'none';
 }
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
@@ -3137,7 +3175,8 @@ function formUnitSpec() {
   const merc = $('#f-merc') ? $('#f-merc').checked : false;
   if (kind === 'works') return { kind: 'works', worksType: $('#f-works-type').value };
   if (kind === 'individual') return { kind: 'individual', type: $('#f-type').value,
-    armor: $('#f-armor').value, mounted: $('#f-mounted').checked, mercenary: merc };
+    armor: $('#f-armor').value, mounted: $('#f-mounted').checked, mercenary: merc,
+    magicClass: $('#f-type').value === 'WIZARD' ? ($('#f-magic-class').value || 'wizard') : undefined };
   const type = $('#f-type').value;
   const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
   return { kind: 'mass', type, weapon: $('#f-weapon').value || null,
@@ -3195,6 +3234,7 @@ function syncPikeRow() {
   $('#f-pike').checked = (type === 'SP');  // SP defaults on; HF/AF default off
 }
 $('#f-type').addEventListener('change', syncPikeRow);
+$('#f-type').addEventListener('change', syncMagicRow);
 syncPikeRow();
 
 function renderBoard() {
@@ -4001,7 +4041,7 @@ function updateSidebar() {
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
-      `<div class="stat"><span class="k">Morale</span><span class="v">${T.morale}</span></div>` +
+      `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
       `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : (roadBonusBlockedByFacing(u) ? ` <small style="color:var(--ink-soft)">(on road · face along it for +${roadBonusBlockedByFacing(u)})</small>` : '')} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
@@ -7241,7 +7281,8 @@ function spawnUnit() {
     u = { ...common, count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false,
       formation: null, customCols: null, spacing: 'close', polearm: false,
       meleeWeapon, armor, mounted, leader, prone: false, parry: false,
-      hp: maxHp, maxHp };
+      hp: maxHp, maxHp,
+      magicClass: type === 'WIZARD' ? ($('#f-magic-class').value || 'wizard') : undefined };
   } else if (kind === 'works') {
     const worksType = $('#f-works-type').value;
     const wt = WORKS_TYPES[worksType];
@@ -7301,6 +7342,8 @@ function loadUnitIntoPanel(u) {
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
+    $('#f-magic-class').value = u.magicClass || 'wizard';
+    syncMagicRow();
     $('#f-mtm-weapon').value = u.meleeWeapon || 'sword';
     $('#f-armor').value = u.armor || 'chain_sh';
     $('#f-mounted').checked = !!u.mounted;
@@ -9124,6 +9167,9 @@ renderBoard();
   console.assert(resolveSpellCast('wizard', 1, 4) === 'immediate' && resolveSpellCast('wizard', 1, 2) === 'deferred', 'spell: Wizard C1 cannot fizzle (N dash -> low roll defers)');
   console.assert(resolveSpellCast('seer', 6, 12) === 'deferred' && resolveSpellCast('seer', 6, 10) === 'negated', 'spell: Seer C6 never immediate (I dash)');
   console.assert(resolveSpellCast('warlock', 2, 7) === 'immediate' && resolveSpellCast('warlock', 2, 5) === 'deferred' && resolveSpellCast('warlock', 2, 4) === 'negated', 'spell: Warlock C2 normalized (I7/N4)');
+  console.assert(unitPointValue({ kind:'individual', type:'WIZARD' }) === 100 && unitPointValue({ kind:'individual', type:'WIZARD', magicClass:'seer' }) === 50, 'magic: Wizard 100, Seer 50 points');
+  console.assert(unitMorale({ kind:'individual', type:'WIZARD', magicClass:'warlock' }) === 30, 'magic: Warlock morale 30');
+  console.assert(magicMeta({ kind:'individual', type:'WIZARD', magicClass:'sorcerer' }).range === 60 && magicMeta({ kind:'individual', type:'WIZARD' }).range === null, 'magic: Sorcerer range 60, Wizard unlimited');
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
 })();
