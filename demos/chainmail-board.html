@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.89 · Per-unit Alignment flag (Good / Neutral / Evil). Replaces the hardcoded EVIL_TYPES set with an editable per-unit u.alignment: a new Alignment dropdown beside Side (all kinds) that defaults from type via defaultAlignment() but is freely overridable, so an anti-hero is simply a Hero set Evil and a Wizard / Dragon / Giant can be either. EVIL_DEFAULT (Orc, Goblin, Kobold, Wraith, Wight, Lycanthrope, Troll, Balrog, Giant, Dragon) seeds the default — Heroes/Super-Heroes default Good, everything else (men, elves, dwarves, magic-users, elementals, ents…) Neutral. alignmentOf(u) returns the explicit value when set, else the type default (junk values fall back); isEvil(u) now reads alignmentOf, so Protection from Evil keeps out whatever the player has marked Evil. The picker resets to the type default on a type/kind change (syncAlignmentDefault) and restores the saved value on edit-load; alignment persists through spawn, edit, undo, and save. NOTE: Kobold is included with Goblin as default-Evil (goblin-kin) though it wasn’t on the list — flip it in EVIL_DEFAULT if you’d rather it default Neutral. node harness: defaultAlignment over the evil set / heroes / neutral types, per-unit overrides both ways, alignmentOf precedence + bad-value fallback; 3 in-file asserts. -->
+<!-- chainmail-board.html · v0.11.90 · Alignment re-based to the Chainmail Fantasy “General Line-Up”: Law / Neutral / Chaos (supersedes the v0.11.89 Good/Neutral/Evil vocabulary). Per-unit u.alignment via the Alignment dropdown beside Side; defaultAlignment() seeds it from the table — LAW_DEFAULT (Hobbit, Dwarf, Gnome, Hero, Super-Hero, Ent, Elf, Sprite), CHAOS_DEFAULT (Goblin, Kobold, Orc, Wraith, Wight, Troll, Balrog, Dragon, Ogre), and Neutral for everything else, including the “appears in two lists” figures Wizards / Lycanthropes / Giants (player picks — dice for a side, ties stay neutral) plus Rocs, Elementals, and men. An anti-hero is just a Hero set Chaos. isChaos(u) (was isEvil) reads alignmentOf, so Protection from Evil keeps out Chaos. alignmentOf normalizes the older flag (good→law, evil→chaos) so saved units still load, and the edit panel restores via alignmentOf; the picker resets to the type default on a type/kind change. Note: Kobold is grouped with Goblin as default-Chaos (goblin-kin); Giants default Neutral per their two-list asterisk rather than Chaos — flip either in the sets if you prefer. node harness: defaultAlignment over all three columns, two-list figures + men Neutral, per-unit overrides, legacy good/evil + bad-value normalization; 4 in-file asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.89</title>
+<title>Chainmail — Battlefield · v0.11.90</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Per-unit alignment flag</div>
+    <div class="sub">Chainmail HTML Sim · Law / Neutral / Chaos alignment</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.89</span>
+    <span class="version-tag">v0.11.90</span>
   </div>
 
   <div class="toolbar">
@@ -366,9 +366,9 @@
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
         <div class="field"><label>Alignment</label><select id="f-alignment">
-          <option value="good">Good</option>
+          <option value="law">Law</option>
           <option value="neutral">Neutral</option>
-          <option value="evil">Evil</option>
+          <option value="chaos">Chaos</option>
         </select></div>
         <div class="field"><label>Kind</label><select id="f-kind">
           <option value="mass">Mass</option>
@@ -657,7 +657,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.89';
+const SIM_VERSION = '0.11.90';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1084,17 +1084,23 @@ function canActInDark(u) {
 // that keeps evil creatures out. EVIL_TYPES is an adjudication call — the monstrous /
 // chaos / undead types; tune to taste.
 const PROTECTION_RADIUS_IN = 6;
-// Types that default to Evil; anything else defaults Good (Heroes) or Neutral.
-// Alignment is a per-unit flag (u.alignment), so an anti-hero is a Hero set Evil,
-// and a Wizard / Dragon / Giant can be either — this is just the starting value.
-const EVIL_DEFAULT = new Set(['ORC', 'GOBLIN', 'KOBOLD', 'WRAITH', 'WIGHT', 'BALROG', 'LYCAN', 'TROLL', 'GIANT', 'DRAGON']);
+// Alignment follows the Chainmail Fantasy "General Line-Up" (Law / Neutral / Chaos).
+// A per-unit flag (u.alignment); these sets only seed a type's default. An anti-hero
+// is a Hero set Chaos; the "appears in two lists" figures (Wizards, Lycanthropes,
+// Giants) default Neutral so the player picks (dice for which side, per the rules).
+// Rocs, Elementals, men, and anything unlisted default Neutral. Protection from Evil
+// keeps out Chaos.
+const LAW_DEFAULT   = new Set(['HOBBIT', 'DWARF', 'GNOME', 'HERO', 'SUPER_HERO', 'ENT', 'ELF', 'SPRITE']);
+const CHAOS_DEFAULT = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'WRAITH', 'WIGHT', 'TROLL', 'BALROG', 'DRAGON', 'OGRE']);
 function defaultAlignment(type) {
-  if (EVIL_DEFAULT.has(type)) return 'evil';
-  if (type === 'HERO' || type === 'SUPER_HERO') return 'good';
+  if (CHAOS_DEFAULT.has(type)) return 'chaos';
+  if (LAW_DEFAULT.has(type)) return 'law';
   return 'neutral';
 }
-const alignmentOf = (u) => (u && ['good', 'neutral', 'evil'].includes(u.alignment)) ? u.alignment : defaultAlignment(u && u.type);
-function isEvil(u) { return !!u && alignmentOf(u) === 'evil'; }
+// Tolerate the older good/neutral/evil flag (good→law, evil→chaos) on saved units.
+const ALIGN_NORM = { law: 'law', neutral: 'neutral', chaos: 'chaos', good: 'law', evil: 'chaos' };
+const alignmentOf = (u) => ALIGN_NORM[u && u.alignment] || defaultAlignment(u && u.type);
+function isChaos(u) { return !!u && alignmentOf(u) === 'chaos'; }
 function protectionCircle() {
   maintainSpells();
   const pr = state.protection; if (!pr) return null;
@@ -1104,7 +1110,7 @@ function protectionCircle() {
 // Fraction of an evil unit's move clear of the ward (mirrors riverBlockScale): halts
 // it at the boundary; a unit already inside is not trapped; non-evil units pass.
 function protectionBlockScale(ox, oy, dx, dy, u) {
-  if (!isEvil(u)) return 1;
+  if (!isChaos(u)) return 1;
   const circ = protectionCircle(); if (!circ) return 1;
   const inside = (x, y) => Math.hypot(x - circ.x, y - circ.y) <= circ.r;
   if (inside(ox, oy)) return 1;
@@ -1280,7 +1286,7 @@ function castNamedSpell(spellKey) {
       d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
       body += `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
     }
-    else if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a 12″ ward rings the caster — evil creatures are kept out</div>`; }
+    else if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a 12″ ward rings the caster — Chaos creatures are kept out</div>`; }
   } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
   appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
@@ -7810,7 +7816,7 @@ function loadUnitIntoPanel(u) {
   $('#f-merc').checked = !!u.mercenary;
   $('#f-kind').value = u.kind;
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
-  $('#f-alignment').value = u.alignment || defaultAlignment(u.type);
+  $('#f-alignment').value = alignmentOf(u);
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
@@ -9671,9 +9677,10 @@ renderBoard();
     const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
     console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
-  console.assert(isEvil({ type:'ORC' }) && isEvil({ type:'GIANT' }) && isEvil({ type:'DRAGON' }) && isEvil({ type:'WRAITH' }), 'align: orc/giant/dragon/wraith default evil');
-  console.assert(!isEvil({ type:'HERO' }) && !isEvil({ type:'WIZARD' }) && !isEvil({ type:'HF' }) && !isEvil({ type:'ELF' }), 'align: hero/wizard/men/elf not evil by default');
-  console.assert(isEvil({ type:'HERO', alignment:'evil' }) && !isEvil({ type:'ORC', alignment:'good' }) && defaultAlignment('HERO') === 'good', 'align: per-unit flag overrides type default');
+  console.assert(defaultAlignment('ORC') === 'chaos' && defaultAlignment('DRAGON') === 'chaos' && defaultAlignment('WRAITH') === 'chaos', 'align: orc/dragon/wraith default Chaos');
+  console.assert(defaultAlignment('HERO') === 'law' && defaultAlignment('ELF') === 'law' && defaultAlignment('DWARF') === 'law', 'align: hero/elf/dwarf default Law');
+  console.assert(defaultAlignment('WIZARD') === 'neutral' && defaultAlignment('GIANT') === 'neutral' && defaultAlignment('LYCAN') === 'neutral' && defaultAlignment('HF') === 'neutral', 'align: two-list figures + men default Neutral');
+  console.assert(isChaos({ type:'HERO', alignment:'chaos' }) && !isChaos({ type:'ORC', alignment:'law' }) && isChaos({ type:'ORC', alignment:'evil' }), 'align: per-unit override + legacy evil→chaos');
   (() => { const sv = state.protection, su = state.units;
     state.units = [{ id: -2, type:'WIZARD', x:300, y:240, destroyed:false, movedThisTurn:0 }];
     state.protection = { casterId: -2, side:'A' };
