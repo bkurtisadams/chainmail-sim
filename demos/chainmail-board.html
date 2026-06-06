@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.77 · Figure scale + default unit size (p.8). New Settings “Figures & scale” section. figureScale (default 1 = 30mm; 0.83/0.67/0.5/0.33 = 25/20/15/10mm) is a single multiplier applied inside unitBounds to pip, gap, pad and the drawn figure, so the WHOLE unit footprint shrinks coherently — markers and the proximity basis together. Because contact / missile / charge reach are measured edge-to-edge off that footprint, they tighten with the figures (faithful to smaller castings’ smaller bases); inch-based movement and weapon ranges are untouched since PX_PER_INCH stays 24. Fortifications and terrain are unchanged, so smaller figures finally sit in proportion to the works (the reason for the feature). 15mm = half the linear size = a quarter of the footprint area. defaultUnitFigures (default 10, was effectively 20) pre-fills the new-unit Count via applyDefaultUnitSize(), called at startup, on cancelEdit, and when the setting changes; never clobbers a unit loaded for editing. At 1 figure : 20 men the default is now ~200 men rather than 400. The figure-scale <select> has its own change listener (parseFloat → figureScale, save, renderBoard) since the integer data-setting-num path can’t carry a fractional multiplier; syncSettingsCheckboxes hydrates it. node --check + an isolation harness verify unitBounds halves footprint width/height and pip at 15mm for close and open order and shrinks individuals; 2 in-file asserts added. No combat math changed beyond the intended footprint scaling. -->
+<!-- chainmail-board.html · v0.11.78 · Stop the phase area shifting when you advance (the v0.11.76 decouple fixed the action slot but two width-changers remained). (1) The status tag (#phase) was on the same flex row as the ◀ stepper ▶ and the undo/redo/clear buttons; its text swings from "Turn 1 · Side A" to "Initiative — A 5 vs B 3: A wins → A moves first", so its changing width shoved the controls sideways and, when long, wrapped the row and pushed the action button down. The tag now lives on its own line (new .tn-info wrapper, flex-basis 100%) so its width is isolated and the control rows never move. (2) The stepper itself changed width as phases advanced — the current step was bold (wider) and done steps gained a ✓ prefix (wider, accumulating), nudging the ▶ and trailing buttons. Now every step is constant width: the bold is gone (current step shown by ink colour + a side-colour underline only), the 2px underline is reserved as transparent on ALL steps (no height shift), and the ✓ sits in a fixed 11px .mk slot present on every step (done shows it, others blank), so the rail width is identical in every phase. Net: tag, stepper, ◀▶, the fixed action slot and End turn all hold their exact positions across the whole turn; only the situational dock (bottom line) and the tag text vary. CSS + render-markup only; no combat/gating/logic changes. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.77</title>
+<title>Chainmail — Battlefield · v0.11.78</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -60,13 +60,15 @@
   /* Passive tracker: plain stepper text — never a button. The highlight moves as
      phases advance; the controls below stay put. */
   .toolbar .phase-rail { flex-wrap: wrap; }
-  .phase-rail .pstep { font-size: 11px; letter-spacing: 0.3px; padding: 1px 1px 2px; white-space: nowrap; }
+  .phase-rail .pstep { font-size: 11px; letter-spacing: 0.3px; padding: 1px 1px; white-space: nowrap; border-bottom: 2px solid transparent; }
+  .phase-rail .pstep .mk { display: inline-block; width: 11px; text-align: center; }
   .phase-rail .pstep.todo { color: #c2b48f; }
   .phase-rail .pstep.done { color: var(--ink-soft); }
-  .phase-rail .pstep.now { color: var(--ink); font-weight: 600; border-bottom: 2px solid #8a6d2e; }
+  .phase-rail .pstep.now { color: var(--ink); border-bottom-color: #8a6d2e; }
   .phase-rail .sep { color: #cdbf9b; font-size: 11px; margin: 0 5px; }
   /* Decoupled controls on their own rows: a fixed primary-action slot and a
      reserved situational line, so nothing jumps location as phases advance. */
+  .toolbar .tn-info { display: flex; flex-basis: 100%; margin-bottom: 5px; }
   .toolbar .tn-track { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; flex-basis: 100%; }
   .toolbar .tn-act { display: flex; align-items: center; gap: 8px; flex-basis: 100%; margin-top: 6px; }
   .toolbar .tn-act #btn-end-round { margin-left: auto; }
@@ -277,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Figure scale + default unit size</div>
+    <div class="sub">Chainmail HTML Sim · Phase area holds still on advance</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.77</span>
+    <span class="version-tag">v0.11.78</span>
   </div>
 
   <div class="toolbar">
@@ -302,8 +304,8 @@
       <button id="btn-reset" class="danger">Reset board</button>
     </div>
     <div class="tb-row tb-now">
+      <div class="tn-info"><span class="phase-tag" id="phase">Turn 1 · Side A</span></div>
       <div class="tn-track">
-        <span class="phase-tag" id="phase">Turn 1 · Side A</span>
         <span class="phase-nav">
           <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
           <span class="phase-rail" id="phase-rail"></span>
@@ -628,7 +630,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.77';
+const SIM_VERSION = '0.11.78';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -7734,8 +7736,9 @@ function renderTurnUI() {
     [...TURN_ACTION_BTNS, 'btn-begin-battle'].forEach(id => bank.appendChild($('#' + id)));
     const railLbls = ['Setup', ...PHASE_RAIL];
     $('#phase-rail').innerHTML = railLbls.map((lbl, k) => {
-      if (k === 0) return `<span class="pstep now">${lbl}</span>`;
-      return `<span class="sep">›</span><span class="pstep todo">${lbl}</span>`;
+      const sep = k > 0 ? '<span class="sep">›</span>' : '';
+      const cls = k === 0 ? 'now' : 'todo';
+      return `${sep}<span class="pstep ${cls}"><span class="mk"></span>${lbl}</span>`;
     }).join('');
     const slot = $('#action-slot');
     slot.innerHTML = '';
@@ -7793,9 +7796,10 @@ function renderTurnUI() {
   const accent = mover ? (mover === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)') : '#8a6d2e';
   $('#phase-rail').innerHTML = PHASE_RAIL.map((lbl, k) => {
     const sep = k > 0 ? '<span class="sep">›</span>' : '';
-    if (k < state.phaseIdx) return `${sep}<span class="pstep done">✓ ${lbl}</span>`;
-    if (k === state.phaseIdx) return `${sep}<span class="pstep now" style="border-bottom-color:${accent}">${lbl}</span>`;
-    return `${sep}<span class="pstep todo">${lbl}</span>`;
+    const cls = k < state.phaseIdx ? 'done' : k === state.phaseIdx ? 'now' : 'todo';
+    const mk = k < state.phaseIdx ? '✓' : '';
+    const st = k === state.phaseIdx ? ` style="border-bottom-color:${accent}"` : '';
+    return `${sep}<span class="pstep ${cls}"${st}><span class="mk">${mk}</span>${lbl}</span>`;
   }).join('');
   const primary = primaryActionId();
   const inCell = ['btn-roll-init', 'btn-missile', 'btn-melee'].includes(primary) ? primary : null;
