@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.85 · Spells, slice 4a: the casting core + the two Complexity-1 spells (p.31-32). SPELLS catalogs all 16 with their Complexity (only Darkness & Wizard Light done; the rest are listed for the picker/roadmap). castNamedSpell routes every cast through the v0.11.79 complexity resolver (resolveSpellCast by class vs Complexity): immediate applies the effect, deferred takes no effect this turn (RAW delays it — pending-cast queue is a TODO), negated fizzles; any attempt occupies the caster’s magical action (acted.fired). A caster must be stationary, unoccupied, and unsuppressed to cast (spellCastState; p.32). Darkness: a global gloom that ramps over three turns — darknessLevel() 0 (cast turn) → 1 semi → 2 full — rendered as a board-wide veil (renderDarkness) that lifts inside an active Wizard Light. Wizard Light: a 24″ lit radius from its caster (litByWizardLight), drawn as a mask cut-out + dashed ring. Both persist only while the caster lives and stays put (maintainSpells clears on death/missing/movement), and counter-magic success now DISPELS the target Wizard’s active Darkness/Wizard Light (item-3 hook). Darkvision data: SEES_IN_DARK (Goblin/Kobold/Orc) + seesInDark() (also Wizards, p.30) — wired but the full-dark combat gate (no fighting without darkvision) is the next slice. New dock actions “Cast darkness” / “Cast Wizard light” in the Missile phase. node harness: catalog integrity, darkvision, gloom ramp/cap, maintenance clears, 24″ light edge; 3 in-file asserts. Faithful omissions: deferred-cast delay, end-on-attack reverse fade (ends on death/counter/move instead), spell-count-per-class cap. -->
+<!-- chainmail-board.html · v0.11.86 · Spells, slice 4b: the move-rate pair Haste & Slowness (both Complexity 3, p.32) + a scalable spell picker. Haste: +50% move for 3 turns on a friendly unit; Slowness: ½ move for 2 turns on an enemy unit — each is a timed u.moveSpell = { kind, untilTurn } applied to the targeted unit, read by moveSpellFactor() (×1.5 / ×0.5 / ×1) which now multiplies moveAllowanceOf(); fixed-duration, so no caster concentration needed once cast. Capped at “up to 20 figures” (spellTargetOk: friendly≤ 20 for Haste, enemy≤ 20 for Slowness, SPELL_TARGET map). The two per-spell buttons are replaced by a dock spell PICKER — a #dock-spell dropdown (populateSpellPicker fills it from SPELLS where done) + one “Cast spell” button — which scales as more of the 16 land; darkness/light now cast through the same picker. Casting still routes through resolveSpellCast (class vs Complexity) and a stationary/unoccupied/unsuppressed caster (spellCastState); the button greys out with a reason (moved / occupied / suppressed / wrong-or-missing target). Faithful timing note: spells are cast in the Missile phase (after movement), so a move-rate spell takes effect from the following turn; the >20-figure split and the RAW deferred-cast delay remain simplifications. node harness: moveSpellFactor (haste/slow/expired/none + HF 13.5″/4.5″) and spellTargetOk (side/≤20/works/no-target); 3 in-file asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.85</title>
+<title>Chainmail — Battlefield · v0.11.86</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Spells — Darkness &amp; Wizard Light</div>
+    <div class="sub">Chainmail HTML Sim · Spells — Haste, Slowness &amp; a spell picker</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.85</span>
+    <span class="version-tag">v0.11.86</span>
   </div>
 
   <div class="toolbar">
@@ -334,8 +334,8 @@
         <button id="btn-wizard-missile" class="secondary" disabled hidden>Throw fire ball</button>
         <button id="btn-missile-type" class="secondary" disabled hidden>Missile: fire ball</button>
         <button id="btn-counter-magic" class="secondary" disabled hidden>Counter-magic</button>
-        <button id="btn-cast-darkness" class="secondary" disabled hidden>Cast darkness</button>
-        <button id="btn-cast-light" class="secondary" disabled hidden>Cast Wizard light</button>
+        <select id="dock-spell" class="secondary" disabled hidden></select>
+        <button id="btn-cast-spell" class="secondary" disabled hidden>Cast spell</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
         <button id="btn-escalade" disabled hidden>Escalade</button>
@@ -652,7 +652,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.85';
+const SIM_VERSION = '0.11.86';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -857,7 +857,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Miss
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -1016,8 +1016,8 @@ const SPELLS = Object.freeze([
   { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: false },
   { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: false },
   { key: 'levitate',    name: 'Levitate',              complexity: 2, done: false },
-  { key: 'slowness',    name: 'Slowness',              complexity: 3, done: false },
-  { key: 'haste',       name: 'Haste',                 complexity: 3, done: false },
+  { key: 'slowness',    name: 'Slowness',              complexity: 3, done: true  },
+  { key: 'haste',       name: 'Haste',                 complexity: 3, done: true  },
   { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: false },
   { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
   { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
@@ -1051,6 +1051,23 @@ function litByWizardLight(x, y) {
   const wl = state.wizardLight; if (!wl) return false;
   const c = state.units.find(u => u.id === wl.casterId); if (!c) return false;
   return Math.hypot(x - c.x, y - c.y) <= inchesToPx(WIZARD_LIGHT_RANGE_IN);
+}
+// Haste/Slowness (p.32): a timed move-rate change on one unit — u.moveSpell =
+// { kind:'haste'|'slow', untilTurn }. Haste ×1.5 (3 turns), Slowness ×0.5 (2 turns).
+// Fixed-duration, so it needs no maintenance once cast.
+function moveSpellFactor(u) {
+  const ms = u && u.moveSpell;
+  if (!ms || state.turn > ms.untilTurn) return 1;
+  return ms.kind === 'haste' ? 1.5 : ms.kind === 'slow' ? 0.5 : 1;
+}
+// Side a spell's target must be on (absent = no target needed).
+const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy' });
+function spellTargetOk(spell, a, d) {
+  const need = SPELL_TARGET[spell.key]; if (!need) return true;
+  if (!a || !d || d.destroyed || d.kind === 'works') return false;
+  if (need === 'friend' && d.side !== a.side) return false;
+  if (need === 'enemy' && d.side === a.side) return false;
+  return (d.count || 1) <= 20;   // "up to 20 figures" (p.32)
 }
 // Count a unit's figures under the lightning bolt: a rotated rectangle whose head is
 // at (hx,hy) with (ux,uy) the unit vector along the body (head -> caster), lengthPx
@@ -1198,8 +1215,10 @@ function spellCastState(a) {
 function castNamedSpell(spellKey) {
   if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
   const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
   const st = spellCastState(a), spell = SPELL_BY_KEY[spellKey];
   if (!st || !st.ok || !spell || !spell.done) return;
+  if (SPELL_TARGET[spellKey] && !spellTargetOk(spell, a, d)) return;
   pushUndo('cast-spell');
   const roll = roll2d6(state.rng).sum, res = resolveSpellCast(magicClassOf(a), spell.complexity, roll);
   a.acted.fired = true;
@@ -1207,10 +1226,19 @@ function castNamedSpell(spellKey) {
   if (res === 'immediate') {
     if (spellKey === 'darkness') { state.darkness = { casterId: a.id, side: a.side, castTurn: state.turn }; body += `<div class="verdict v-rout">gloom gathers over the field — full darkness in two turns</div>`; }
     else if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
+    else if (spellKey === 'haste' || spellKey === 'slowness') {
+      const dur = spellKey === 'haste' ? 3 : 2;
+      d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
+      body += `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
+    }
   } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
   appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
   renderBoard();
+}
+function populateSpellPicker() {
+  const sel = $('#dock-spell'); if (!sel) return;
+  sel.innerHTML = SPELLS.filter(sp => sp.done).map(sp => `<option value="${sp.key}">${sp.name}</option>`).join('');
 }
 
 // --- Suggested Point Values (p.27) --------------------------------------
@@ -2545,7 +2573,7 @@ function roadBonusBlockedByFacing(u) {
   return (onRoadAt(x, y) && !roadAlignedAt(u, x, y)) ? b : 0;
 }
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : moveSpellFactor(u) * (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -4937,18 +4965,23 @@ function updateButtons() {
       `Counter ${d.side} ${magicMeta(d).label}’s magic — needs ${cm.target}+ (2d6, ${cm.role}); success suppresses their magic this turn and fully occupies this Wizard (p.31)`;
   }
   const scs = spellCastState(a);
-  for (const [id, key] of [['btn-cast-darkness', 'darkness'], ['btn-cast-light', 'wizardLight']]) {
-    const b = $('#' + id); if (!b) continue;
-    const showSp = !!(a && isMagicUser(a));
-    const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
-    b.hidden = !showSp;
-    b.disabled = !(scs && scs.ok && missilePhaseOk);
-    b.title = !showSp ? '' :
+  const spellSel = $('#dock-spell'), castBtn = $('#btn-cast-spell');
+  const showSp = !!(a && isMagicUser(a));
+  const spMissileOk = !state.settings.enforcePhases || phaseId === 'missile';
+  const curSpell = spellSel ? spellSel.value : '';
+  const needTgt = SPELL_TARGET[curSpell] || null;
+  const tgtOk = !needTgt || (a && spellTargetOk(SPELL_BY_KEY[curSpell] || {}, a, d));
+  if (spellSel) { spellSel.hidden = !showSp; spellSel.disabled = !showSp; }
+  if (castBtn) {
+    castBtn.hidden = !showSp;
+    castBtn.disabled = !(scs && scs.ok && spMissileOk && tgtOk);
+    castBtn.title = !showSp ? '' :
       scs.moved ? 'A Wizard must be stationary to cast (p.32)' :
       scs.occupied ? 'This Wizard has already used its magic this turn' :
       scs.suppressed ? 'This Wizard’s magic is suppressed this turn' :
-      !missilePhaseOk ? 'Cast in the Missile phase' :
-      `Cast ${SPELL_BY_KEY[key].name} (Complexity ${SPELL_BY_KEY[key].complexity}) — resolved vs your class (p.31)`;
+      !spMissileOk ? 'Cast in the Missile phase' :
+      !tgtOk ? (needTgt === 'friend' ? 'Target a friendly unit of ≤20 figures (shift-click)' : 'Target an enemy unit of ≤20 figures (shift-click)') :
+      `Cast ${SPELL_BY_KEY[curSpell] ? SPELL_BY_KEY[curSpell].name : ''} (Complexity ${SPELL_BY_KEY[curSpell] ? SPELL_BY_KEY[curSpell].complexity : '?'}) — resolved vs your class (p.31)`;
   }
   const rb = ramBatterState(a, d);
   const rbBtn = $('#btn-batter-ram');
@@ -8251,10 +8284,10 @@ function renderTurnUI() {
   const dock = $('#phase-dock');
   let dockIds = enf
     ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light']
+      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell']
       : ph.id === 'melee' ? ['btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
+    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
   if (ph.id === 'initiative' && state.initiativeRoll) dockIds = dockIds.concat('btn-elect-order');
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
@@ -8398,8 +8431,8 @@ $('#btn-wizard-missile').addEventListener('click', () => { resolveWizardMissile(
 $('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a) { a.cannonLong = !a.cannonLong; renderTurnUI(); } });
 $('#btn-missile-type').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a && isMagicUser(a)) { a.missileType = a.missileType === 'lightning' ? 'fireball' : 'lightning'; renderTurnUI(); } });
 $('#btn-counter-magic').addEventListener('click', () => { resolveCounterMagic(); renderTurnUI(); });
-$('#btn-cast-darkness').addEventListener('click', () => { castNamedSpell('darkness'); renderTurnUI(); });
-$('#btn-cast-light').addEventListener('click', () => { castNamedSpell('wizardLight'); renderTurnUI(); });
+$('#dock-spell').addEventListener('change', () => renderTurnUI());
+$('#btn-cast-spell').addEventListener('click', () => { castNamedSpell($('#dock-spell').value); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
@@ -8534,6 +8567,7 @@ state.showGrid = state.settings.gridOnByDefault;
 $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 syncMeasureButton();
 syncUndoButtons();
+populateSpellPicker();   // fill the dock spell dropdown with implemented spells
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
@@ -9552,6 +9586,8 @@ renderBoard();
   console.assert(counterMagicTarget(2,1).target === 8 && counterMagicTarget(1,1).target === 7 && counterMagicTarget(1,1).role === 'equal', 'counter: gap 1 -> 8, equal -> 7');
   console.assert(SPELLS.length === 16 && SPELL_BY_KEY.darkness.complexity === 1 && SPELL_BY_KEY.wizardLight.complexity === 1, 'spells: catalog of 16, darkness/light are C1');
   console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins & wizards see in dark, heavy foot do not');
+  console.assert(SPELL_BY_KEY.haste.done && SPELL_BY_KEY.slowness.done && SPELL_BY_KEY.haste.complexity === 3, 'spells: haste/slowness implemented at C3');
+  console.assert(moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn } }) === 1.5 && moveSpellFactor({ moveSpell:{ kind:'slow', untilTurn: state.turn } }) === 0.5 && moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn - 1 } }) === 1 && moveSpellFactor({}) === 1, 'spells: haste 1.5 / slow 0.5 / expired & none 1');
   (() => { const ind = { kind:'individual', type:'HERO', x:300, y:240 };
     const on = figuresUnderRect(ind, 300, 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
     const off = figuresUnderRect(ind, 300 + inchesToPx(10), 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
