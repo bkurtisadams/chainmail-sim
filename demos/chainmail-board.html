@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.83 · Wizard missile UX: a “Missile: fire ball / lightning” toggle now sits on the situational (dock) row beside the throw button, mirroring the cannon’s “Shot: short/long” — click it to flip the selected Wizard’s missile between the fire ball (circular area) and the lightning bolt (¾″×6″ line) live, without re-editing the unit (btn-missile-type, shown for any magic-user in the Missile phase). The throw button is relabelled “Throw fire ball / Throw lightning bolt” so the action verb is distinct from the selector. Missile type is still also settable on the unit form (Missile field) and persists through spawn, edit-load, undo, and save; the toggle just makes it reachable from where you cast. No rules/geometry change — lightning is still resolved as the rectangular figuresUnderRect line and rendered as the rotated polygon, fire ball as the circle (slice 2b). UI-only; node --check + brace balance verified. -->
+<!-- chainmail-board.html · v0.11.85 · Spells, slice 4a: the casting core + the two Complexity-1 spells (p.31-32). SPELLS catalogs all 16 with their Complexity (only Darkness & Wizard Light done; the rest are listed for the picker/roadmap). castNamedSpell routes every cast through the v0.11.79 complexity resolver (resolveSpellCast by class vs Complexity): immediate applies the effect, deferred takes no effect this turn (RAW delays it — pending-cast queue is a TODO), negated fizzles; any attempt occupies the caster’s magical action (acted.fired). A caster must be stationary, unoccupied, and unsuppressed to cast (spellCastState; p.32). Darkness: a global gloom that ramps over three turns — darknessLevel() 0 (cast turn) → 1 semi → 2 full — rendered as a board-wide veil (renderDarkness) that lifts inside an active Wizard Light. Wizard Light: a 24″ lit radius from its caster (litByWizardLight), drawn as a mask cut-out + dashed ring. Both persist only while the caster lives and stays put (maintainSpells clears on death/missing/movement), and counter-magic success now DISPELS the target Wizard’s active Darkness/Wizard Light (item-3 hook). Darkvision data: SEES_IN_DARK (Goblin/Kobold/Orc) + seesInDark() (also Wizards, p.30) — wired but the full-dark combat gate (no fighting without darkvision) is the next slice. New dock actions “Cast darkness” / “Cast Wizard light” in the Missile phase. node harness: catalog integrity, darkvision, gloom ramp/cap, maintenance clears, 24″ light edge; 3 in-file asserts. Faithful omissions: deferred-cast delay, end-on-attack reverse fade (ends on death/counter/move instead), spell-count-per-class cap. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.83</title>
+<title>Chainmail — Battlefield · v0.11.85</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Wizard missile type toggle</div>
+    <div class="sub">Chainmail HTML Sim · Spells — Darkness &amp; Wizard Light</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.83</span>
+    <span class="version-tag">v0.11.85</span>
   </div>
 
   <div class="toolbar">
@@ -333,6 +333,9 @@
         <button id="btn-cannon-shot" class="secondary" disabled hidden>Shot: short</button>
         <button id="btn-wizard-missile" class="secondary" disabled hidden>Throw fire ball</button>
         <button id="btn-missile-type" class="secondary" disabled hidden>Missile: fire ball</button>
+        <button id="btn-counter-magic" class="secondary" disabled hidden>Counter-magic</button>
+        <button id="btn-cast-darkness" class="secondary" disabled hidden>Cast darkness</button>
+        <button id="btn-cast-light" class="secondary" disabled hidden>Cast Wizard light</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
         <button id="btn-escalade" disabled hidden>Escalade</button>
@@ -649,7 +652,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.83';
+const SIM_VERSION = '0.11.85';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -854,7 +857,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Miss
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -986,6 +989,69 @@ function resolveMissileHit(targetType, missileKind, roll, casterPenalty, element
     default:           return 'destroyed';
   }
 }
+// --- Counter-magic (p.31) ------------------------------------------------
+// Between opposing Wizards, the stronger counters on a 2d6 score of 7+; a weaker
+// one needs 7 + the class gap (8/9/10/11), depending on relative strength. Tiers
+// run Wizard(0) > Sorcerer(1) > Warlock(2) > Magician(3) > Seer(4) via the class
+// penalty. Equal class is a toss in RAW (cast dice for the stronger role); we treat
+// the actor at 7+ and flag it for the GM. Returns { target, role }.
+function counterMagicTarget(casterPenalty, oppPenalty) {
+  const gap = (casterPenalty || 0) - (oppPenalty || 0);   // >0 means the caster is the weaker
+  if (gap > 0) return { target: Math.min(11, 7 + gap), role: 'weaker' };
+  return { target: 7, role: gap < 0 ? 'stronger' : 'equal' };
+}
+// A Wizard whose magic was countered this turn cannot use magic (missiles/spells).
+function magicSuppressedThisTurn(u) { return !!u && u.magicSuppressedTurn === state.turn; }
+// --- Spells (p.31-32) ----------------------------------------------------
+const WIZARD_LIGHT_RANGE_IN = 24;
+// The 16 listed spells with casting Complexity. Effects land one at a time; `done`
+// marks those modeled so far (the rest are listed for the picker and as a roadmap).
+const SPELLS = Object.freeze([
+  { key: 'phantasmal',  name: 'Phantasmal Forces',     complexity: 2, done: false },
+  { key: 'darkness',    name: 'Darkness',              complexity: 1, done: true  },
+  { key: 'wizardLight', name: 'Wizard Light',          complexity: 1, done: true  },
+  { key: 'detection',   name: 'Detection',             complexity: 2, done: false },
+  { key: 'concealment', name: 'Concealment',           complexity: 3, done: false },
+  { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: false },
+  { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: false },
+  { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: false },
+  { key: 'levitate',    name: 'Levitate',              complexity: 2, done: false },
+  { key: 'slowness',    name: 'Slowness',              complexity: 3, done: false },
+  { key: 'haste',       name: 'Haste',                 complexity: 3, done: false },
+  { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: false },
+  { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
+  { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
+  { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: false },
+  { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: false },
+]);
+const SPELL_BY_KEY = Object.freeze(Object.fromEntries(SPELLS.map(sp => [sp.key, sp])));
+// Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
+// (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
+const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
+function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.type)); }
+// A Wizard must stay alive and stationary to maintain a spell (p.32); clear any
+// whose caster is gone, dead, or moved this turn.
+function maintainSpells() {
+  for (const k of ['darkness', 'wizardLight']) {
+    const sp = state[k]; if (!sp) continue;
+    const c = state.units.find(u => u.id === sp.casterId);
+    if (!c || c.destroyed || (c.movedThisTurn || 0) > 0) state[k] = null;
+  }
+}
+// Darkness gloom level (p.31): 0 light (cast turn), 1 semi-darkness (next turn), 2
+// full darkness (third turn on). 0 when no Darkness is active.
+function darknessLevel() {
+  maintainSpells();
+  if (!state.darkness) return 0;
+  return Math.min(2, Math.max(0, state.turn - state.darkness.castTurn));
+}
+// Is a board point lit by an active Wizard Light (24" from the caster)?
+function litByWizardLight(x, y) {
+  maintainSpells();
+  const wl = state.wizardLight; if (!wl) return false;
+  const c = state.units.find(u => u.id === wl.casterId); if (!c) return false;
+  return Math.hypot(x - c.x, y - c.y) <= inchesToPx(WIZARD_LIGHT_RANGE_IN);
+}
 // Count a unit's figures under the lightning bolt: a rotated rectangle whose head is
 // at (hx,hy) with (ux,uy) the unit vector along the body (head -> caster), lengthPx
 // long and halfWidthPx to each side. Mass cells get a half-cell of slack, matching
@@ -1026,7 +1092,8 @@ function wizardMissileState(a, d) {
   if (!d || d.destroyed || d.id === a.id) return { ok: false, reason: 'target' };
   const r = pxToInches(Math.hypot(a.x - d.x, a.y - d.y));
   const fired = !!(a.acted && a.acted.fired);
-  return { r, inRange: r <= WIZARD_MISSILE_RANGE_IN, fired, ok: r <= WIZARD_MISSILE_RANGE_IN && !fired };
+  const suppressed = magicSuppressedThisTurn(a);
+  return { r, inRange: r <= WIZARD_MISSILE_RANGE_IN, fired, suppressed, ok: r <= WIZARD_MISSILE_RANGE_IN && !fired && !suppressed };
 }
 // Throw the missile: lay the pattern at the called point (the target), then destroy /
 // save / drive back / rout every figure under it, friend or foe (p.31). Magic ignores
@@ -1083,6 +1150,66 @@ function resolveWizardMissile() {
   else if (!anyEffect) html += `<div class="verdict v-noeffect">no effect</div>`;
   a.acted.fired = true;
   appendTurn(`Wizard missile · ${magicMeta(a).label} (${a.side})`, html);
+  renderBoard();
+}
+// Eligibility for a Wizard to cast counter-magic at an opposing Wizard.
+function counterMagicState(a, d) {
+  if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
+  if (!d || d.destroyed || !isMagicUser(d) || d.side === a.side) return { ok: false, reason: 'target' };
+  const occupied = !!(a.acted && a.acted.fired), suppressed = magicSuppressedThisTurn(a);
+  const { target, role } = counterMagicTarget(magicMeta(a).penalty, magicMeta(d).penalty);
+  return { target, role, occupied, suppressed, ok: !occupied && !suppressed };
+}
+// Cast counter-magic (p.31): roll 2d6 vs the relative-strength target. Success
+// suppresses the opposing Wizard's magic for the turn; either way the counter fully
+// occupies the caster's magical action. Modeled as a pre-emptive suppression rather
+// than a reaction to a specific declared spell (no spell-timing model yet).
+function resolveCounterMagic() {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const d = state.units.find(u => u.id === state.targetId);
+  const st = counterMagicState(a, d);
+  if (!st || !st.ok) return;
+  pushUndo('counter-magic');
+  const roll = roll2d6(state.rng).sum, success = roll >= st.target;
+  a.acted.fired = true;
+  let body = `<div class="step">${a.side} ${magicMeta(a).label} casts counter-magic at ${d.side} ${magicMeta(d).label} — needs ${st.target}+ (${st.role}), rolled ${roll}</div>`;
+  if (success) { d.magicSuppressedTurn = state.turn;
+    let dispelled = '';
+    if (state.darkness && state.darkness.casterId === d.id) { state.darkness = null; dispelled += ' Darkness'; }
+    if (state.wizardLight && state.wizardLight.casterId === d.id) { state.wizardLight = null; dispelled += ' Wizard Light'; }
+    body += `<div class="verdict v-rout">countered — ${d.side} ${magicMeta(d).label}'s magic is suppressed this turn${dispelled ? ' · dispels' + dispelled : ''}</div>`;
+  } else body += `<div class="verdict v-noeffect">the counter fails</div>`;
+  if (st.role === 'equal') body += `<div class="step" style="color:var(--ink-soft)">equal class — RAW casts dice for the stronger role; treated as 7+ for the caster here</div>`;
+  appendTurn(`Counter-magic · ${magicMeta(a).label} (${a.side})`, body);
+  renderBoard();
+}
+// Eligibility to cast a spell: a stationary, unoccupied, unsuppressed magic-user
+// (p.32 — a Wizard must be stationary and undisturbed to cast/maintain).
+function spellCastState(a) {
+  if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
+  const moved = (a.movedThisTurn || 0) > 0, occupied = !!(a.acted && a.acted.fired), suppressed = magicSuppressedThisTurn(a);
+  return { moved, occupied, suppressed, ok: !moved && !occupied && !suppressed };
+}
+// Cast a named spell, resolved by the caster's class vs the spell's Complexity
+// (resolveSpellCast). Immediate applies the effect; deferred takes no effect this
+// turn (RAW delays it — pending-cast queue is a TODO); negated fizzles. The attempt
+// occupies the caster's magical action either way.
+function castNamedSpell(spellKey) {
+  if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
+  const a = state.units.find(u => u.id === state.selectedId);
+  const st = spellCastState(a), spell = SPELL_BY_KEY[spellKey];
+  if (!st || !st.ok || !spell || !spell.done) return;
+  pushUndo('cast-spell');
+  const roll = roll2d6(state.rng).sum, res = resolveSpellCast(magicClassOf(a), spell.complexity, roll);
+  a.acted.fired = true;
+  let body = `<div class="step">${a.side} ${magicMeta(a).label} casts ${spell.name} (Complexity ${spell.complexity}) — rolled ${roll} → ${res}</div>`;
+  if (res === 'immediate') {
+    if (spellKey === 'darkness') { state.darkness = { casterId: a.id, side: a.side, castTurn: state.turn }; body += `<div class="verdict v-rout">gloom gathers over the field — full darkness in two turns</div>`; }
+    else if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
+  } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
+  else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
+  appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
   renderBoard();
 }
 
@@ -2248,6 +2375,8 @@ const state = {
   firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
   initiativeRoll: null, // { a, b, winner } for display
   setup: true,          // deployment mode: free placement before turn 1; Begin battle starts the sequence
+  darkness: null,       // active Darkness spell { casterId, side, castTurn } — global gloom (p.31)
+  wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -3394,7 +3523,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderDarkness()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -3991,6 +4120,22 @@ function renderWizardMissile() {
   const pts = `${m.hx + nx*m.halfW},${m.hy + ny*m.halfW} ${m.hx - nx*m.halfW},${m.hy - ny*m.halfW} ${tx - nx*m.halfW},${ty - ny*m.halfW} ${tx + nx*m.halfW},${ty + ny*m.halfW}`;
   return `<polygon points="${pts}" fill="${fill}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 3" pointer-events="none"/>`
        + `<circle cx="${m.hx}" cy="${m.hy}" r="2.2" fill="${col}" pointer-events="none"/>`;
+}
+
+function renderDarkness() {
+  const lvl = darknessLevel();
+  const wl = state.wizardLight ? state.units.find(u => u.id === state.wizardLight.casterId) : null;
+  let out = '';
+  if (lvl > 0) {
+    const op = lvl === 1 ? 0.22 : 0.44;
+    const r = inchesToPx(WIZARD_LIGHT_RANGE_IN);
+    const cut = wl ? `<circle cx="${wl.x}" cy="${wl.y}" r="${r}" fill="black"/>` : '';
+    out += `<defs><mask id="darkmask"><rect x="0" y="0" width="${BOARD_W}" height="${BOARD_H}" fill="white"/>${cut}</mask></defs>`
+         + `<rect x="0" y="0" width="${BOARD_W}" height="${BOARD_H}" fill="#0b1020" opacity="${op}" mask="url(#darkmask)" pointer-events="none"/>`;
+  }
+  if (wl) { const r = inchesToPx(WIZARD_LIGHT_RANGE_IN);
+    out += `<circle cx="${wl.x}" cy="${wl.y}" r="${r}" fill="none" stroke="rgba(244,224,140,0.7)" stroke-width="1.5" stroke-dasharray="3 4" pointer-events="none"/>`; }
+  return out;
 }
 
 function renderCannonShot() {
@@ -4764,6 +4909,7 @@ function updateButtons() {
       (!d || d.id === a.id) ? 'Target an enemy to aim the missile (shift-click)' :
       !wms.inRange ? `Out of range (${wms.r.toFixed(1)}″, max ${WIZARD_MISSILE_RANGE_IN}″)` :
       wms.fired ? 'This Wizard has already thrown a missile this turn' :
+      wms.suppressed ? 'This Wizard’s magic is suppressed this turn (countered)' :
       !missilePhaseOk ? 'Throw in the Missile phase' :
       `Hurl a ${a.missileType === 'lightning' ? 'lightning bolt' : 'fire ball'} at ${d.side} ${typeById(d.type)?.name || 'target'}, ${wms.r.toFixed(1)}″ — destroys figures under the pattern (p.31)`;
   }
@@ -4774,6 +4920,35 @@ function updateButtons() {
     mtBtn.disabled = !mu;
     mtBtn.textContent = `Missile: ${a && a.missileType === 'lightning' ? 'lightning' : 'fire ball'}`;
     mtBtn.title = mu ? 'Switch this Wizard between fire ball (circular area) and lightning bolt (¾″×6″ line) before throwing (p.31)' : '';
+  }
+  const cm = counterMagicState(a, d);
+  const cmBtn = $('#btn-counter-magic');
+  if (cmBtn) {
+    const showCm = !!(a && isMagicUser(a));
+    const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
+    const vsWiz = !!(d && isMagicUser(d) && d.side !== a.side);
+    cmBtn.hidden = !showCm;
+    cmBtn.disabled = !(cm && cm.ok && vsWiz && missilePhaseOk);
+    cmBtn.title = !showCm ? '' :
+      !vsWiz ? 'Target an opposing Wizard to counter their magic (shift-click)' :
+      cm.occupied ? 'This Wizard has already used its magic this turn' :
+      cm.suppressed ? 'This Wizard’s own magic is suppressed this turn' :
+      !missilePhaseOk ? 'Cast in the Missile phase' :
+      `Counter ${d.side} ${magicMeta(d).label}’s magic — needs ${cm.target}+ (2d6, ${cm.role}); success suppresses their magic this turn and fully occupies this Wizard (p.31)`;
+  }
+  const scs = spellCastState(a);
+  for (const [id, key] of [['btn-cast-darkness', 'darkness'], ['btn-cast-light', 'wizardLight']]) {
+    const b = $('#' + id); if (!b) continue;
+    const showSp = !!(a && isMagicUser(a));
+    const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
+    b.hidden = !showSp;
+    b.disabled = !(scs && scs.ok && missilePhaseOk);
+    b.title = !showSp ? '' :
+      scs.moved ? 'A Wizard must be stationary to cast (p.32)' :
+      scs.occupied ? 'This Wizard has already used its magic this turn' :
+      scs.suppressed ? 'This Wizard’s magic is suppressed this turn' :
+      !missilePhaseOk ? 'Cast in the Missile phase' :
+      `Cast ${SPELL_BY_KEY[key].name} (Complexity ${SPELL_BY_KEY[key].complexity}) — resolved vs your class (p.31)`;
   }
   const rb = ramBatterState(a, d);
   const rbBtn = $('#btn-batter-ram');
@@ -8076,10 +8251,10 @@ function renderTurnUI() {
   const dock = $('#phase-dock');
   let dockIds = enf
     ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type']
+      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light']
       : ph.id === 'melee' ? ['btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
+    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'btn-cast-darkness', 'btn-cast-light', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
   if (ph.id === 'initiative' && state.initiativeRoll) dockIds = dockIds.concat('btn-elect-order');
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
@@ -8222,6 +8397,9 @@ $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); ren
 $('#btn-wizard-missile').addEventListener('click', () => { resolveWizardMissile(); renderTurnUI(); });
 $('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a) { a.cannonLong = !a.cannonLong; renderTurnUI(); } });
 $('#btn-missile-type').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a && isMagicUser(a)) { a.missileType = a.missileType === 'lightning' ? 'fireball' : 'lightning'; renderTurnUI(); } });
+$('#btn-counter-magic').addEventListener('click', () => { resolveCounterMagic(); renderTurnUI(); });
+$('#btn-cast-darkness').addEventListener('click', () => { castNamedSpell('darkness'); renderTurnUI(); });
+$('#btn-cast-light').addEventListener('click', () => { castNamedSpell('wizardLight'); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
 $('#btn-escalade').addEventListener('click', () => { resolveEscalade(); renderTurnUI(); });
@@ -9369,6 +9547,11 @@ renderBoard();
   console.assert(resolveMissileHit('DRAGON','lightning',12,0) === 'driven_back', 'missile: Dragon always driven back');
   console.assert(resolveMissileHit('ELEMENTAL','fire',7,0,'air') === 'driven_back' && resolveMissileHit('ELEMENTAL','lightning',7,0,'air') === 'no_effect', 'missile: Air elemental yields to fire only');
   console.assert(resolveMissileHit('TROLL','fire',2,0) === 'destroyed' && resolveMissileHit('HF','lightning',12,0) === 'destroyed', 'missile: ordinary creatures/men destroyed');
+  console.assert(counterMagicTarget(0,4).target === 7 && counterMagicTarget(0,4).role === 'stronger', 'counter: Wizard vs Seer 7+');
+  console.assert(counterMagicTarget(4,0).target === 11 && counterMagicTarget(4,0).role === 'weaker', 'counter: Seer vs Wizard 11+');
+  console.assert(counterMagicTarget(2,1).target === 8 && counterMagicTarget(1,1).target === 7 && counterMagicTarget(1,1).role === 'equal', 'counter: gap 1 -> 8, equal -> 7');
+  console.assert(SPELLS.length === 16 && SPELL_BY_KEY.darkness.complexity === 1 && SPELL_BY_KEY.wizardLight.complexity === 1, 'spells: catalog of 16, darkness/light are C1');
+  console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins & wizards see in dark, heavy foot do not');
   (() => { const ind = { kind:'individual', type:'HERO', x:300, y:240 };
     const on = figuresUnderRect(ind, 300, 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
     const off = figuresUnderRect(ind, 300 + inchesToPx(10), 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
