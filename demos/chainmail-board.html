@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.87 · Darkness combat gate (p.31): full darkness now bites. canActInDark(u) returns true at gloom levels 0-1, but at level 2 (full dark) only units with darkvision (seesInDark — Wizards, Goblins, Kobolds, Orcs) or standing inside a Wizard Light (litByWizardLight) may attack. The gate is applied to the acting unit in melee eligibility, missile eligibility, and the Giant boulder, and guarded again at the top of onResolveMelee / onResolveMissile; blinded units get a greyed Resolve-melee / Fire-missiles button with an explanatory tooltip. Visual: at full dark the existing veil darkens the field with the Wizard-Light circle cut clear, and units that can still fight in the gloom (darkvision) are ringed in faint amber so the player can read who is dangerous at a glance. Faithful simplification: the gate covers attacking; a seeing attacker vs a blind defender still resolves normally (RAW “can’t defend” advantage not modeled). node harness: canActInDark across no-dark / level 0 / level 1 / level 2, darkvision races + Wizard pass, HF/Elf blinded, HF in/out of a Wizard Light; 1 in-file assert. -->
+<!-- chainmail-board.html · v0.11.88 · Spell: Protection from Evil (Complexity 3, p.31) — 5th of 16 implemented. A 12″-diameter (6″-radius) ward centred on the caster (state.protection { casterId, side }; PROTECTION_RADIUS_IN = 6) that keeps evil creatures out. protectionBlockScale(ox,oy,dx,dy,u) mirrors riverBlockScale: for an evil unit it path-samples the move and halts it at the ward boundary (a unit already inside is not trapped, non-evil units pass), and is folded into both the drag clamp chain and nudgeUnit so arrow-key steps obey it too. EVIL_TYPES (Orc, Goblin, Kobold, Wraith, Wight, Balrog, Lycanthrope, Troll) + isEvil() is an explicit adjudication call — tune to taste. Cast via the dock spell picker (no target; centred on the caster); the ward persists only while the caster lives and stays put (maintainSpells now prunes darkness/wizardLight/protection) and counter-magic’s dispel set is unchanged. renderProtection draws the warding ring (side-coloured, 7-4 dash, faint white fill) in the overlay. Faithful notes: the ward blocks ENTRY (movement) only — it does not shield against melee already in contact across the boundary; evil units of EITHER side are kept out; one ward at a time (singleton, multi is future). node harness: isEvil + protectionBlockScale (no-ward / into / away / inside / tangential / knight / wraith / caster-moved); 2 in-file asserts. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.87</title>
+<title>Chainmail — Battlefield · v0.11.88</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -279,9 +279,9 @@
 <div class="page">
   <div class="header">
     <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Darkness combat gate</div>
+    <div class="sub">Chainmail HTML Sim · Spell — Protection from Evil</div>
     <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.87</span>
+    <span class="version-tag">v0.11.88</span>
   </div>
 
   <div class="toolbar">
@@ -652,7 +652,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.87';
+const SIM_VERSION = '0.11.88';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1014,7 +1014,7 @@ const SPELLS = Object.freeze([
   { key: 'concealment', name: 'Concealment',           complexity: 3, done: false },
   { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: false },
   { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: false },
-  { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: false },
+  { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: true  },
   { key: 'levitate',    name: 'Levitate',              complexity: 2, done: false },
   { key: 'slowness',    name: 'Slowness',              complexity: 3, done: true  },
   { key: 'haste',       name: 'Haste',                 complexity: 3, done: true  },
@@ -1032,7 +1032,7 @@ function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.typ
 // A Wizard must stay alive and stationary to maintain a spell (p.32); clear any
 // whose caster is gone, dead, or moved this turn.
 function maintainSpells() {
-  for (const k of ['darkness', 'wizardLight']) {
+  for (const k of ['darkness', 'wizardLight', 'protection']) {
     const sp = state[k]; if (!sp) continue;
     const c = state.units.find(u => u.id === sp.casterId);
     if (!c || c.destroyed || (c.movedThisTurn || 0) > 0) state[k] = null;
@@ -1074,6 +1074,35 @@ function spellTargetOk(spell, a, d) {
 function canActInDark(u) {
   if (!u || darknessLevel() < 2) return true;
   return seesInDark(u) || litByWizardLight(u.x, u.y);
+}
+// Protection from Evil (p.31): a 12" diameter (6" radius) ward centred on the caster
+// that keeps evil creatures out. EVIL_TYPES is an adjudication call — the monstrous /
+// chaos / undead types; tune to taste.
+const PROTECTION_RADIUS_IN = 6;
+const EVIL_TYPES = new Set(['ORC', 'GOBLIN', 'KOBOLD', 'WRAITH', 'WIGHT', 'BALROG', 'LYCAN', 'TROLL']);
+function isEvil(u) { return !!u && EVIL_TYPES.has(u.type); }
+function protectionCircle() {
+  maintainSpells();
+  const pr = state.protection; if (!pr) return null;
+  const c = state.units.find(u => u.id === pr.casterId); if (!c) return null;
+  return { x: c.x, y: c.y, r: inchesToPx(PROTECTION_RADIUS_IN), side: pr.side };
+}
+// Fraction of an evil unit's move clear of the ward (mirrors riverBlockScale): halts
+// it at the boundary; a unit already inside is not trapped; non-evil units pass.
+function protectionBlockScale(ox, oy, dx, dy, u) {
+  if (!isEvil(u)) return 1;
+  const circ = protectionCircle(); if (!circ) return 1;
+  const inside = (x, y) => Math.hypot(x - circ.x, y - circ.y) <= circ.r;
+  if (inside(ox, oy)) return 1;
+  const len = Math.hypot(dx, dy); if (len < 1e-6) return 1;
+  const steps = Math.max(2, Math.ceil(len / 4));
+  let lastClear = 0;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (inside(ox + dx * t, oy + dy * t)) return lastClear;
+    lastClear = t;
+  }
+  return 1;
 }
 // Count a unit's figures under the lightning bolt: a rotated rectangle whose head is
 // at (hx,hy) with (ux,uy) the unit vector along the body (head -> caster), lengthPx
@@ -1237,6 +1266,7 @@ function castNamedSpell(spellKey) {
       d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
       body += `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
     }
+    else if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; body += `<div class="verdict v-rout">a 12″ ward rings the caster — evil creatures are kept out</div>`; }
   } else if (res === 'deferred') body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — no effect this turn (RAW delays it)</div>`;
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
   appendTurn(`Spell · ${magicMeta(a).label} (${a.side})`, body);
@@ -2411,6 +2441,7 @@ const state = {
   setup: true,          // deployment mode: free placement before turn 1; Begin battle starts the sequence
   darkness: null,       // active Darkness spell { casterId, side, castTurn } — global gloom (p.31)
   wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
+  protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -3557,7 +3588,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderDarkness()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -4175,6 +4206,12 @@ function renderDarkness() {
     out += `<circle cx="${u.x}" cy="${u.y}" r="${r}" fill="none" stroke="rgba(244,224,140,0.55)" stroke-width="1.5" pointer-events="none"/>`;
   }
   return out;
+}
+
+function renderProtection() {
+  const circ = protectionCircle(); if (!circ) return '';
+  const col = circ.side === 'A' ? 'rgba(120,170,210,0.95)' : 'rgba(214,160,120,0.95)';
+  return `<circle cx="${circ.x}" cy="${circ.y}" r="${circ.r}" fill="rgba(255,255,255,0.05)" stroke="${col}" stroke-width="1.5" stroke-dasharray="7 4" pointer-events="none"/>`;
 }
 
 function renderCannonShot() {
@@ -5503,8 +5540,9 @@ function onBoardMouseMove(evt) {
     const pc = pathMoveCost(state.dragging.originX, state.dragging.originY, vx, vy, u, remBefore);   // T2b: clamp by path cost (slow terrain + stream/river crossings), not raw length
     const s = moveBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale, vy * pc.scale, u);   // T2a: woods stops formed bodies (p.9)
     const rs = riverBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale * s, vy * pc.scale * s);   // p.9: halt at a river bank (cross via the Cross-river action)
-    nx = state.dragging.originX + vx * pc.scale * s * rs;
-    ny = state.dragging.originY + vy * pc.scale * s * rs;
+    const pz = protectionBlockScale(state.dragging.originX, state.dragging.originY, vx * pc.scale * s * rs, vy * pc.scale * s * rs, u);   // p.31: evil halts at a Protection-from-Evil ward
+    nx = state.dragging.originX + vx * pc.scale * s * rs * pz;
+    ny = state.dragging.originY + vy * pc.scale * s * rs * pz;
   }
   u.x = Math.max(20, Math.min(BOARD_W - 20, nx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, ny));
@@ -6058,6 +6096,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   if (!freeMove && state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
   if (!freeMove && state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
   if (!freeMove && state.settings.enforceMovement && riverBlockScale(u.x, u.y, dxPx, dyPx) < 1 - 1e-9) return false;      // p.9: halt at a river bank (use Cross river)
+  if (!freeMove && state.settings.enforceMovement && protectionBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // p.31: evil cannot step into a Protection-from-Evil ward
   pushUndo('nudge:' + u.id);   // reached only when the nudge will apply; a run of nudges coalesces
   u.x = Math.max(20, Math.min(BOARD_W - 20, u.x + dxPx));
   u.y = Math.max(20, Math.min(BOARD_H - 20, u.y + dyPx));
@@ -9609,6 +9648,15 @@ renderBoard();
     const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
     console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
+  console.assert(isEvil({ type:'ORC' }) && isEvil({ type:'WRAITH' }) && !isEvil({ type:'HERO' }) && !isEvil({ type:'ELF' }), 'protection: orc/wraith evil, hero/elf not');
+  (() => { const sv = state.protection, su = state.units;
+    state.units = [{ id: -2, type:'WIZARD', x:300, y:240, destroyed:false, movedThisTurn:0 }];
+    state.protection = { casterId: -2, side:'A' };
+    const into = protectionBlockScale(300 - inchesToPx(10), 240, inchesToPx(20), 0, { type:'ORC' });
+    const away = protectionBlockScale(300 - inchesToPx(10), 240, -inchesToPx(5), 0, { type:'ORC' });
+    const knight = protectionBlockScale(300 - inchesToPx(10), 240, inchesToPx(20), 0, { type:'HF' });
+    state.protection = sv; state.units = su;
+    console.assert(into < 1 && away === 1 && knight === 1, 'protection: orc halts at ward, free leaving, knight unaffected'); })();
   (() => { const ind = { kind:'individual', type:'HERO', x:300, y:240 };
     const on = figuresUnderRect(ind, 300, 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
     const off = figuresUnderRect(ind, 300 + inchesToPx(10), 240, 1, 0, inchesToPx(6), inchesToPx(0.375));
