@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.99 · Phase rail carries turn + whose-move, retiring the redundant status line. A Turn badge (“Turn N”, with a small red “enf” pill when phase-enforcement is on; “Setup” in deployment) sits before the ◀ arrow. Rail labels follow the RAW turn sequence (p.9): First → “First Move” (§2), Counter → “Last Move” (§3). Under each phase cell a colored side pill shows who acts: the lone mover under First/Last Move (side-colored underline matches), and BOTH A and B under Artillery/Missile/Melee since both sides take those steps (§§4-6); Initiative shows none. Pills on upcoming/past phases are dimmed, the active phase’s solid. New phaseSides(idx, firstMover) helper (node-tested both first-movers). pstep is now a label-over-pill stack (.plabel keeps the now-underline; .prow holds pills). The #phase status line and its dead body/sideTag builder are removed. No engine or rules changes; layout only. -->
+<!-- chainmail-board.html · v0.11.100 · Streamlined initiative flow. On the Init phase, both the ▶ arrow and the Roll button now roll initiative AND advance straight to First Move in one step (rollInitiativeAction sets firstMover = winner by default, then phaseIdx+1; advancePhase delegates to it when Init is unrolled). The election moves from Init onto the First Move phase: the “Move [winner] last/first” button (btn-elect-order) now shows on move1 while initiative is rolled and no unit has moved yet, and toggling it swaps state.firstMover — which flips the First Move / Last Move rail pills and the side underline. It LOCKS once the first mover begins moving (RAW elects before movement, p.9 §1), so you can’t make the other side “first” after movement has started. Enforce-mode dock map updated: Roll stays on Init, election sits on First Move. No rules-fidelity change to the sequence itself; flow/UX only. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.99</title>
+<title>Chainmail — Battlefield · v0.11.100</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -315,7 +315,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.99</span>
+      <span class="version-tag">v0.11.100</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -671,7 +671,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.99';
+const SIM_VERSION = '0.11.100';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -8451,13 +8451,16 @@ function renderTurnUI() {
   // Initiative phase: Roll button before the dice are cast, election after.
   const inInit = ph.id === 'initiative';
   $('#btn-roll-init').hidden = !inInit || !!state.initiativeRoll;
+  // The election relocates to First Move: swap who goes first/last until the first
+  // mover begins moving (RAW elects before movement, p.9 §1).
   const electBtn = $('#btn-elect-order');
-  electBtn.hidden = !inInit || !state.initiativeRoll;
+  const anyMoved = state.units.some(u => (u.movedThisTurn || 0) > 0);
+  electBtn.hidden = !(ph.id === 'move1' && state.initiativeRoll && !anyMoved);
   if (!electBtn.hidden) {
     const winner = state.initiativeRoll.winner;
     const winnerFirst = state.firstMover === winner;
     electBtn.textContent = winnerFirst ? `Move ${winner} last` : `Move ${winner} first`;
-    electBtn.title = `${winner} won initiative — currently moves ${winnerFirst ? 'first' : 'last'}; click to switch`;
+    electBtn.title = `${winner} won initiative — currently moves ${winnerFirst ? 'first' : 'last'}; click to switch (locks once the first mover moves)`;
   }
   // Decoupled controls: the rail is a passive stepper (the highlight moves, nothing
   // in it is clickable); the phase's primary action sits in a FIXED slot and the
@@ -8478,7 +8481,8 @@ function renderTurnUI() {
   $('#action-slot').innerHTML = '';   // the ▶ arrow drives the sequence; the phase's primary verbs live in the dock
   const dock = $('#phase-dock');
   const dockIds = enf
-    ? (ph.id === 'initiative' ? ['btn-roll-init', 'btn-elect-order']
+    ? (ph.id === 'initiative' ? ['btn-roll-init']
+      : ph.id === 'move1' ? ['btn-elect-order']
       : ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
       : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell']
       : ph.id === 'melee' ? ['btn-melee', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
@@ -8537,13 +8541,15 @@ function rollInitiativeAction() {
   if (PHASES[state.phaseIdx].id !== 'initiative' || state.initiativeRoll) return;
   pushUndo('initiative');
   state.initiativeRoll = rollInitiative(state.rng);
-  state.firstMover = state.initiativeRoll.winner;
+  state.firstMover = state.initiativeRoll.winner;   // winner moves first by default; elect on First Move
+  state.phaseIdx += 1;                              // advance straight to First Move
   renderTurnUI();
   renderBoard();
 }
 // "Next phase ▸" — step the sequence; advancing past melee ends the round.
 function advancePhase() {
   if (state.setup) { beginBattle(); return; }   // ▶ in deployment begins the battle (Setup → Init)
+  if (PHASES[state.phaseIdx].id === 'initiative' && !state.initiativeRoll) { rollInitiativeAction(); return; }   // ▶ on Init rolls + advances
   if (state.phaseIdx >= PHASES.length - 1) { endRound(); return; }
   pushUndo('phase');
   if (PHASES[state.phaseIdx].id === 'missile') resolveMissilePhase();   // p.9: simultaneous fire lands just before melee
@@ -8563,9 +8569,10 @@ function phaseBack() {
 }
 // Initiative election (p.9 §1): the winner may choose to move first or last.
 function toggleInitiativeOrder() {
-  if (PHASES[state.phaseIdx].id !== 'initiative' || !state.initiativeRoll) return;
+  if (PHASES[state.phaseIdx].id !== 'move1' || !state.initiativeRoll) return;
+  if (state.units.some(u => (u.movedThisTurn || 0) > 0)) return;   // locked once the first mover begins moving
   pushUndo('initiative');
-  state.firstMover = state.firstMover === 'A' ? 'B' : 'A';
+  state.firstMover = state.firstMover === 'A' ? 'B' : 'A';   // swap first/last → the rail pills flip
   renderTurnUI();
   renderBoard();
 }
