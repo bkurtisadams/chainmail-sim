@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.112 · Custom unit names/labels — name a Wizard "Gandalf", a hero "Aragorn", a mass unit "The Black Company", an orc band "Rotting Eye". New optional Name field at the top of the New-unit panel (round-trips through loadUnitIntoPanel/spawnUnit for edits), plus a Rename… item in the right-click context menu (prompt, undoable via the ctx snapshot). u.label persists in saves automatically (captureSnapshot); hydrateUnit defaults it to '' for older boards. Render: a named unit shows the bold name on top with a muted type+count second line; unlabeled units render exactly as before, and a badgeY0 baseline drops the status-badge stack below the extra line. Labels run through a new escXml() helper before hitting the SVG <text> (so & < > " can't break rendering), capped at 40 chars. No combat logic touched. Builds on v0.11.111. -->
+<!-- chainmail-board.html · v0.11.114 · Conjure Elemental control trigger corrected to match RAW (p.32): "disturbed (attacked)" means the summoning Wizard being ATTACKED at all — hit or miss — not merely wounded. New markAttacked(u) stamps u.attackedTurn whenever a unit is targeted in melee (both combatants, mutual contact) or caught under an enemy Wizard's missile (even on a save). checkElementalControl() now frees + flips the elemental when the caster is slain/gone OR newly attacked since conjuring (controlAtkTurn baseline, replacing the old hp-below-baseline test). Catapult/cannon area hits stay covered by the slain trigger (everything under the disc dies). Amends v0.11.113. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.112</title>
+<title>Chainmail — Battlefield · v0.11.114</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -296,7 +296,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.112</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.114</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -352,6 +352,7 @@
         <button id="btn-missile-type" class="secondary" disabled hidden>Missile: fire ball</button>
         <button id="btn-counter-magic" class="secondary" disabled hidden>Counter-magic</button>
         <select id="dock-spell" class="secondary" disabled hidden></select>
+        <select id="dock-element" class="secondary" title="Element to conjure" disabled hidden><option value="air">Air</option><option value="earth">Earth</option><option value="fire">Fire</option><option value="water">Water</option></select>
         <button id="btn-cast-spell" class="secondary" disabled hidden>Cast spell</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
@@ -681,7 +682,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.112';
+const SIM_VERSION = '0.11.114';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -895,7 +896,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First Move', 'Last Move', 'Artillery'
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -1058,7 +1059,7 @@ const SPELLS = Object.freeze([
   { key: 'wizardLight', name: 'Wizard Light',          complexity: 1, done: true  },
   { key: 'detection',   name: 'Detection',             complexity: 2, done: false },
   { key: 'concealment', name: 'Concealment',           complexity: 3, done: false },
-  { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: false },
+  { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: true  },
   { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: false },
   { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: true  },
   { key: 'levitate',    name: 'Levitate',              complexity: 2, done: true  },
@@ -1130,6 +1131,31 @@ function cullPhantasms() {
       if (u.id === state.selectedId) state.selectedId = null;
       if (u.id === state.targetId) state.targetId = null;
     }
+  }
+}
+// Stamp the turn a unit was last attacked (targeted in melee or caught by a Wizard's
+// missile) — hit or miss. Conjure Elemental's control rule reads this.
+function markAttacked(u) { if (u && !u.destroyed) u.attackedTurn = state.turn; }
+// Conjure Elemental (p.32): a conjured elemental stays bound while its summoner is
+// undisturbed. RAW: "disturbed (attacked)" — so per Kurt's correction the trigger is
+// the Wizard being ATTACKED at all (melee contact or an enemy Wizard's bolt), hit or
+// miss, not merely wounded; a slain Wizard frees it too. controlAtkTurn is the
+// caster's attacked-stamp captured at conjure, so only a NEW attack since then counts.
+// This manual sim has no pursuit AI, so "turns on its summoner" is modelled by flipping
+// the elemental to the opposing side — control passes to the foe, who drives it at the
+// Wizard's line. Once unbound (conjuredBy cleared) it never re-flips.
+function checkElementalControl() {
+  for (const u of state.units) {
+    if (u.destroyed || u.conjuredBy == null) continue;
+    const c = state.units.find(x => x.id === u.conjuredBy);
+    const lost = !c || c.destroyed || (c.attackedTurn != null && c.attackedTurn !== u.controlAtkTurn);
+    if (!lost) continue;
+    u.side = u.side === 'A' ? 'B' : 'A';
+    u.conjuredBy = null;
+    cleanupEngagementsForUnit(u.id);
+    if (u.id === state.selectedId) state.selectedId = null;
+    if (u.id === state.targetId) state.targetId = null;
+    appendTurn('Elemental unbound', `A conjured ${u.element || ''} elemental breaks free of its struck summoner and turns hostile — control passes to side ${u.side}.`);
   }
 }
 // Darkness gloom level (p.31): 0 light (cast turn), 1 semi-darkness (next turn), 2
@@ -1321,6 +1347,7 @@ function resolveWizardMissile() {
     const n = underFn(t);
     if (n <= 0) continue;
     anyUnder = true;
+    markAttacked(t);   // caught in the blast counts as attacked even if it saves (Conjure Elemental control, p.32)
     const fr = t.side === a.side ? ' · friendly!' : '';
     if (t.kind === 'individual') {
       const roll = roll2d6(state.rng).sum, adj = penalty ? ` ${roll}+${penalty}` : ` ${roll}`;
@@ -1399,10 +1426,11 @@ function castNamedSpell(spellKey) {
   const roll = roll2d6(state.rng).sum, res = resolveSpellCast(magicClassOf(a), spell.complexity, roll);
   a.acted.fired = true;
   let body = `<div class="step">${a.side} ${magicMeta(a).label} casts ${spell.name} (Complexity ${spell.complexity}) — rolled ${roll} → ${res}</div>`;
-  if (res === 'immediate') body += applySpellEffect(spellKey, a, d);
+  const opts = spellKey === 'conjureElem' ? { element: ($('#dock-element').value || 'air') } : {};
+  if (res === 'immediate') body += applySpellEffect(spellKey, a, d, opts);
   else if (res === 'deferred') {
     if (!state.pendingSpells) state.pendingSpells = [];
-    state.pendingSpells.push({ casterId: a.id, spellKey, targetId: d ? d.id : null, castTurn: state.turn });
+    state.pendingSpells.push({ casterId: a.id, spellKey, targetId: d ? d.id : null, castTurn: state.turn, opts });
     body += `<div class="step" style="color:var(--ink-soft)">the spell hangs unformed — it takes shape next turn (RAW delay, p.33)</div>`;
   }
   else body += `<div class="verdict v-noeffect">the casting fizzles</div>`;
@@ -1413,7 +1441,7 @@ function castNamedSpell(spellKey) {
 // cast and by resolvePendingSpells when a deferred cast lands the next turn, so the
 // two paths can't drift. Bearing/target spells re-find the target by id — it may have
 // moved or fallen between a deferred cast and its resolution.
-function applySpellEffect(spellKey, a, d) {
+function applySpellEffect(spellKey, a, d, opts = {}) {
   if (spellKey === 'darkness') { state.darkness = { casterId: a.id, side: a.side, castTurn: state.turn }; return `<div class="verdict v-rout">gloom gathers over the field — full darkness in two turns</div>`; }
   if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; return `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
   if (spellKey === 'haste' || spellKey === 'slowness') {
@@ -1468,6 +1496,29 @@ function applySpellEffect(spellKey, a, d) {
     const what = typeById(ph.type)?.name || (ph.kind === 'individual' ? 'figure' : 'unit');
     return `<div class="verdict v-rout">an apparition of ${what} (×${ph.count}) takes shape beside the caster — it fights as the real thing but holds only while the Wizard stays put, up to ${PHANTASM_DURATION} turns</div>`;
   }
+  if (spellKey === 'conjureElem') {
+    const element = (opts && opts.element) || 'air';
+    if (state.units.some(u => !u.destroyed && u.type === 'ELEMENTAL' && u.element === element))
+      return `<div class="verdict v-noeffect">an Elemental of ${element} is already abroad — only one of each kind exists at a time (p.32)</div>`;
+    const off = inchesToPx(2) * (a.side === 'A' ? 1 : -1);
+    const maxHp = FIGHTING_STRENGTH.ELEMENTAL || 4;
+    const el = {
+      id: state.nextId++, side: a.side, kind: 'individual', type: 'ELEMENTAL',
+      alignment: 'neutral', weapon: null, mercenary: false, label: '',
+      spawnTurn: state.turn, acted: { moved: false, fired: false, fought: false },
+      movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
+      fatigued: false, moveStreak: 0, charged: false, chargedLastTurn: false, chargeDir: null,
+      prisoners: 0, indirect: false, cover: 'none', breathsUsed: 0, pendingHits: 0,
+      x: a.x + off, y: a.y, facing: a.side === 'A' ? 90 : 270, turnStartFacing: a.side === 'A' ? 90 : 270,
+      count: 1, startCount: 1, cols: 1, rows: 1, hedgehog: false, formation: null, customCols: null,
+      spacing: 'close', polearm: false, meleeWeapon: 'sword', armor: 'chain_sh', mounted: false,
+      leader: false, prone: false, parry: false, hp: maxHp, maxHp, element,
+      conjuredBy: a.id, controlAtkTurn: (a.attackedTurn ?? null), conditions: {}, _touchedThisTurn: [],
+    };
+    if (state.settings.snapToGrid) { const sp = snapPos(el, el.x, el.y); el.x = sp.x; el.y = sp.y; }
+    state.units.push(el);
+    return `<div class="verdict v-rout">the Wizard conjures an Elemental of ${element}, bound to its summoner — strike the Wizard (or fell him) and it breaks free and turns on him</div>`;
+  }
   return '';
 }
 // Deferred casts (the Complexity table's D band, p.33) take effect at the start of
@@ -1482,7 +1533,7 @@ function resolvePendingSpells() {
     const spell = SPELL_BY_KEY[ps.spellKey];
     const who = a ? `${a.side} ${magicMeta(a).label}` : 'a fallen caster';
     let body = `<div class="step">${who}'s delayed ${spell ? spell.name : 'spell'} takes shape</div>`;
-    body += (!a || a.destroyed) ? `<div class="verdict v-noeffect">the caster is gone — the spell unravels</div>` : applySpellEffect(ps.spellKey, a, d);
+    body += (!a || a.destroyed) ? `<div class="verdict v-noeffect">the caster is gone — the spell unravels</div>` : applySpellEffect(ps.spellKey, a, d, ps.opts || {});
     appendTurn(`Delayed spell${a ? ` · ${magicMeta(a).label} (${a.side})` : ''}`, body);
   }
 }
@@ -5389,6 +5440,8 @@ function updateButtons() {
   const needTgt = SPELL_TARGET[curSpell] || null;
   const tgtOk = !needTgt || (a && spellTargetOk(SPELL_BY_KEY[curSpell] || {}, a, d));
   if (spellSel) { spellSel.hidden = !showSp; spellSel.disabled = !showSp; }
+  const elemSel = $('#dock-element');
+  if (elemSel) { const showElem = showSp && curSpell === 'conjureElem'; elemSel.hidden = !showElem; elemSel.disabled = !showElem; }
   if (castBtn) {
     castBtn.hidden = !showSp;
     castBtn.disabled = !(scs && scs.ok && spMissileOk && tgtOk);
@@ -6847,6 +6900,7 @@ function onResolveMelee() {
       `<div class="step">${typeById(a.type).name} (${a.side}) is fully paralyzed — no figures can strike.</div>`);
     return;
   }
+  markAttacked(a); markAttacked(d);   // melee is mutual contact — both are "attacked" (Conjure Elemental control, p.32)
   // Dispatch by kind:
   //  · both mass → mass melee
   //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
@@ -8815,6 +8869,7 @@ function endRound() {
   tickHazards();
   tickCloudkill();
   cullPhantasms();   // expire apparitions at the boundary: duration elapsed, or the caster moved during the turn just ended (before movedThisTurn resets below)
+  checkElementalControl();   // a conjured elemental whose summoner was struck or slain this turn breaks free and flips side
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
