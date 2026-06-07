@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.116 · Fix: the contextual spell pickers never appeared. The phase-dock builder (dockIds.forEach → appendChild) only relocates whitelisted controls into #phase-dock, and #dock-element / #dock-poly were absent from both the missile-phase list and the phases-off list — so updateButtons toggled their hidden state on controls that were never placed in the dock. Added both to those two lists (they already sat in TURN_ACTION_BTNS). This surfaces the Polymorph form picker AND the Conjure element picker (the latter was silently hidden too, masked by its Air default). Builds on v0.11.115. -->
+<!-- chainmail-board.html · v0.11.117 · Polymorph form list widened per ruling — the spell is a disguise/spy/roleplay tool, so a Wizard may assume any non-magical creature from man-size up to a Giant: man-at-arms plus the demi-human races (Hobbit, Sprite, Gnome, Dwarf, Kobold, Goblin, Orc, Elf), Hero/Super Hero, ogres (TROLL) and Giant. POLYMORPH_FORMS grew from 4 to 13; the #dock-poly picker is now built from that list at init (typeById names) instead of hardcoded options, so the constant stays the single source of truth. Race/man forms aren't in FIGHTING_STRENGTH, so the disguised Wizard keeps its own hp (the || a.maxHp fallback) — fitting for a wizard in disguise. Still excludes magical creatures. Builds on v0.11.116. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.116</title>
+<title>Chainmail — Battlefield · v0.11.117</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -296,7 +296,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.116</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.117</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -353,7 +353,7 @@
         <button id="btn-counter-magic" class="secondary" disabled hidden>Counter-magic</button>
         <select id="dock-spell" class="secondary" disabled hidden></select>
         <select id="dock-element" class="secondary" title="Element to conjure" disabled hidden><option value="air">Air</option><option value="earth">Earth</option><option value="fire">Fire</option><option value="water">Water</option></select>
-        <select id="dock-poly" class="secondary" title="Form to assume" disabled hidden><option value="HERO">Hero</option><option value="SUPER_HERO">Super Hero</option><option value="TROLL">Troll / Ogre</option><option value="GIANT">Giant</option></select>
+        <select id="dock-poly" class="secondary" title="Form to assume" disabled hidden></select>
         <button id="btn-cast-spell" class="secondary" disabled hidden>Cast spell</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
@@ -684,7 +684,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.116';
+const SIM_VERSION = '0.11.117';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1095,11 +1095,15 @@ const SPELL_DESC = Object.freeze({
   cloudkill:   'A 3×6×3″ poison cloud drifts from the caster, killing men, orcs, dwarves and the like.',
   antiMagic:   'A 5″ shell that blocks all magic in or out, for up to 6 turns.',
 });
-// Polymorph (p.32) target forms, per ruling: individual creature types from the
-// caster's own size up to a Giant — the physical/martial ones only. No mundane troop
-// units, and no magical creatures (Balrog, Dragon, Elemental, Wraith, Wight, Ent, Roc,
-// Lycanthrope). Edit this list to recut the allowed forms.
-const POLYMORPH_FORMS = Object.freeze(['HERO', 'SUPER_HERO', 'TROLL', 'GIANT']);
+// Polymorph (p.32) target forms. Per ruling the spell is mainly a disguise / spying /
+// roleplaying tool, so the Wizard may take the semblance of any non-magical creature
+// from man-size up to a Giant: the demi-human races, ordinary men-at-arms, ogres
+// (TROLL) and giants. Excluded: magical creatures (Balrog, Dragon, Elemental, Wraith,
+// Wight, Ent, Roc, Lycanthrope). The dock picker is built from this list — edit to recut.
+const POLYMORPH_FORMS = Object.freeze([
+  'MAN', 'HOBBIT', 'SPRITE', 'GNOME', 'DWARF', 'KOBOLD', 'GOBLIN', 'ORC', 'ELF',
+  'HERO', 'SUPER_HERO', 'TROLL', 'GIANT',
+]);
 // Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
 // (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
 const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
@@ -9114,6 +9118,11 @@ syncMeasureButton();
 syncUndoButtons();
 populateSpellPicker();   // fill the dock spell dropdown with implemented spells
 populateSpellHelp();     // fill the spell reference table in the help modal
+for (const f of POLYMORPH_FORMS) {   // fill the Polymorph form picker from the form list
+  const o = document.createElement('option');
+  o.value = f; o.textContent = typeById(f)?.name || f;
+  $('#dock-poly').appendChild(o);
+}
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
