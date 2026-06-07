@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.92 · Deferred-spell fix: a cast that lands in the Complexity table’s D (deferred) band now actually takes effect at the start of the FOLLOWING turn instead of silently evaporating (bug: a deferred Cloudkill — or Darkness/Haste/etc. — never appeared next round). castNamedSpell’s inline immediate-effect chain is extracted into applySpellEffect(spellKey,a,d), which both an immediate cast and the new deferred path share so they can’t drift. A deferred cast is queued on state.pendingSpells {casterId, spellKey, targetId, castTurn}; endRound drains the queue via resolvePendingSpells() at the new turn’s start (after the ticks + per-unit reset, before initiative), re-finding caster and target by id from their CURRENT positions — a fallen caster’s spell unravels, a vanished bearing/target lapses. The queue is plain state data, so undo/redo and save/load carry it. node harness: deferred Darkness lands with castTurn = the new turn, deferred Haste sets moveSpell, fallen-caster unravel applies nothing, dead-target lapse is clean, and the queue always drains. Faithful simplification: a deferred spell completes next turn regardless of whether the Wizard kept concentrating (no mid-delay disruption model yet). -->
+<!-- chainmail-board.html · v0.11.96 · Panel compaction (Selected / Target / New unit), approved from the before/after mockup. The Selected and Target stat blocks (one shared renderer) now lay out as a 2-column grid: short stats (Side, Morale, Facing, Point, Size, …) pair two-per-row, while long lines span both columns — a post-render pass tags any .stat whose value text exceeds 15 chars or contains a <small> with class “wide” (grid-column 1/-1), so Move used, On terrain (when long), Melee wpn, and the conditional warnings stay full width. The New unit form becomes a 2-column grid with the label stacked tight above each control (#new-unit-panel display:grid; .field flex-direction:column; controls width:100%); the h2, any field carrying a .field-note (Points, Pikes, Leader, Mercenary, works note), and the checkbox rows span the full width — checkbox rows stay horizontal via :has(input[type=checkbox]). All scoped by #id so other .field/.stat users are untouched; the mass/individual/works show-hide still flows (display:none drops cells from the grid). CSS + one small JS tagging loop; no engine or rules changes. Uses :has() (modern browsers). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.92</title>
+<title>Chainmail — Battlefield · v0.11.96</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -19,7 +19,7 @@
     padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
   .header h1 { font-size: 22px; font-weight: 700; margin: 0; line-height: 1; }
   .header .sub { margin: 0; flex: 1; }
-  .header .version-tag { font-size: 10px; letter-spacing: 1.5px; color: var(--ink-soft);
+  .version-tag { font-size: 10px; letter-spacing: 1.5px; color: var(--ink-soft);
     font-family: var(--sans); text-transform: uppercase; }
   h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
   .sub { font-family: var(--sans); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase;
@@ -35,6 +35,10 @@
   .toolbar .tb-setup { padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
   .toolbar .tb-now { background: rgba(216,178,90,0.07); border-radius: 5px; padding: 4px 5px; margin: -2px -3px; }
   .toolbar .tb-pin-right { margin-left: auto; }
+  .tb-setup .brand { font-family: var(--serif); font-size: 20px; font-weight: 700; margin: 0 6px 0 0; line-height: 1; }
+  .turn-tag { font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--ink); padding: 2px 9px; background: rgba(216,178,90,0.18); border: 1px solid rgba(216,178,90,0.5);
+    border-radius: 3px; white-space: nowrap; }
   .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
@@ -151,6 +155,17 @@
     color: var(--ink-soft); }
   .stat .v { font-variant-numeric: tabular-nums; font-weight: 700; }
   .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
+  /* Compact panels: 2-up stat grid (long lines span) + 2-up new-unit form (label over control) */
+  #selected-pane:not(.empty), #target-pane:not(.empty) { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  #selected-pane .stat.wide, #target-pane .stat.wide { grid-column: 1 / -1; }
+  #new-unit-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; align-items: start; }
+  #new-unit-panel > h2 { grid-column: 1 / -1; margin-bottom: 2px; }
+  #new-unit-panel .field { flex-direction: column; align-items: stretch; gap: 2px; margin-bottom: 0; }
+  #new-unit-panel .field > label { width: auto; }
+  #new-unit-panel .field select, #new-unit-panel .field input { width: 100%; }
+  #new-unit-panel .field input[type=checkbox] { width: auto; }
+  #new-unit-panel .field:has(.field-note) { grid-column: 1 / -1; }
+  #new-unit-panel .field:has(input[type=checkbox]) { flex-direction: row; align-items: center; grid-column: 1 / -1; }
 
   #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
@@ -277,15 +292,9 @@
 </head>
 <body>
 <div class="page">
-  <div class="header">
-    <h1>Battlefield</h1>
-    <div class="sub">Chainmail HTML Sim · Deferred spells resolve next turn</div>
-    <button id="btn-joust" class="gold" style="align-self:center">⚔ Joust / Tournament</button>
-    <span class="version-tag">v0.11.92</span>
-  </div>
-
   <div class="toolbar">
     <div class="tb-row tb-setup">
+      <h1 class="brand">Battlefield</h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -300,12 +309,15 @@
       <span class="tb-sep" aria-hidden="true"></span>
       <button id="btn-settings" class="secondary">Settings</button>
       <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
-      <button id="btn-back-setup" class="secondary tb-pin-right" hidden>↩ Setup</button>
+      <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
+      <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
+      <span class="version-tag">v0.11.96</span>
     </div>
     <div class="tb-row tb-now">
-      <div class="tn-info"><span class="phase-tag" id="phase">Turn 1 · Side A</span></div>
+      <div class="tn-info" style="display:none"><span class="phase-tag" id="phase">Turn 1 · Side A</span></div>
       <div class="tn-track">
+        <span class="turn-tag" id="turn-tag"></span>
         <span class="phase-nav">
           <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
           <span class="phase-rail" id="phase-rail"></span>
@@ -316,7 +328,7 @@
         <button id="btn-redo" class="secondary" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
         <button id="btn-clear-sel" class="secondary">Clear selection</button>
       </div>
-      <div class="tn-act">
+      <div class="tn-act" style="display:none">
         <span class="action-slot" id="action-slot"></span>
         <button id="btn-end-round" class="gold">End turn</button>
       </div>
@@ -657,7 +669,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.92';
+const SIM_VERSION = '0.11.96';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4581,6 +4593,15 @@ function updateSidebar() {
       (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` +
                   `<div class="stat"><span class="k">Shots</span><span class="v">${Math.max(0, missileShotsRemaining(u))} / ${missileShotsAllowed(u)}${(rangedWeaponById(u.weapon)?.halfRoF && missileShotsRemaining(u) <= 0) ? ' · reloading' : ''}</span></div>` : '');
   }
+  // Compact stat grid: long values (or any with a <small>) span both columns.
+  for (const pane of ['#selected-pane', '#target-pane']) {
+    const el = $(pane);
+    if (!el || el.classList.contains('empty')) continue;
+    el.querySelectorAll('.stat').forEach(srow => {
+      const v = srow.querySelector('.v');
+      if (v && (v.textContent.length > 15 || v.querySelector('small'))) srow.classList.add('wide');
+    });
+  }
 }
 
 function engineRangeToTarget(a, d) { return pxToInches(Math.hypot(a.x - d.x, a.y - d.y)); }
@@ -8370,18 +8391,18 @@ function primaryActionId() {
   if (id === 'initiative') return state.initiativeRoll ? 'btn-phase-fwd' : 'btn-roll-init';
   if (id === 'missile') return 'btn-missile';
   // Melee hands off: resolve while melees remain, then End turn becomes the action.
-  if (id === 'melee') return meleesPending() ? 'btn-melee' : 'btn-end-round';
+  if (id === 'melee') return meleesPending() ? 'btn-melee' : 'btn-phase-fwd';
   return 'btn-phase-fwd';   // move/artillery → the forward arrow advances
 }
 // Light exactly one primary button per phase and dampen the other gold forward
 // buttons, so the sequence reads at a glance. Advisory mode leaves the toolbar as-is.
 function applyPhaseEmphasis() {
-  const ids = ['btn-melee','btn-missile','btn-roll-init','btn-elect-order','btn-phase-fwd','btn-end-round'];
+  const ids = ['btn-melee','btn-missile','btn-roll-init','btn-elect-order','btn-phase-fwd'];
   ids.forEach(id => $('#'+id).classList.remove('lit','quiet'));
   if (!state.settings.enforcePhases) return;
   const primary = primaryActionId();
   $('#'+primary).classList.add('lit');
-  ['btn-end-round','btn-elect-order'].forEach(id => {
+  ['btn-elect-order'].forEach(id => {
     if (id !== primary) $('#'+id).classList.add('quiet');
   });
 }
@@ -8393,9 +8414,11 @@ function renderTurnUI() {
     // Deployment: no turn yet. The rail's leading Setup cell hosts Begin battle;
     // the turn sequence shows greyed ahead. Movement is free for both sides.
     $('#phase').innerHTML = 'Deployment · <span style="color:var(--ink-soft)">place &amp; arrange both armies</span>';
+    $('#turn-tag').textContent = 'Setup';
     $('#btn-phase-back').disabled = true;
-    $('#btn-phase-fwd').disabled = true;
-    $('#btn-phase-back').title = $('#btn-phase-fwd').title = 'The battle has not begun';
+    $('#btn-phase-fwd').disabled = false;   // ▶ begins the battle (Setup → Init) — always live in deployment
+    $('#btn-phase-back').title = 'Deployment — nothing precedes it';
+    $('#btn-phase-fwd').title = 'Begin battle →';
     $('#btn-back-setup').hidden = true;
     $('#btn-end-round').hidden = true;
     $('#btn-roll-init').hidden = true;
@@ -8408,9 +8431,7 @@ function renderTurnUI() {
       const cls = k === 0 ? 'now' : 'todo';
       return `${sep}<span class="pstep ${cls}"><span class="mk"></span>${lbl}</span>`;
     }).join('');
-    const slot = $('#action-slot');
-    slot.innerHTML = '';
-    slot.appendChild($('#btn-begin-battle'));
+    $('#action-slot').innerHTML = '';   // the ▶ arrow begins the battle; no separate Begin-battle button
     const hintEl = $('#phase-hint');
     hintEl.textContent = '▸ deploy both armies, lay terrain, build to budget — then Begin battle';
     hintEl.hidden = false;
@@ -8434,15 +8455,16 @@ function renderTurnUI() {
     body = ph.label;
   }
   $('#phase').innerHTML = `Turn ${state.turn} · ${body}${enf ? ' · <span style="color:var(--rear)">enforced</span>' : ''}`;
-  $('#btn-end-round').hidden = false;
+  $('#turn-tag').textContent = enf ? `Turn ${state.turn} · enf` : `Turn ${state.turn}`;
+  $('#btn-end-round').hidden = true;   // retired — the ▶ arrow ends the turn at Melee
   $('#btn-back-setup').hidden = false;
-  // Phase arrows: forward advances within the turn (off at Melee — End turn crosses
-  // the boundary); back steps within the turn (off at Init). Titles name the target.
+  // Phase arrows drive the whole turn: ▶ advances within the turn and, at Melee, ends
+  // the turn (endRound) and rolls into the next; ◀ steps back, off at Init.
   const atMelee = state.phaseIdx >= PHASES.length - 1;
   $('#btn-phase-back').disabled = state.phaseIdx === 0;
-  $('#btn-phase-fwd').disabled = atMelee;
+  $('#btn-phase-fwd').disabled = false;
   $('#btn-phase-back').title = state.phaseIdx === 0 ? 'Start of turn' : `Back to ${PHASES[state.phaseIdx - 1].label}`;
-  $('#btn-phase-fwd').title = atMelee ? 'Last phase — use End turn' : `Advance to ${PHASES[state.phaseIdx + 1].label}`;
+  $('#btn-phase-fwd').title = atMelee ? 'End turn → next turn' : `Advance to ${PHASES[state.phaseIdx + 1].label}`;
   // Initiative phase: Roll button before the dice are cast, election after.
   const inInit = ph.id === 'initiative';
   $('#btn-roll-init').hidden = !inInit || !!state.initiativeRoll;
@@ -8469,19 +8491,15 @@ function renderTurnUI() {
     const st = k === state.phaseIdx ? ` style="border-bottom-color:${accent}"` : '';
     return `${sep}<span class="pstep ${cls}"${st}><span class="mk">${mk}</span>${lbl}</span>`;
   }).join('');
-  const primary = primaryActionId();
-  const inCell = ['btn-roll-init', 'btn-missile', 'btn-melee'].includes(primary) ? primary : null;
-  const slot = $('#action-slot');
-  slot.innerHTML = inCell ? '' : `<span class="acthint">${cellHint(ph.id)}</span>`;
-  if (inCell) slot.appendChild($('#' + inCell));
+  $('#action-slot').innerHTML = '';   // the ▶ arrow drives the sequence; the phase's primary verbs live in the dock
   const dock = $('#phase-dock');
-  let dockIds = enf
-    ? (ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
+  const dockIds = enf
+    ? (ph.id === 'initiative' ? ['btn-roll-init', 'btn-elect-order']
+      : ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
       : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell']
-      : ph.id === 'melee' ? ['btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
+      : ph.id === 'melee' ? ['btn-melee', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'].filter(id => id !== inCell);
-  if (ph.id === 'initiative' && state.initiativeRoll) dockIds = dockIds.concat('btn-elect-order');
+    : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
   const hintEl = $('#phase-hint');
@@ -8541,6 +8559,7 @@ function rollInitiativeAction() {
 }
 // "Next phase ▸" — step the sequence; advancing past melee ends the round.
 function advancePhase() {
+  if (state.setup) { beginBattle(); return; }   // ▶ in deployment begins the battle (Setup → Init)
   if (state.phaseIdx >= PHASES.length - 1) { endRound(); return; }
   pushUndo('phase');
   if (PHASES[state.phaseIdx].id === 'missile') resolveMissilePhase();   // p.9: simultaneous fire lands just before melee
@@ -8950,18 +8969,18 @@ renderBoard();
     state.phaseIdx = 4;
     console.assert(primaryActionId() === 'btn-missile' && /missile fire/i.test(phaseHint()), 'missile phase → Fire missiles is lit');
     state.phaseIdx = 5;
-    console.assert(primaryActionId() === 'btn-end-round' && /end the turn/i.test(phaseHint()), 'melee with no contacts → hands off to End round');
+    console.assert(primaryActionId() === 'btn-phase-fwd' && /end the turn/i.test(phaseHint()), 'melee with no contacts → the forward arrow ends the turn');
     state.phaseIdx = 1;
     console.assert(primaryActionId() === 'btn-phase-fwd' && /Side A moves/.test(phaseHint()), 'move phase → the forward arrow is lit, hint names the mover');
     state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; state.units = _u; }
 
-  // Phase arrows: the forward arrow is the lit primary only mid-turn — never at
-  // Melee, where it is disabled (End turn crosses the boundary instead). Guards
-  // against ever lighting a disabled control.
+  // Phase arrows drive the whole turn: the forward arrow is the lit primary mid-turn
+  // AND at Melee once melees are resolved (it ends the turn). It is not the primary
+  // only when an earlier action must come first (unrolled initiative).
   { const _pi = state.phaseIdx, _ir = state.initiativeRoll, _u = state.units;
     state.units = []; state.initiativeRoll = { a:5, b:3, winner:'A' };
     state.phaseIdx = PHASES.length - 1;
-    console.assert(primaryActionId() !== 'btn-phase-fwd', 'melee → forward arrow is never the lit primary (it is disabled there)');
+    console.assert(primaryActionId() === 'btn-phase-fwd', 'melee resolved → the forward arrow ends the turn');
     state.phaseIdx = 0; state.initiativeRoll = null;
     console.assert(primaryActionId() !== 'btn-phase-fwd', 'initiative unrolled → forward arrow not lit (Roll comes first)');
     state.phaseIdx = _pi; state.initiativeRoll = _ir; state.units = _u; }
