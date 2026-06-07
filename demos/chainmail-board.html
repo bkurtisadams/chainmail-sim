@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.110 · Phantasmal Forces (Fantasy spell №1, Complexity 2, p.31) now implemented — 8→9 of 16 spells done. Per Kurt's ruling the apparition is a real unit with no disbelief mechanic: shift-click any non-works unit as the template, cast, and an apparition of it spawns on the caster's side beside the Wizard. It moves and fights exactly as its apparent type (✦ insubstantial/immunity intentionally NOT modelled — it is fought and killed like the real thing), but the Wizard must maintain it: cullPhantasms() vanishes it the instant the caster moves or falls, or after PHANTASM_DURATION=4 turns (the "four turns, maxi-duration" cap), swept from maintainSpells() and again at the endRound boundary before movedThisTurn resets. Phantasm-Wizards are barred from casting (no recursive apparitions). Cue: a translucent violet dashed ring + a PHANTASM-n countdown badge. 'any'-target cast hint corrected (template/bearing). Range-leash to caster omitted as a faithful simplification. Builds on v0.11.109. -->
+<!-- chainmail-board.html · v0.11.112 · Custom unit names/labels — name a Wizard "Gandalf", a hero "Aragorn", a mass unit "The Black Company", an orc band "Rotting Eye". New optional Name field at the top of the New-unit panel (round-trips through loadUnitIntoPanel/spawnUnit for edits), plus a Rename… item in the right-click context menu (prompt, undoable via the ctx snapshot). u.label persists in saves automatically (captureSnapshot); hydrateUnit defaults it to '' for older boards. Render: a named unit shows the bold name on top with a muted type+count second line; unlabeled units render exactly as before, and a badgeY0 baseline drops the status-badge stack below the extra line. Labels run through a new escXml() helper before hitting the SVG <text> (so & < > " can't break rendering), capped at 40 chars. No combat logic touched. Builds on v0.11.111. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.110</title>
+<title>Chainmail — Battlefield · v0.11.112</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -20,7 +20,7 @@
   .header h1 { font-size: 22px; font-weight: 700; margin: 0; line-height: 1; }
   .header .sub { margin: 0; flex: 1; }
   .version-tag { font-size: 10px; letter-spacing: 1.5px; color: var(--ink-soft);
-    font-family: var(--sans); text-transform: uppercase; }
+    font-family: var(--sans); text-transform: uppercase; margin-left: 6px; }
   h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
   .sub { font-family: var(--sans); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase;
     color: var(--ink-soft); }
@@ -296,7 +296,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield</h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.112</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -304,17 +304,18 @@
       <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
       <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
       <span class="tb-sep" aria-hidden="true"></span>
-      <button id="btn-save" class="secondary" title="Save the board (units, engines, terrain, turn state) to a JSON file">Save</button>
-      <button id="btn-load" class="secondary" title="Load a board from a JSON file">Load</button>
+      <button id="btn-save" class="secondary" title="Save the board to a named JSON file (you choose the filename)">Save…</button>
       <input id="file-load" type="file" accept="application/json,.json" hidden>
-      <select id="map-preset" title="Load a built-in map" style="height:26px; padding:2px 6px; font:inherit;"><option value="">Maps ▾</option></select>
+      <select id="load-menu" title="Load a saved board from a file, or a built-in map" style="height:26px; padding:2px 6px; font:inherit;">
+        <option value="">Load ▾</option>
+        <option value="__file__">Load from file…</option>
+      </select>
       <span class="tb-sep" aria-hidden="true"></span>
       <button id="btn-settings" class="secondary">Settings</button>
       <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.110</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -378,6 +379,7 @@
       </div>
       <div class="panel" id="new-unit-panel">
         <h2 class="collapsible" id="new-unit-toggle"><span><span id="new-unit-label">New unit</span> <span class="caret">▾</span></span><span class="nu-actions"><button id="btn-edit-cancel" class="cancel-btn" hidden>Cancel</button><button id="btn-spawn" class="gold spawn-btn" title="Spawn the unit at board centre">+ Spawn</button></span></h2>
+        <div class="field"><label>Name</label><input type="text" id="f-label" maxlength="28" placeholder="optional — e.g. Gandalf" autocomplete="off"></div>
         <div class="field"><label>Side</label><select id="f-side">
           <option value="A">A (blue)</option><option value="B">B (red)</option>
         </select></div>
@@ -509,6 +511,7 @@
 
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
+  <button data-act="rename">Rename…</button>
   <button data-act="restore">Restore unit (full reset)</button>
   <button data-act="reset-actions">Reset move &amp; actions (this round)</button>
   <button data-act="reset-status">Reset status (ready · clear paralysis)</button>
@@ -559,6 +562,10 @@
       <tr><td>ctrl + shift + z &nbsp; / &nbsp; ctrl + y</td><td>Redo</td></tr>
       <tr><td>?</td><td>Open this reference</td></tr>
       <tr><td>right-click</td><td>Per-unit context menu (restore, reshape, etc.)</td></tr>
+    </table>
+    <div class="modal-head" style="margin-top:16px;">Spells · Fantasy Supplement (p.31–32)</div>
+    <table class="help-table">
+      <tbody id="spell-help-rows"></tbody>
     </table>
     <div class="modal-foot">
       <button class="secondary" data-act="close">Close</button>
@@ -674,7 +681,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.110';
+const SIM_VERSION = '0.11.112';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1064,6 +1071,27 @@ const SPELLS = Object.freeze([
   { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: true  },
 ]);
 const SPELL_BY_KEY = Object.freeze(Object.fromEntries(SPELLS.map(sp => [sp.key, sp])));
+// One-line effect summaries (paraphrased from the Fantasy Supplement, p.31-32) for
+// the in-app spell reference in the help modal. Keyed to SPELLS; the done flag there
+// is the single source of truth for the "in sim" marker, so this never drifts.
+const SPELL_DESC = Object.freeze({
+  phantasmal:  'Conjures an apparition of a unit or creature; here, a real unit you control for up to 4 turns while the Wizard holds it.',
+  darkness:    'Growing gloom blankets the field until the caster is disturbed; only darkvision fights in full dark.',
+  wizardLight: 'Dispels darkness in a 24″ radius around the caster.',
+  detection:   'Reveals hidden enemies or enemy magic (but not against a stronger Wizard).',
+  concealment: 'Hides one unit or creature from all but those able to detect the hidden.',
+  conjureElem: 'Summons one elemental of a kind; if the caster is disturbed it turns on him.',
+  movingTerr:  'Shifts vegetation, hills, and the like across the battlefield.',
+  protEvil:    'A 12″ circle that keeps evil creatures out.',
+  levitate:    'The target rises 6″ per turn for up to 6 turns; no lateral movement.',
+  slowness:    'Up to 20 figures move at half speed for 2 turns.',
+  haste:       'Up to 20 figures gain +50% movement for 3 turns.',
+  polymorph:   'The caster takes the form of anything up to giant size.',
+  confusion:   'Up to 20 enemy figures act in the opposite manner for one turn.',
+  halluTerr:   'Makes terrain seem to appear or vanish until something living touches it.',
+  cloudkill:   'A 3×6×3″ poison cloud drifts from the caster, killing men, orcs, dwarves and the like.',
+  antiMagic:   'A 5″ shell that blocks all magic in or out, for up to 6 turns.',
+});
 // Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
 // (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
 const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
@@ -1461,6 +1489,16 @@ function resolvePendingSpells() {
 function populateSpellPicker() {
   const sel = $('#dock-spell'); if (!sel) return;
   sel.innerHTML = SPELLS.filter(sp => sp.done).map(sp => `<option value="${sp.key}">${sp.name}</option>`).join('');
+}
+// Build the spell reference rows in the help modal from the SPELLS source of truth:
+// the done flag drives the "in sim" marker, so the list and the picker can't diverge.
+function populateSpellHelp() {
+  const tb = document.getElementById('spell-help-rows'); if (!tb) return;
+  tb.innerHTML = SPELLS.map(sp => {
+    const on = !!sp.done, desc = SPELL_DESC[sp.key] || '';
+    const tail = on ? '' : ' <em style="color:var(--ink-soft)">(not yet modelled)</em>';
+    return `<tr${on ? '' : ' style="opacity:.55"'}><td>${on ? '✓' : '○'} ${sp.name} · C${sp.complexity}</td><td>${desc}${tail}</td></tr>`;
+  }).join('');
 }
 // --- Cloudkill (p.32) ----------------------------------------------------
 // A 3" deep x 6" wide gaseous cloud that kills men, orcs, dwarves "and the like"
@@ -4244,6 +4282,10 @@ function renderWorks(u) {
       <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="9.5" font-weight="600" fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">${u.side} · ${nm} · ${meta}</text>
     </g>`;
 }
+// Escape user-entered text (unit labels) before it goes into an SVG <text> node.
+function escXml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
 function renderUnit(u) {
   if (u.destroyed) return '';
   if (u.kind === 'works') return renderWorks(u);
@@ -4364,11 +4406,12 @@ function renderUnit(u) {
   const groupOpacity = (allSpent ? 0.6 : 1) * sv.opacity * fatigueOpacity * (idleNow ? 0.4 : 1);
   const labelY = u.y + unitScreenHalfHeight(b, u.facing) + 14;
   let badgeRow = 0;
+  const badgeY0 = labelY + (u.label ? 26 : 14);   // drop badges below the muted second line when a name is shown
   const chargeBadgeStr = u.charged
     ? (() => {
         const txt = 'CHARGE';
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="var(--gold)" opacity="0.95"/>
@@ -4381,7 +4424,7 @@ function renderUnit(u) {
     ? (() => {
         const txt = 'FATIGUED';
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#8a6d3b" opacity="0.95"/>
@@ -4394,7 +4437,7 @@ function renderUnit(u) {
     ? (() => {
         const txt = '½ PAUSE';
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#46707d" opacity="0.95"/>
@@ -4406,7 +4449,7 @@ function renderUnit(u) {
   const statusBadgeStr = sv.text
     ? (() => {
         const tw = sv.text.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="${sv.color}" opacity="0.95"/>
@@ -4421,7 +4464,7 @@ function renderUnit(u) {
         const n = paralyzedFigures(u);
         const txt = u.kind === 'individual' ? 'PARALYZED' : `PARALYZED ${n}`;
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#3b6ea8" opacity="0.95"/>
@@ -4435,7 +4478,7 @@ function renderUnit(u) {
     ? (() => {
         const txt = `REFORMING → ${String(u.reform.to).toUpperCase()}`;
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#8a6d3b" opacity="0.95"/>
@@ -4450,7 +4493,7 @@ function renderUnit(u) {
         const left = Math.max(0, (u.phantasmUntil || state.turn) - state.turn);
         const txt = `PHANTASM ${left}`;
         const tw = txt.length * 6.5 + 14;
-        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
             <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#7a4fb0" opacity="0.95"/>
@@ -4471,7 +4514,9 @@ function renderUnit(u) {
       ${badges}
       <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="10.5" font-weight="700"
             fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
-        ${u.side} · ${T.name} · ${u.count}/${u.startCount}
+        ${u.label
+          ? `<tspan font-size="11.5">${u.side} · ${escXml(u.label)}</tspan><tspan x="${u.x}" dy="12" font-size="9" font-weight="600" fill="var(--ink-soft)">${T.name} · ${u.count}/${u.startCount}</tspan>`
+          : `${u.side} · ${T.name} · ${u.count}/${u.startCount}`}
       </text>
       ${chargeBadgeStr}
       ${fatigueBadgeStr}
@@ -6165,6 +6210,12 @@ function downloadJson(filename, text) {
 function saveScenario() {
   const d = new Date(), p = n => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  const suggested = `chainmail-${stamp}`;
+  const entered = prompt('Save board as (filename — .json is added automatically):', suggested);
+  if (entered === null) return;   // cancelled
+  let base = entered.trim() || suggested;
+  if (base.toLowerCase().endsWith('.json')) base = base.slice(0, -5);
+  const fname = `${base}.json`;
   const data = {
     format: 'chainmail-board',
     simVersion: SIM_VERSION,
@@ -6172,8 +6223,8 @@ function saveScenario() {
     board: { wIn: state.settings.boardWIn, hIn: state.settings.boardHIn },
     state: captureSnapshot(),
   };
-  downloadJson(`chainmail-${stamp}.json`, JSON.stringify(data, null, 2));
-  appendTurn('Board saved', `Exported ${state.units.length} piece${state.units.length === 1 ? '' : 's'} and ${state.terrain.length} terrain feature${state.terrain.length === 1 ? '' : 's'} to chainmail-${stamp}.json.`);
+  downloadJson(fname, JSON.stringify(data, null, 2));
+  appendTurn('Board saved', `Exported ${state.units.length} piece${state.units.length === 1 ? '' : 's'} and ${state.terrain.length} terrain feature${state.terrain.length === 1 ? '' : 's'} to ${fname}.`);
 }
 // Fill any fields newer than the save with the same defaults spawnUnit uses, so
 // a board written by an older build still loads cleanly.
@@ -6183,7 +6234,7 @@ function hydrateUnit(u) {
     movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
     fatigued: false, moveStreak: 0, charged: false, chargedLastTurn: false,
     prisoners: 0, indirect: false, cover: 'none', breathsUsed: 0, facing: 0,
-    mercenary: false, spawnTurn: 0,
+    mercenary: false, spawnTurn: 0, label: '',
   };
   for (const k in def) if (u[k] === undefined) u[k] = def[k];
   if (u.turnStartFacing === undefined) u.turnStartFacing = u.facing || 0;
@@ -6312,9 +6363,15 @@ const PRESETS = [
     },
   },
 ];
+// The unified Load ▾ menu routes the file option to the hidden input and any
+// built-in map key on to onPresetPick (which resets the menu and loads it).
+function onLoadMenu(evt) {
+  if (evt.target.value === '__file__') { evt.target.selectedIndex = 0; $('#file-load').click(); return; }
+  onPresetPick(evt);
+}
 function onPresetPick(evt) {
   const key = evt.target.value;
-  evt.target.selectedIndex = 0;   // snap the select back to the "Maps ▾" label
+  evt.target.selectedIndex = 0;   // snap the select back to the "Load ▾" label
   if (!key) return;
   const preset = PRESETS.find(p => p.key === key);
   if (!preset) return;
@@ -8019,6 +8076,7 @@ function spawnUnit() {
     alignment: $('#f-alignment').value || defaultAlignment(type),
     weapon,
     mercenary: $('#f-merc').checked,
+    label: ($('#f-label').value || '').trim().slice(0, 40),
     spawnTurn: state.setup ? 0 : state.turn,
     acted: { moved: false, fired: false, fought: false },
     movedThisTurn: 0,   // Slice 8A: inches moved this turn (accumulated on drag/nudge; reset in endRound)
@@ -8106,6 +8164,7 @@ function spawnUnit() {
 // stay on the board (drag / rotate). Live battle state is out of scope here.
 function loadUnitIntoPanel(u) {
   $('#f-side').value = u.side;
+  $('#f-label').value = u.label || '';
   $('#f-merc').checked = !!u.mercenary;
   $('#f-kind').value = u.kind;
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
@@ -8389,6 +8448,9 @@ function onContextMenuAction(evt) {
     if (canFly(u)) { u.airborne = !u.airborne; u.turnsAloft = 0; if (!u.airborne) { u.altitudeIn = 0; u.levitated = false; u.levitateUntil = 0; } }
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
+  } else if (act === 'rename') {
+    const entered = prompt('Name this unit (blank to clear):', u.label || '');
+    if (entered !== null) u.label = entered.trim().slice(0, 40);
   } else if (act === 'delete') {
     if (state.editUnitId === u.id) cancelEdit();
     state.units = state.units.filter(x => x.id !== u.id);
@@ -8890,14 +8952,17 @@ document.querySelectorAll('[data-board-preset]').forEach(b => b.addEventListener
 }));
 $('#btn-reset').addEventListener('click', resetBoard);
 $('#btn-save').addEventListener('click', saveScenario);
-$('#btn-load').addEventListener('click', () => $('#file-load').click());
 $('#file-load').addEventListener('change', onLoadFile);
+const _loadMenu = $('#load-menu');
+const _presetGroup = document.createElement('optgroup');
+_presetGroup.label = 'Built-in maps';
 for (const p of PRESETS) {
   const o = document.createElement('option');
   o.value = p.key; o.textContent = p.name; o.title = p.desc;
-  $('#map-preset').appendChild(o);
+  _presetGroup.appendChild(o);
 }
-$('#map-preset').addEventListener('change', onPresetPick);
+_loadMenu.appendChild(_presetGroup);
+_loadMenu.addEventListener('change', onLoadMenu);
 $('#board').addEventListener('mousedown', onBoardMouseDown);
 $('#board').addEventListener('mousemove', onBoardMouseMove);
 $('#board').addEventListener('mouseup',   onBoardMouseUp);
@@ -8943,6 +9008,7 @@ $('#btn-grid').textContent = `Grid: ${state.showGrid ? 'on' : 'off'}`;
 syncMeasureButton();
 syncUndoButtons();
 populateSpellPicker();   // fill the dock spell dropdown with implemented spells
+populateSpellHelp();     // fill the spell reference table in the help modal
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
