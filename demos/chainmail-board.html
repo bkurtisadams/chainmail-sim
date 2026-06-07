@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.108 · Elemental air-vs-air / earthbound melee dice (p.38): new elementalMeleeBonus(atk,def) — an Air Elemental adds +2 dice against an airborne foe, an Earth Elemental adds +1 against an earthbound (grounded) foe; Fire/Water carry no altitude die. Wired into the mixed melee path (onResolveMixed) where an elemental fights as 4 HH against a mass unit: the die folds into the creature’s bonus and shows in the class label (e.g. “HH +1 die”). Faithful omission: when an elemental fights another individual the Fantasy Combat 2d6 table is used (no dice to add), matching RAW; elementals never appear in mass-vs-mass. Builds on v0.11.107. -->
+<!-- chainmail-board.html · v0.11.109 · Revert the new-unit form from the two-column grid (v0.11.96) back to a single column, compacted to match the Selected panel: drop the #new-unit-panel grid/label-over-control overrides so fields fall back to the base single-row .field style (label left, control right), tighten the row rhythm to margin-bottom 3px, widen labels to 84px to keep them on one line. Checkbox and field-note rows render inline as before. CSS only — no behaviour change. Builds on v0.11.108. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.108</title>
+<title>Chainmail — Battlefield · v0.11.109</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -164,15 +164,10 @@
     color: var(--ink-soft); }
   .stat .v { font-variant-numeric: tabular-nums; font-weight: 700; }
   .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
-  /* Compact new-unit form: label over control, two per row (Selected/Target stay single-row) */
-  #new-unit-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; align-items: start; }
-  #new-unit-panel > h2 { grid-column: 1 / -1; margin-bottom: 2px; }
-  #new-unit-panel .field { flex-direction: column; align-items: stretch; gap: 2px; margin-bottom: 0; }
-  #new-unit-panel .field > label { width: auto; }
-  #new-unit-panel .field select, #new-unit-panel .field input { width: 100%; }
-  #new-unit-panel .field input[type=checkbox] { width: auto; }
-  #new-unit-panel .field:has(.field-note) { grid-column: 1 / -1; }
-  #new-unit-panel .field:has(input[type=checkbox]) { flex-direction: row; align-items: center; grid-column: 1 / -1; }
+  /* Compact new-unit form: single column, dense label-left rows in the Selected-panel rhythm */
+  #new-unit-panel > h2 { margin-bottom: 4px; }
+  #new-unit-panel .field { margin-bottom: 3px; }
+  #new-unit-panel .field > label { width: 84px; }
 
   #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
@@ -319,7 +314,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.108</span>
+      <span class="version-tag">v0.11.109</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -679,7 +674,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.108';
+const SIM_VERSION = '0.11.109';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
