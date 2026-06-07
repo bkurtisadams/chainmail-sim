@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.105 · Melee-descent gate (flight slice). Melee now requires matching altitude: inMeleeContact returns false when one unit is airborne and the other grounded, so a flier must Land (descend) to engage ground troops in melee — and exposes itself by doing so — while air-vs-air (both airborne) and ground-vs-ground melee are unaffected (p.34-38 / design pass). The same guard is added to canReachContact so a charge can’t close to contact across levels either. This single chokepoint flows through every caller: the melee button gate, meleesPending, charge contact, and move-touch auto-contact. node-tested (cross-level blocked, same-level allowed). Ranged/breath are deliberately NOT gated — those cross levels (dragon breathes down); breath/ranged-from-air handling comes in its own slice. No data changes. -->
+<!-- chainmail-board.html · v0.11.106 · Add Fly / Land to the unit right-click context menu (discoverability, alongside the Selected-panel button). New data-act="toggle-fly" entry in #ctx-menu (flight cluster, by Breathe fire); shown only for canFly units in onUnitContextMenu and labelled Take off / Land per current airborne state; the dispatcher toggles u.airborne (resets turnsAloft; on landing clears altitudeIn + levitated), reusing the surrounding ctx pushUndo + renderBoard. No new behaviour — same toggle as the panel button, reachable both ways. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.105</title>
+<title>Chainmail — Battlefield · v0.11.106</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.105</span>
+      <span class="version-tag">v0.11.106</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -523,6 +523,7 @@
   <button data-act="resume-move">Resume move (take 2nd leg)</button>
   <button data-act="toggle-indirect">Indirect fire</button>
   <button data-act="cycle-cover">Cover</button>
+  <button data-act="toggle-fly">Take off</button>
   <button data-act="breathe">Breathe fire (9″ cone)</button>
   <button data-act="paralyze-touch">Paralyzing touch (freeze enemy figures)</button>
   <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
@@ -678,7 +679,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.105';
+const SIM_VERSION = '0.11.106';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -8134,6 +8135,9 @@ function onUnitContextMenu(evt, unitId) {
   const coverBtn = document.querySelector('#ctx-menu [data-act="cycle-cover"]');
   coverBtn.textContent = `Cover: ${u.cover || 'none'} (tap to cycle)`;
   // Breathe fire — dragons only; label shows remaining breaths.
+  const flyBtn = document.querySelector('#ctx-menu [data-act="toggle-fly"]');
+  flyBtn.hidden = !canFly(u);
+  if (canFly(u)) flyBtn.textContent = u.airborne ? 'Land' : 'Take off';
   const breatheBtn = document.querySelector('#ctx-menu [data-act="breathe"]');
   breatheBtn.hidden = u.type !== 'DRAGON';
   if (u.type === 'DRAGON') {
@@ -8312,6 +8316,8 @@ function onContextMenuAction(evt) {
       u.acted.moved = true;
       appendTurn(`River crossing`, `<div class="step">${typeById(u.type).name} (${u.side}) crosses to the far bank — its entire move (p.9); it halts there.</div>`);
     }
+  } else if (act === 'toggle-fly') {
+    if (canFly(u)) { u.airborne = !u.airborne; u.turnsAloft = 0; if (!u.airborne) { u.altitudeIn = 0; u.levitated = false; u.levitateUntil = 0; } }
   } else if (act === 'rotate-90') {
     rotateUnit(u, 90);
   } else if (act === 'delete') {
