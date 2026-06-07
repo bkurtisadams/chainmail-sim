@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.100 · Streamlined initiative flow. On the Init phase, both the ▶ arrow and the Roll button now roll initiative AND advance straight to First Move in one step (rollInitiativeAction sets firstMover = winner by default, then phaseIdx+1; advancePhase delegates to it when Init is unrolled). The election moves from Init onto the First Move phase: the “Move [winner] last/first” button (btn-elect-order) now shows on move1 while initiative is rolled and no unit has moved yet, and toggling it swaps state.firstMover — which flips the First Move / Last Move rail pills and the side underline. It LOCKS once the first mover begins moving (RAW elects before movement, p.9 §1), so you can’t make the other side “first” after movement has started. Enforce-mode dock map updated: Roll stays on Init, election sits on First Move. No rules-fidelity change to the sequence itself; flow/UX only. -->
+<!-- chainmail-board.html · v0.11.101 · Stop the phase arrows from jumping. The ◀ / ▶ buttons shifted because the Turn badge changes width (Setup → Turn N → growing digits) and the rail gains/loses the Setup cell between deployment and battle. Fix reserves fixed space on both sides: the Turn badge now sits in a fixed 108px .badge-slot (◀ anchored after it), and the rail is stacked in an inline-grid over an invisible .rail-ghost — a static widest-case rail (all 7 cells with ✓ marks and A/B pills) that sizes the column so ▶ stays put no matter which phase/state is showing. The real #phase-rail overlays the ghost (grid-area 1/1); reserved whitespace falls to the right of the rail in battle (one fewer cell than the ghost). HTML + CSS only — no JS or rules changes; renderTurnUI still fills #phase-rail and #turn-badge as before. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.100</title>
+<title>Chainmail — Battlefield · v0.11.101</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -57,6 +57,10 @@
   .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
   .toolbar .phase-rail { display: flex; align-items: flex-start; gap: 3px; }
   .toolbar .phase-nav { display: flex; align-items: center; gap: 8px; }
+  .badge-slot { display: inline-flex; align-items: center; width: 108px; flex: 0 0 auto; }
+  .rail-stack { display: inline-grid; flex: 0 0 auto; }
+  .rail-stack > .phase-rail { grid-area: 1 / 1; }
+  .rail-stack > .rail-ghost { visibility: hidden; pointer-events: none; }
   .toolbar .phase-arrow { font-size: 13px; letter-spacing: 0; padding: 3px 9px; line-height: 1; }
   /* Passive tracker: plain stepper text — never a button. The highlight moves as
      phases advance; the controls below stay put. */
@@ -315,14 +319,17 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.100</span>
+      <span class="version-tag">v0.11.101</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
         <span class="phase-nav">
-          <span class="turn-badge" id="turn-badge"></span>
+          <span class="badge-slot"><span class="turn-badge" id="turn-badge"></span></span>
           <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
-          <span class="phase-rail" id="phase-rail"></span>
+          <span class="rail-stack">
+            <span class="phase-rail rail-ghost" aria-hidden="true"><span class="pstep"><span class="plabel"><span class="mk">✓</span>Setup</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>Init</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>First Move</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>Last Move</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>Artillery</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>Missile</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span><span class="sep">›</span><span class="pstep"><span class="plabel"><span class="mk">✓</span>Melee</span><span class="prow"><span class="ppill a">A</span><span class="ppill b">B</span></span></span></span>
+            <span class="phase-rail" id="phase-rail"></span>
+          </span>
           <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
         </span>
         <span class="tb-sep" aria-hidden="true"></span>
@@ -671,7 +678,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.100';
+const SIM_VERSION = '0.11.101';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
