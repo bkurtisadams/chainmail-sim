@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.97 · Revert the Selected/Target stat panes to single-row (one stat per full-width row, as before v0.11.96): the 2-column stat grid squeezed each cell to ~half the 240px panel, so keys and values wrapped and collided. Dropped the #selected-pane/#target-pane grid CSS and the .wide-tagging JS loop. The New unit form KEEPS its 2-column label-over-control grid (that looked good). No engine or rules changes; layout only. -->
+<!-- chainmail-board.html · v0.11.99 · Phase rail carries turn + whose-move, retiring the redundant status line. A Turn badge (“Turn N”, with a small red “enf” pill when phase-enforcement is on; “Setup” in deployment) sits before the ◀ arrow. Rail labels follow the RAW turn sequence (p.9): First → “First Move” (§2), Counter → “Last Move” (§3). Under each phase cell a colored side pill shows who acts: the lone mover under First/Last Move (side-colored underline matches), and BOTH A and B under Artillery/Missile/Melee since both sides take those steps (§§4-6); Initiative shows none. Pills on upcoming/past phases are dimmed, the active phase’s solid. New phaseSides(idx, firstMover) helper (node-tested both first-movers). pstep is now a label-over-pill stack (.plabel keeps the now-underline; .prow holds pills). The #phase status line and its dead body/sideTag builder are removed. No engine or rules changes; layout only. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.97</title>
+<title>Chainmail — Battlefield · v0.11.99</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -36,9 +36,6 @@
   .toolbar .tb-now { background: rgba(216,178,90,0.07); border-radius: 5px; padding: 4px 5px; margin: -2px -3px; }
   .toolbar .tb-pin-right { margin-left: auto; }
   .tb-setup .brand { font-family: var(--serif); font-size: 20px; font-weight: 700; margin: 0 6px 0 0; line-height: 1; }
-  .turn-tag { font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
-    color: var(--ink); padding: 2px 9px; background: rgba(216,178,90,0.18); border: 1px solid rgba(216,178,90,0.5);
-    border-radius: 3px; white-space: nowrap; }
   .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
@@ -58,18 +55,26 @@
   button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--ink-soft); }
   @keyframes litpulse { 0%, 100% { border-color: #b8923a; } 50% { border-color: #e7ca7e; } }
   .toolbar .phase-hint { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); padding: 1px 2px 0; }
-  .toolbar .phase-rail { display: flex; align-items: center; gap: 3px; }
+  .toolbar .phase-rail { display: flex; align-items: flex-start; gap: 3px; }
   .toolbar .phase-nav { display: flex; align-items: center; gap: 8px; }
   .toolbar .phase-arrow { font-size: 13px; letter-spacing: 0; padding: 3px 9px; line-height: 1; }
   /* Passive tracker: plain stepper text — never a button. The highlight moves as
      phases advance; the controls below stay put. */
   .toolbar .phase-rail { flex-wrap: wrap; }
-  .phase-rail .pstep { font-size: 11px; letter-spacing: 0.3px; padding: 1px 1px; white-space: nowrap; border-bottom: 2px solid transparent; }
+  .phase-rail .pstep { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; }
+  .phase-rail .pstep .plabel { font-size: 11px; letter-spacing: 0.3px; padding: 1px 1px; white-space: nowrap; border-bottom: 2px solid transparent; }
   .phase-rail .pstep .mk { display: inline-block; width: 11px; text-align: center; }
-  .phase-rail .pstep.todo { color: #c2b48f; }
-  .phase-rail .pstep.done { color: var(--ink-soft); }
-  .phase-rail .pstep.now { color: var(--ink); border-bottom-color: #8a6d2e; }
-  .phase-rail .sep { color: #cdbf9b; font-size: 11px; margin: 0 5px; }
+  .phase-rail .pstep.todo .plabel { color: #c2b48f; }
+  .phase-rail .pstep.done .plabel { color: var(--ink-soft); }
+  .phase-rail .pstep.now .plabel { color: var(--ink); border-bottom-color: #8a6d2e; }
+  .phase-rail .pstep .prow { display: flex; gap: 3px; align-items: center; min-height: 14px; }
+  .phase-rail .ppill { font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 1; padding: 2px 5px; border-radius: 7px; color: #fff; }
+  .phase-rail .ppill.a { background: var(--side-a-d); }
+  .phase-rail .ppill.b { background: var(--side-b-d); }
+  .phase-rail .pstep.todo .ppill, .phase-rail .pstep.done .ppill { opacity: 0.4; }
+  .phase-rail .sep { color: #cdbf9b; font-size: 11px; margin: 1px 5px 0; align-self: flex-start; }
+  .turn-badge { font-family: var(--sans); font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--ink); padding: 3px 8px; background: rgba(216,178,90,0.18); border: 1px solid rgba(216,178,90,0.5); border-radius: 3px; white-space: nowrap; align-self: center; }
+  .turn-badge .enf-pill { font-size: 8px; letter-spacing: 0.5px; padding: 1px 4px; margin-left: 4px; border-radius: 6px; background: var(--rear); color: #fff; }
   /* Decoupled controls on their own rows: a fixed primary-action slot and a
      reserved situational line, so nothing jumps location as phases advance. */
   .toolbar .tn-info { display: flex; flex-basis: 100%; margin-bottom: 5px; }
@@ -310,13 +315,12 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.97</span>
+      <span class="version-tag">v0.11.99</span>
     </div>
     <div class="tb-row tb-now">
-      <div class="tn-info" style="display:none"><span class="phase-tag" id="phase">Turn 1 · Side A</span></div>
       <div class="tn-track">
-        <span class="turn-tag" id="turn-tag"></span>
         <span class="phase-nav">
+          <span class="turn-badge" id="turn-badge"></span>
           <button id="btn-phase-back" class="secondary phase-arrow" title="Back a phase">◀</button>
           <span class="phase-rail" id="phase-rail"></span>
           <button id="btn-phase-fwd" class="secondary phase-arrow" title="Advance phase">▶</button>
@@ -667,7 +671,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.97';
+const SIM_VERSION = '0.11.99';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -868,7 +872,7 @@ const PHASES = Object.freeze([
   { id:'melee',      label:'Melee',        rule:'p.9 §6', side:null },
 ]);
 // Compact labels for the header phase-rail tracker, index-aligned to PHASES.
-const PHASE_RAIL = Object.freeze(['Init', 'First', 'Counter', 'Artillery', 'Missile', 'Melee']);
+const PHASE_RAIL = Object.freeze(['Init', 'First Move', 'Last Move', 'Artillery', 'Missile', 'Melee']);
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
@@ -878,6 +882,14 @@ function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
   if (phaseId === 'move2') return firstMover === 'A' ? 'B' : 'A';
   return null;
+}
+// Side pills shown under each rail phase: the lone mover for the two move phases,
+// BOTH sides for the steps both take (artillery / missile / melee), none for initiative.
+function phaseSides(idx, firstMover) {
+  const id = PHASES[idx].id;
+  if (id === 'move1' || id === 'move2') return [moverForPhase(id, firstMover)];
+  if (id === 'artillery' || id === 'missile' || id === 'melee') return [firstMover, firstMover === 'A' ? 'B' : 'A'];
+  return [];
 }
 // May `side` move right now? Advisory mode (enforce=false) never restricts.
 function phaseAllowsMove(phaseId, firstMover, side, enforce) {
@@ -8402,8 +8414,7 @@ function renderTurnUI() {
   if (state.setup) {
     // Deployment: no turn yet. The rail's leading Setup cell hosts Begin battle;
     // the turn sequence shows greyed ahead. Movement is free for both sides.
-    $('#phase').innerHTML = 'Deployment · <span style="color:var(--ink-soft)">place &amp; arrange both armies</span>';
-    $('#turn-tag').textContent = 'Setup';
+    $('#turn-badge').textContent = 'Setup';
     $('#btn-phase-back').disabled = true;
     $('#btn-phase-fwd').disabled = false;   // ▶ begins the battle (Setup → Init) — always live in deployment
     $('#btn-phase-back').title = 'Deployment — nothing precedes it';
@@ -8418,7 +8429,7 @@ function renderTurnUI() {
     $('#phase-rail').innerHTML = railLbls.map((lbl, k) => {
       const sep = k > 0 ? '<span class="sep">›</span>' : '';
       const cls = k === 0 ? 'now' : 'todo';
-      return `${sep}<span class="pstep ${cls}"><span class="mk"></span>${lbl}</span>`;
+      return `${sep}<span class="pstep ${cls}"><span class="plabel"><span class="mk"></span>${lbl}</span></span>`;
     }).join('');
     $('#action-slot').innerHTML = '';   // the ▶ arrow begins the battle; no separate Begin-battle button
     const hintEl = $('#phase-hint');
@@ -8427,24 +8438,7 @@ function renderTurnUI() {
     updateButtons();
     return;
   }
-  const sideTag = (s) => {
-    const c = s === 'A' ? 'var(--side-a-d)' : 'var(--side-b-d)';
-    return `<b style="color:${c}">${s}</b>`;
-  };
-  let body;
-  if (ph.id === 'initiative') {
-    const r = state.initiativeRoll;
-    const elected = r && state.firstMover !== r.winner ? ' (elects to move last)' : '';
-    body = r
-      ? `Initiative — ${sideTag('A')} ${r.a} vs ${sideTag('B')} ${r.b}: ${sideTag(r.winner)} wins${elected} → ${sideTag(state.firstMover)} moves first`
-      : `Initiative — roll for first move`;
-  } else if (mover) {
-    body = `${ph.label} · ${sideTag(mover)}`;
-  } else {
-    body = ph.label;
-  }
-  $('#phase').innerHTML = `Turn ${state.turn} · ${body}${enf ? ' · <span style="color:var(--rear)">enforced</span>' : ''}`;
-  $('#turn-tag').textContent = enf ? `Turn ${state.turn} · enf` : `Turn ${state.turn}`;
+  $('#turn-badge').innerHTML = `Turn ${state.turn}` + (enf ? ' <span class="enf-pill">enf</span>' : '');
   $('#btn-end-round').hidden = true;   // retired — the ▶ arrow ends the turn at Melee
   $('#btn-back-setup').hidden = false;
   // Phase arrows drive the whole turn: ▶ advances within the turn and, at Melee, ends
@@ -8478,7 +8472,8 @@ function renderTurnUI() {
     const cls = k < state.phaseIdx ? 'done' : k === state.phaseIdx ? 'now' : 'todo';
     const mk = k < state.phaseIdx ? '✓' : '';
     const st = k === state.phaseIdx ? ` style="border-bottom-color:${accent}"` : '';
-    return `${sep}<span class="pstep ${cls}"${st}><span class="mk">${mk}</span>${lbl}</span>`;
+    const pills = phaseSides(k, state.firstMover).map(sd => `<span class="ppill ${sd === 'A' ? 'a' : 'b'}">${sd}</span>`).join('');
+    return `${sep}<span class="pstep ${cls}"><span class="plabel"${st}><span class="mk">${mk}</span>${lbl}</span><span class="prow">${pills}</span></span>`;
   }).join('');
   $('#action-slot').innerHTML = '';   // the ▶ arrow drives the sequence; the phase's primary verbs live in the dock
   const dock = $('#phase-dock');
