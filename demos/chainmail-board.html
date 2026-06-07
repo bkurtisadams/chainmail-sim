@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.102 · Anti-Magic Shell (Complexity 6, p.32): the 7th spell. A 5″-radius sphere centred on the caster, impervious to magic, that moves with the Wizard and lasts ANTI_MAGIC_DURATION=6 turns (singleton, state.antiMagic {casterId, side, untilTurn}). antiMagicCircle self-expires at untilTurn / on caster death; maintainSpells also prunes it (it is NOT dropped on a move, unlike the other zones). magicBlockedBetween(sx,sy,tx,ty) blocks any targeted magic whose endpoints straddle the boundary (into OR out of the shell), and insideAntiMagic(x,y) guards units within it. Gates wired: Wizard missiles skip per-target figures across the boundary; Haste/Slowness fizzle across it; counter-magic is blocked when a shell stands between the two Wizards (counterMagicState.shielded); Cloudkill can’t reach units inside a shell. renderAntiMagic draws a violet double dashed bubble in the overlay. Faithful simplifications: zone spells emanating from a caster inside a shell aren’t contained, and a magic line merely grazing the shell (both endpoints outside) isn’t blocked. node-tested geometry + expiry. 6 of 16 → 7 of 16. -->
+<!-- chainmail-board.html · v0.11.103 · Altitude foundation (first of the flight slices, per the design pass). Binary u.airborne drives play; u.altitudeIn rides along (reserved for Levitate’s rise / wall clearance — combat never reads it). FLIERS registry gives innate fliers a fly speed + max turns aloft from RAW (Dragon 25″/indef, Roc 36/indef, Wraith 18/indef, Balrog 15/3, Sprite 9/3, p.34-36); Air Elementals fly 24″ via element; canFly/flySpeedOf/maxAloftOf helpers (node-tested). A Fly/Land toggle in the Selected panel takes the unit off or down (pushUndo); airborne units draw a gold dashed ring and move at fly speed (moveAllowanceOf branch, no road/charge bonus aloft); the stat block shows AIRBORNE · fly N″ · aloft x/max. endRound counts turnsAloft and, ONLY under the enforce-movement setting, forces a landing past the limit (advisory otherwise, per the ruling). Levitate (fly 0 — rise only) is wired in canFly via u.levitated for the upcoming spell. No combat gating yet (melee-descent, breath/ranged-from-air, air-vs-air mods come next). New fields default falsy — no migration. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.102</title>
+<title>Chainmail — Battlefield · v0.11.103</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.102</span>
+      <span class="version-tag">v0.11.103</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -374,7 +374,7 @@
     <svg id="board" viewBox="0 0 960 540"></svg>
     <aside class="side-panel">
       <div class="panel">
-        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
+        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
         <div id="selected-pane" class="empty">none</div>
       </div>
       <div class="panel">
@@ -678,7 +678,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.102';
+const SIM_VERSION = '0.11.103';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2758,6 +2758,34 @@ function snapPos(u, px, py) {
    DOM. A unit's allowance comes from MOVE_ALLOWANCE (default 12″); movedThisTurn
    accumulates straight-line drag/nudge distance and resets each round. */
 const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
+// Altitude (p.34-38): combat only ever distinguishes airborne vs grounded, so u.airborne
+// is the binary that gates play; u.altitudeIn rides along for Levitate's rise / wall
+// clearance but combat never reads it. FLIERS = innate fliers (fly speed ″/turn, max
+// turns aloft). Air Elementals fly (24″) via element; Levitate lifts a non-flier (fly 0
+// — rise only, no lateral move, p.32).
+const FLIERS = Object.freeze({
+  DRAGON: { fly: 25, maxAloft: Infinity },
+  ROC:    { fly: 36, maxAloft: Infinity },
+  WRAITH: { fly: 18, maxAloft: Infinity },
+  BALROG: { fly: 15, maxAloft: 3 },
+  SPRITE: { fly: 9,  maxAloft: 3 },
+});
+function canFly(u) {
+  if (!u || u.kind === 'works') return false;
+  if (FLIERS[u.type]) return true;
+  if (u.type === 'ELEMENTAL' && u.element === 'air') return true;
+  return !!u.levitated;
+}
+function flySpeedOf(u) {
+  if (!u) return 0;
+  if (FLIERS[u.type]) return FLIERS[u.type].fly;
+  if (u.type === 'ELEMENTAL' && u.element === 'air') return 24;
+  return 0;   // levitated unit: rises only, no lateral move (p.32)
+}
+function maxAloftOf(u) {
+  if (u && FLIERS[u.type]) return FLIERS[u.type].maxAloft;
+  return Infinity;
+}
 const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
 // Road move bonus (p.9 ROAD column): horse types only — HH +3, MH/LH +6; foot get
 // none. MK (Mounted Knights) ride as Heavy Horse (+3). Catapults/cannons (+3) and
@@ -2809,7 +2837,7 @@ function roadBonusBlockedByFacing(u) {
   return (onRoadAt(x, y) && !roadAlignedAt(u, x, y)) ? b : 0;
 }
 // The turn's move budget: a declared charge uses the larger charge distance.
-const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : (u.reform ? 0 : moveSpellFactor(u) * (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
+const moveAllowanceOf = (u) => u.kind === 'works' ? (WORKS_TYPES[u.worksType]?.push ? worksPushSpeed(u) : 1e6) : u.airborne ? moveSpellFactor(u) * flySpeedOf(u) : (u.reform ? 0 : moveSpellFactor(u) * (u.charged ? chargeAllowanceOf(u) : baseMoveAllowanceOf(u) + roadBonusOf(u)));
 
 /* --- Facing-change costs (Slice 8B, p.11) ------------------------------
    A facing change spends part of the move allowance, tiered by how far the
@@ -4189,6 +4217,7 @@ function renderUnit(u) {
   // Edges
   const xL = -w/2, xR = w/2, yT = -h/2, yB = h/2;
   let edges = '';
+  if (u.airborne) edges += `<circle cx="0" cy="0" r="${(Math.max(w,h)/2 + 5).toFixed(1)}" fill="none" stroke="rgba(216,178,90,0.9)" stroke-width="1.3" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`;
   const ew = state.settings.facingEdgeWeight ?? 1.5;   // thickness multiplier; edges use non-scaling-stroke so they don't shrink when the board is zoomed out
   if (u.kind === 'individual') {
     // Single facing marker — a small triangle pointing forward, contained inside the cell
@@ -4539,7 +4568,8 @@ function renderDragRuler() {
 }
 
 function updateSidebar() {
-  { const _selU = state.selectedId != null && state.units.find(x => x.id === state.selectedId && !x.destroyed); const _eb = $('#btn-edit'); if (_eb) _eb.hidden = !_selU; }
+  { const _selU = state.selectedId != null && state.units.find(x => x.id === state.selectedId && !x.destroyed); const _eb = $('#btn-edit'); if (_eb) _eb.hidden = !_selU;
+    const _fb = $('#btn-fly'); if (_fb) { const f = _selU && canFly(_selU); _fb.hidden = !f; if (f) _fb.textContent = _selU.airborne ? 'Land' : 'Fly'; } }
   for (const [pane, id, swSel] of [['#selected-pane', state.selectedId, '#selected-swatch'], ['#target-pane', state.targetId, '#target-swatch']]) {
     const el = $(pane);
     const sw = $(swSel);
@@ -4630,6 +4660,7 @@ function updateSidebar() {
       (state.settings.applyFatigue && (u.moveStreak || 0) > 0
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
+      (canFly(u) ? `<div class="stat"><span class="k">Altitude</span><span class="v"${u.airborne ? ' style="color:#8a6d2e"' : ''}>${u.airborne ? `AIRBORNE · fly ${flySpeedOf(u)}″${maxAloftOf(u) !== Infinity ? ` · aloft ${(u.turnsAloft||0)}/${maxAloftOf(u)}` : ''}` : 'grounded'}</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
@@ -8636,6 +8667,7 @@ function endRound() {
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
+    if (u.airborne) { u.turnsAloft = (u.turnsAloft || 0) + 1; if (maxAloftOf(u) !== Infinity && u.turnsAloft > maxAloftOf(u) && state.settings.enforceMovement) { u.airborne = false; u.altitudeIn = 0; u.turnsAloft = 0; } }
     if (u.reform) u.acted.moved = true;   // a reforming turn is active (counts toward fatigue/streak)
     if (state.settings.applyFatigue) {
       if (u.acted.moved) {
@@ -8676,6 +8708,7 @@ $('#btn-begin-battle').addEventListener('click', beginBattle);
 $('#btn-back-setup').addEventListener('click', backToSetup);
 $('#btn-spawn').addEventListener('click', (e) => { e.stopPropagation(); spawnUnit(); });
 $('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state.selectedId != null) beginEditUnit(state.selectedId); });
+$('#btn-fly').addEventListener('click', (e) => { e.stopPropagation(); const u = state.units.find(x => x.id === state.selectedId); if (!u || !canFly(u)) return; pushUndo('fly'); u.airborne = !u.airborne; u.turnsAloft = 0; if (!u.airborne) u.altitudeIn = 0; renderBoard(); updateSidebar(); });
 $('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
