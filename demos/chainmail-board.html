@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.107 · Dragon breath is now a true area cone (RAW): it sweeps every figure under the ½″→3″ × 9″ cone — friend and foe alike — instead of resolving against one designated target. The shift-click target only sets the cone direction AND its altitude: the cone burns the level it is aimed at, so a ground-aimed breath catches troops below but spares fliers overhead, and an air-aimed breath sweeps the airborne lane but spares the ground (e.g. a flying air elemental beside ground troops is untouched when the dragon breathes down at the troops). Per-unit save (DRAGON/SUPER_HERO/WIZARD/ELEMENTAL save on 2d6≥7) and mass loss-morale unchanged; flammable works only ignite on a ground-aimed breath. Builds on v0.11.106. -->
+<!-- chainmail-board.html · v0.11.108 · Elemental air-vs-air / earthbound melee dice (p.38): new elementalMeleeBonus(atk,def) — an Air Elemental adds +2 dice against an airborne foe, an Earth Elemental adds +1 against an earthbound (grounded) foe; Fire/Water carry no altitude die. Wired into the mixed melee path (onResolveMixed) where an elemental fights as 4 HH against a mass unit: the die folds into the creature’s bonus and shows in the class label (e.g. “HH +1 die”). Faithful omission: when an elemental fights another individual the Fantasy Combat 2d6 table is used (no dice to add), matching RAW; elementals never appear in mass-vs-mass. Builds on v0.11.107. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.107</title>
+<title>Chainmail — Battlefield · v0.11.108</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.107</span>
+      <span class="version-tag">v0.11.108</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -679,7 +679,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.107';
+const SIM_VERSION = '0.11.108';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -777,6 +777,15 @@ function elfMagicBonus(oppType) {
   if (oppType === 'ORC') return 2;
   if (FANTASTIC_TYPES.find(t => t.id === oppType)) return 0; // Appendix E scores deferred
   return 1;
+}
+// Elementals add melee dice by the foe's altitude (p.38): an Air Elemental adds
+// two dice against airborne opponents, an Earth Elemental one die against
+// earthbound (grounded) ones. Fire/Water carry no altitude die.
+function elementalMeleeBonus(atk, def) {
+  if (!atk || !def || atk.type !== 'ELEMENTAL') return 0;
+  if (atk.element === 'air'   &&  def.airborne) return 2;
+  if (atk.element === 'earth' && !def.airborne) return 1;
+  return 0;
 }
 // Trolls/Ogres/Giants find Dwarves & Gnomes hard to catch — count only half the
 // normal kills in either direction when they fight (Appendix D).
@@ -7157,7 +7166,9 @@ function onResolveMixed(a, d) {
   const cls = fightingClassFor(ind.type);
   const defCls = defendClassFor(ind.type);
   const bonusDice = FANTASY_BONUS_DICE[ind.type] || 0;
-  const clsDesc = (cls === defCls ? cls : `${cls} atk / ${defCls} def`) + (bonusDice ? ` +${bonusDice} die` : '');
+  const elemBonus = elementalMeleeBonus(ind, mass);   // Air +2 vs airborne / Earth +1 vs earthbound (p.38)
+  const creatureBonus = bonusDice + elemBonus;
+  const clsDesc = (cls === defCls ? cls : `${cls} atk / ${defCls} def`) + (creatureBonus ? ` +${creatureBonus} die${creatureBonus === 1 ? '' : 's'}` : '');
   const indImmune = MELEE_IMMUNE_INDIV.has(ind.type);
   const effFigures = Math.min(ind.hp, fs);  // synthetic count for the engine
   if (effFigures < 1) {
@@ -7190,7 +7201,7 @@ function onResolveMixed(a, d) {
   // a die whenever they swing. Attach those to whichever slot the creature is in.
   const creatureParams = aIsIndiv ? attackerParams : defenderParams;
   creatureParams.defendType = defCls;
-  if (bonusDice) creatureParams.bonusDice = bonusDice;
+  if (creatureBonus) creatureParams.bonusDice = creatureBonus;
   // The mass side carries its own asymmetric defend class (e.g. a goblin unit).
   const massParams = aIsIndiv ? defenderParams : attackerParams;
   if (defendTypeForMass(mass.type)) massParams.defendType = defendTypeForMass(mass.type);
