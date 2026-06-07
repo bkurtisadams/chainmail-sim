@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.101 · Stop the phase arrows from jumping. The ◀ / ▶ buttons shifted because the Turn badge changes width (Setup → Turn N → growing digits) and the rail gains/loses the Setup cell between deployment and battle. Fix reserves fixed space on both sides: the Turn badge now sits in a fixed 108px .badge-slot (◀ anchored after it), and the rail is stacked in an inline-grid over an invisible .rail-ghost — a static widest-case rail (all 7 cells with ✓ marks and A/B pills) that sizes the column so ▶ stays put no matter which phase/state is showing. The real #phase-rail overlays the ghost (grid-area 1/1); reserved whitespace falls to the right of the rail in battle (one fewer cell than the ghost). HTML + CSS only — no JS or rules changes; renderTurnUI still fills #phase-rail and #turn-badge as before. -->
+<!-- chainmail-board.html · v0.11.102 · Anti-Magic Shell (Complexity 6, p.32): the 7th spell. A 5″-radius sphere centred on the caster, impervious to magic, that moves with the Wizard and lasts ANTI_MAGIC_DURATION=6 turns (singleton, state.antiMagic {casterId, side, untilTurn}). antiMagicCircle self-expires at untilTurn / on caster death; maintainSpells also prunes it (it is NOT dropped on a move, unlike the other zones). magicBlockedBetween(sx,sy,tx,ty) blocks any targeted magic whose endpoints straddle the boundary (into OR out of the shell), and insideAntiMagic(x,y) guards units within it. Gates wired: Wizard missiles skip per-target figures across the boundary; Haste/Slowness fizzle across it; counter-magic is blocked when a shell stands between the two Wizards (counterMagicState.shielded); Cloudkill can’t reach units inside a shell. renderAntiMagic draws a violet double dashed bubble in the overlay. Faithful simplifications: zone spells emanating from a caster inside a shell aren’t contained, and a magic line merely grazing the shell (both endpoints outside) isn’t blocked. node-tested geometry + expiry. 6 of 16 → 7 of 16. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.101</title>
+<title>Chainmail — Battlefield · v0.11.102</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.101</span>
+      <span class="version-tag">v0.11.102</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -678,7 +678,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.101';
+const SIM_VERSION = '0.11.102';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1056,7 +1056,7 @@ const SPELLS = Object.freeze([
   { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
   { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
   { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: true  },
-  { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: false },
+  { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: true  },
 ]);
 const SPELL_BY_KEY = Object.freeze(Object.fromEntries(SPELLS.map(sp => [sp.key, sp])));
 // Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
@@ -1070,6 +1070,12 @@ function maintainSpells() {
     const sp = state[k]; if (!sp) continue;
     const c = state.units.find(u => u.id === sp.casterId);
     if (!c || c.destroyed || (c.movedThisTurn || 0) > 0) state[k] = null;
+  }
+  // The shell moves WITH the caster (not dropped on a move); it lapses after
+  // ANTI_MAGIC_DURATION turns or if the caster falls.
+  if (state.antiMagic) {
+    const c = state.units.find(u => u.id === state.antiMagic.casterId);
+    if (!c || c.destroyed || state.turn >= state.antiMagic.untilTurn) state.antiMagic = null;
   }
 }
 // Darkness gloom level (p.31): 0 light (cast turn), 1 semi-darkness (next turn), 2
@@ -1136,6 +1142,35 @@ function protectionCircle() {
   const pr = state.protection; if (!pr) return null;
   const c = state.units.find(u => u.id === pr.casterId); if (!c) return null;
   return { x: c.x, y: c.y, r: inchesToPx(PROTECTION_RADIUS_IN), side: pr.side };
+}
+// Anti-Magic Shell (p.32): a 5" sphere centred on the caster, impervious to magic —
+// no spell or magical attack crosses its boundary — that moves with the Wizard and
+// lasts 6 turns (singleton). magicBlockedBetween blocks any targeted magic whose
+// endpoints straddle the boundary (into OR out of the shell); insideAntiMagic guards
+// units within it from area magic (e.g. cloudkill). Faithful simplifications: zone
+// spells (darkness/light/protection) emanating from a caster inside a shell are not
+// contained, and a magic line merely grazing the shell (both endpoints outside) is
+// not blocked.
+const ANTI_MAGIC_RADIUS_IN = 5;
+const ANTI_MAGIC_DURATION = 6;   // turns
+function antiMagicCircle() {
+  const am = state.antiMagic; if (!am || state.turn >= am.untilTurn) return null;
+  const c = state.units.find(u => u.id === am.casterId);
+  if (!c || c.destroyed) return null;
+  return { x: c.x, y: c.y, r: inchesToPx(ANTI_MAGIC_RADIUS_IN), side: am.side };
+}
+function insideAntiMagic(x, y) {
+  const z = antiMagicCircle(); if (!z) return false;
+  return Math.hypot(x - z.x, y - z.y) <= z.r;
+}
+function magicBlockedBetween(sx, sy, tx, ty) {
+  const z = antiMagicCircle(); if (!z) return false;
+  return (Math.hypot(sx - z.x, sy - z.y) <= z.r) !== (Math.hypot(tx - z.x, ty - z.y) <= z.r);
+}
+function renderAntiMagic() {
+  const z = antiMagicCircle(); if (!z) return '';
+  return `<circle cx="${z.x}" cy="${z.y}" r="${z.r}" fill="rgba(120,90,180,0.06)" stroke="rgba(120,90,180,0.85)" stroke-width="1.5" stroke-dasharray="2 4" pointer-events="none"/>`
+       + `<circle cx="${z.x}" cy="${z.y}" r="${(z.r - 3).toFixed(1)}" fill="none" stroke="rgba(120,90,180,0.35)" stroke-width="1" stroke-dasharray="2 4" pointer-events="none"/>`;
 }
 // Fraction of an evil unit's move clear of the ward (mirrors riverBlockScale): halts
 // it at the boundary; a unit already inside is not trapped; non-evil units pass.
@@ -1228,6 +1263,7 @@ function resolveWizardMissile() {
   const drop = (t) => { cleanupEngagementsForUnit(t.id); if (t.id === state.selectedId) state.selectedId = null; if (t.id === state.targetId) state.targetId = null; };
   for (const t of state.units.slice()) {
     if (t.destroyed || t.kind === 'works') continue;
+    if (magicBlockedBetween(a.x, a.y, t.x, t.y)) continue;   // an anti-magic shell blocks the missile in/out
     const n = underFn(t);
     if (n <= 0) continue;
     anyUnder = true;
@@ -1259,8 +1295,9 @@ function counterMagicState(a, d) {
   if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
   if (!d || d.destroyed || !isMagicUser(d) || d.side === a.side) return { ok: false, reason: 'target' };
   const occupied = !!(a.acted && a.acted.fired), suppressed = magicSuppressedThisTurn(a);
+  const shielded = magicBlockedBetween(a.x, a.y, d.x, d.y);   // a shell between them blocks the counter
   const { target, role } = counterMagicTarget(magicMeta(a).penalty, magicMeta(d).penalty);
-  return { target, role, occupied, suppressed, ok: !occupied && !suppressed };
+  return { target, role, occupied, suppressed, shielded, ok: !occupied && !suppressed && !shielded };
 }
 // Cast counter-magic (p.31): roll 2d6 vs the relative-strength target. Success
 // suppresses the opposing Wizard's magic for the turn; either way the counter fully
@@ -1327,11 +1364,13 @@ function applySpellEffect(spellKey, a, d) {
   if (spellKey === 'wizardLight') { state.wizardLight = { casterId: a.id, side: a.side }; return `<div class="verdict v-rout">a ${WIZARD_LIGHT_RANGE_IN}″ radius is bathed in light</div>`; }
   if (spellKey === 'haste' || spellKey === 'slowness') {
     if (!d || d.destroyed) return `<div class="verdict v-noeffect">the target is gone — the spell lapses</div>`;
+    if (magicBlockedBetween(a.x, a.y, d.x, d.y)) return `<div class="verdict v-noeffect">an anti-magic shell blocks the spell</div>`;
     const dur = spellKey === 'haste' ? 3 : 2;
     d.moveSpell = { kind: spellKey === 'haste' ? 'haste' : 'slow', untilTurn: state.turn + dur };
     return `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} ${spellKey === 'haste' ? 'quickened — +50% move for 3 turns' : 'slowed — ½ move for 2 turns'}</div>`;
   }
   if (spellKey === 'protEvil') { state.protection = { casterId: a.id, side: a.side }; return `<div class="verdict v-rout">a 12″ ward rings the caster — Chaos creatures are kept out</div>`; }
+  if (spellKey === 'antiMagic') { state.antiMagic = { casterId: a.id, side: a.side, untilTurn: state.turn + ANTI_MAGIC_DURATION }; return `<div class="verdict v-rout">a ${ANTI_MAGIC_RADIUS_IN}″ anti-magic shell seals the caster for ${ANTI_MAGIC_DURATION} turns</div>`; }
   if (spellKey === 'cloudkill') {
     if (!d || d.destroyed) return `<div class="verdict v-noeffect">no bearing remains — the cloud fails to form</div>`;
     const vx = d.x - a.x, vy = d.y - a.y, len = Math.hypot(vx, vy) || 1, ux = vx / len, uy = vy / len;
@@ -1389,7 +1428,7 @@ function resolveCloudkillKills(cl) {
   const drop = (t) => { cleanupEngagementsForUnit(t.id); if (t.id === state.selectedId) state.selectedId = null; if (t.id === state.targetId) state.targetId = null; };
   let html = '', any = false;
   for (const t of state.units.slice()) {
-    if (t.destroyed || !cloudkillKills(t)) continue;
+    if (t.destroyed || !cloudkillKills(t) || insideAntiMagic(t.x, t.y)) continue;   // a shell keeps the gas out
     const n = cloudkillFiguresUnder(cl, t);
     if (n <= 0) continue;
     any = true;
@@ -2601,6 +2640,7 @@ const state = {
   protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
   cloudkill: null,      // active Cloudkill { casterId, side, x, y, dirX, dirY } — drifting killing gas (p.32)
   pendingSpells: [],    // deferred casts (Complexity D band, p.33) awaiting next-turn resolution
+  antiMagic: null,      // active Anti-Magic Shell { casterId, side, untilTurn } — 5" magic-proof sphere (p.32)
   settings: {
     gridOnByDefault: true,
     gridOpacity: 0.5,
@@ -3754,7 +3794,7 @@ function renderBoard() {
     renderHazards() +
     renderGrid() +
     `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
-    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderAntiMagic()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
