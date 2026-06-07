@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.117 · Polymorph form list widened per ruling — the spell is a disguise/spy/roleplay tool, so a Wizard may assume any non-magical creature from man-size up to a Giant: man-at-arms plus the demi-human races (Hobbit, Sprite, Gnome, Dwarf, Kobold, Goblin, Orc, Elf), Hero/Super Hero, ogres (TROLL) and Giant. POLYMORPH_FORMS grew from 4 to 13; the #dock-poly picker is now built from that list at init (typeById names) instead of hardcoded options, so the constant stays the single source of truth. Race/man forms aren't in FIGHTING_STRENGTH, so the disguised Wizard keeps its own hp (the || a.maxHp fallback) — fitting for a wizard in disguise. Still excludes magical creatures. Builds on v0.11.116. -->
+<!-- chainmail-board.html · v0.11.118 · Hallucinatory Terrain (Fantasy spell, Complexity 4, p.32) on a reality-governs / disguise model (per the AD&D PHB elaboration): the spell changes only how ground LOOKS, never the real terrain or its effects. A region’s mechanical type stays r.type; r.apparentType is what’s drawn. Two casts — PHANTOM conjures a feature (woods/rough/marsh/hill/pond/ditch/gulley) over open ground as a new region with real type “open” (inert, not in TERRAIN_TYPES) so it exerts NO effect, its worth being that the foe can’t tell it’s false; DISGUISE re-skins the selected real region as any feature, or as “open” to veil it (the Chainmail appear/not-exist endpoints). The illusion holds until a LIVING thing strides in: dissipateHallucinationsOn (fired from the same three move-commit hooks as autoMoveTouch) removes a pure phantom and reveals a disguised real region. Living = any corporeal mover; NON_LIVING_TYPES (undead Wight/Wraith + Elementals, plus phantasms/works) don’t trigger — Balrog/Dragon/Ent etc. count as living (Kurt’s ruling); side-agnostic. Render draws the apparent type with a violet dashed outline + truth-tag (ILLUSION / REAL: <type>); no effect-gating. Dock gains #dock-hallu-mode + #dock-hallu-type. Builds on v0.11.117. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.117</title>
+<title>Chainmail — Battlefield · v0.11.118</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -296,7 +296,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.117</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.118</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -354,6 +354,8 @@
         <select id="dock-spell" class="secondary" disabled hidden></select>
         <select id="dock-element" class="secondary" title="Element to conjure" disabled hidden><option value="air">Air</option><option value="earth">Earth</option><option value="fire">Fire</option><option value="water">Water</option></select>
         <select id="dock-poly" class="secondary" title="Form to assume" disabled hidden></select>
+        <select id="dock-hallu-mode" class="secondary" title="Hallucinatory Terrain: conjure a phantom feature over open ground, or disguise a real region" disabled hidden><option value="phantom">Phantom (conjure)</option><option value="mask">Disguise (mask region)</option></select>
+        <select id="dock-hallu-type" class="secondary" title="What the ground is made to look like" disabled hidden></select>
         <button id="btn-cast-spell" class="secondary" disabled hidden>Cast spell</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
@@ -684,7 +686,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.117';
+const SIM_VERSION = '0.11.118';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -714,6 +716,10 @@ const TERRAIN_TYPES = Object.freeze({
   road:   { label: 'Road',          fill: '#8a6f4a', moveMult: 1,   noCharge: false, road: true,          linear: true, lineWidthIn: 2, wIn: 30, hIn: 2 },
 });
 const TERRAIN_ORDER = ['hill', 'wooded', 'marshy', 'rough', 'ditch', 'stream', 'river', 'pond', 'gulley', 'road'];
+// Hallucinatory Terrain (p.32) conjures "Woods, rocks, marsh, etc." — area
+// features, not the chalk-and-ribbon linear sorts (stream/river/road). The phantom
+// picker is built from this list, so it stays the single source of truth.
+const HALLU_PHANTOM_TYPES = ['wooded', 'rough', 'marshy', 'hill', 'pond', 'ditch', 'gulley'];
 
 /* === A. RNG ============================================================ */
 function mulberry32(seed) {
@@ -898,7 +904,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First Move', 'Last Move', 'Artillery'
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -1069,7 +1075,7 @@ const SPELLS = Object.freeze([
   { key: 'haste',       name: 'Haste',                 complexity: 3, done: true  },
   { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: true  },
   { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
-  { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
+  { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: true  },
   { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: true  },
   { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: true  },
 ]);
@@ -1091,7 +1097,7 @@ const SPELL_DESC = Object.freeze({
   haste:       'Up to 20 figures gain +50% movement for 3 turns.',
   polymorph:   'The caster takes the form of anything up to giant size.',
   confusion:   'Up to 20 enemy figures act in the opposite manner for one turn.',
-  halluTerr:   'Makes terrain seem to appear or vanish until something living touches it.',
+  halluTerr:   'Disguises terrain — conjures a phantom feature over open ground, or makes a real region look like something else (or like nothing). Only the look changes; the real ground keeps its effects, and the illusion lasts until a living thing strides in.',
   cloudkill:   'A 3×6×3″ poison cloud drifts from the caster, killing men, orcs, dwarves and the like.',
   antiMagic:   'A 5″ shell that blocks all magic in or out, for up to 6 turns.',
 });
@@ -1440,6 +1446,7 @@ function castNamedSpell(spellKey) {
   let body = `<div class="step">${a.side} ${magicMeta(a).label} casts ${spell.name} (Complexity ${spell.complexity}) — rolled ${roll} → ${res}</div>`;
   const opts = spellKey === 'conjureElem' ? { element: ($('#dock-element').value || 'air') }
              : spellKey === 'polymorph'  ? { form: ($('#dock-poly').value || 'GIANT') }
+             : spellKey === 'halluTerr'  ? { mode: ($('#dock-hallu-mode').value || 'phantom'), terrType: ($('#dock-hallu-type').value || 'wooded'), regionId: state.terrainSelId }
              : {};
   if (res === 'immediate') body += applySpellEffect(spellKey, a, d, opts);
   else if (res === 'deferred') {
@@ -1542,6 +1549,43 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
     a.type = form;
     a.maxHp = FIGHTING_STRENGTH[form] || a.maxHp; a.hp = a.maxHp;
     return `<div class="verdict v-rout">the Wizard takes the semblance of a ${typeById(form)?.name || form} — it fights wholly as that form (no spellcasting) until it changes back or is countered</div>`;
+  }
+  if (spellKey === 'halluTerr') {
+    // Reality-governs / disguise (p.32, and as the AD&D PHB elaborates): the spell
+    // never changes the real terrain or its effects — it only changes how the ground
+    // LOOKS. A region's mechanical type stays r.type; r.apparentType is what's drawn.
+    const mode = (opts && opts.mode) || 'phantom';
+    const apparent = (opts && opts.terrType) || 'wooded';   // the type the ground is made to LOOK like
+    const apprLbl = apparent === 'open' ? 'open ground' : ((TERRAIN_TYPES[apparent] && TERRAIN_TYPES[apparent].label) || apparent);
+    if (mode === 'mask') {
+      // Disguise (or veil): re-skin the selected REAL region. apparent 'open' hides it
+      // entirely (the Chainmail "appear not to exist"); any feature type disguises it
+      // as that (the PHB "pond → meadow, gully → road"). Effects are untouched.
+      const r = state.terrain.find(t => t.id === opts.regionId && !t.illusory);
+      if (!r) return `<div class="verdict v-noeffect">select a real terrain region first — the disguise needs real ground to mask</div>`;
+      if (apparent !== 'open' && !HALLU_PHANTOM_TYPES.includes(apparent)) return `<div class="verdict v-noeffect">that guise is beyond the spell — show open ground, woods, rough, marsh, a hill, a pond, a ditch, or a gulley</div>`;
+      if (state.units.some(u => isLivingThing(u) && inTerrainRect(u.x, u.y, r))) return `<div class="verdict v-noeffect">a living thing already stands on that ground — the disguise cannot take hold</div>`;
+      r.illusory = true; r.apparentType = apparent; r.illusoryCasterId = a.id; r.illusorySide = a.side;
+      const realLbl = (TERRAIN_TYPES[r.type] && TERRAIN_TYPES[r.type].label) || r.type;
+      state.terrainSelId = r.id;
+      return `<div class="verdict v-rout">the ${realLbl} is made to look like ${apprLbl} — the real ground (and its effects) are unchanged, and the disguise holds until a living thing blunders in</div>`;
+    }
+    // Phantom: conjure a feature over OPEN ground (the Chainmail "appear to exist").
+    // It has no real terrain beneath, so it exerts no mechanical effect — its worth
+    // is that the foe can't tell it's false until a living thing strides through.
+    if (apparent === 'open' || !HALLU_PHANTOM_TYPES.includes(apparent)) return `<div class="verdict v-noeffect">choose a feature for the phantom — woods, rough, marsh, a hill, a pond, a ditch, or a gulley</div>`;
+    const t = TERRAIN_TYPES[apparent];
+    const wPx = inchesToPx(t.wIn || 8), hPx = inchesToPx(t.hIn || 6);
+    const off = (wPx / 2 + inchesToPx(2)) * (a.side === 'A' ? 1 : -1);
+    const region = {
+      id: 'tr' + (state.nextId++), type: 'open', apparentType: apparent,   // type 'open' ⇒ inert (not in TERRAIN_TYPES)
+      x: a.x + off, y: a.y, w: wPx, h: hPx, rot: 0,
+      illusory: true, illusoryCasterId: a.id, illusorySide: a.side,
+    };
+    if (state.units.some(u => isLivingThing(u) && inTerrainRect(u.x, u.y, region))) return `<div class="verdict v-noeffect">a living thing already stands on that ground — the apparition cannot take hold</div>`;
+    state.terrain.push(region);
+    state.terrainSelId = region.id;   // select it so the caster can reposition/resize with the terrain tools
+    return `<div class="verdict v-rout">a phantom ${t.label} shimmers over open ground beside the caster — it has no real effect, but the foe can't tell until a living thing strides in (drag/resize it like any region)</div>`;
   }
   return '';
 }
@@ -3334,6 +3378,9 @@ function terrainRegionAt(x, y) {
 }
 function terrainTypesAt(x, y) {
   const out = [];
+  // Hallucinatory Terrain is reality-governs (p.32): a region's MECHANICAL type is
+  // always its real r.type — a phantom's real type is inert open ground (no entry in
+  // TERRAIN_TYPES), a disguised region keeps its true effects. Only the DISPLAY changes.
   for (const r of state.terrain) if (inTerrainRect(x, y, r)) { const t = TERRAIN_TYPES[r.type]; if (t) out.push(t); }
   return out;
 }
@@ -3606,7 +3653,47 @@ function autoMoveTouch(u) {
     }
   }
 }
-// Count how many of target's figures fall within source's footprint (Slice 7H,
+// Hallucinatory Terrain (p.32): the illusion holds "until it is contacted by a
+// living thing." NON_LIVING_TYPES are the figures the illusion does NOT react to —
+// the undead (Wight/Ghoul, Wraith) and conjured Elementals, plus any phantasm
+// (itself an illusion) and inert siege works. Everything else — men, the demi-human
+// races, and the creatures of flesh (Dragon, Giant, Troll, Lycanthrope, Roc, Ent,
+// Balrog) — counts as living. RULING (edit the set to recut): Balrog is treated as
+// living here; move it in if a demon shouldn't dispel the spell.
+const NON_LIVING_TYPES = new Set(['WIGHT', 'WRAITH', 'ELEMENTAL']);
+function isLivingThing(u) {
+  return !!u && !u.destroyed && !u.phantasm && u.kind !== 'works' && !NON_LIVING_TYPES.has(u.type);
+}
+// As a living unit finishes a move, any Hallucinatory Terrain it has stridden into
+// reacts (p.32). The model is reality-governs / disguise: a region's real r.type
+// always drove the mechanics; the illusion only changed the DISPLAY (r.apparentType).
+// On contact a pure phantom (no real terrain beneath — its real type is inert "open")
+// melts away entirely; a disguised/veiled REAL region simply drops its disguise and
+// shows its true face again. Centre-based contact, matching every other terrain
+// interaction in the sim (footprint-edge contact is a later refinement, as in
+// moveBlockScale). Side-agnostic: "a living thing," friend or foe (Kurt's ruling).
+// Fired from the same move-commit hooks as autoMoveTouch.
+function dissipateHallucinationsOn(u) {
+  if (!isLivingThing(u)) return;
+  for (let i = state.terrain.length - 1; i >= 0; i--) {
+    const r = state.terrain[i];
+    if (!r.illusory || !inTerrainRect(u.x, u.y, r)) continue;
+    const apprLbl = (r.apparentType && r.apparentType !== 'open')
+      ? ((TERRAIN_TYPES[r.apparentType] && TERRAIN_TYPES[r.apparentType].label) || r.apparentType) : 'open ground';
+    const who = `${typeById(u.type)?.name || 'A figure'} (${u.side})`;
+    if (!TERRAIN_TYPES[r.type]) {   // phantom: never any real terrain here
+      state.terrain.splice(i, 1);
+      if (r.id === state.terrainSelId) state.terrainSelId = null;
+      appendTurn(`Hallucination dissipates · ${apprLbl}`,
+        `<div class="step">${who} strides into the phantom ${apprLbl} — the hallucination melts away (p.32).</div>`);
+    } else {   // disguised/veiled real terrain: the truth stands revealed
+      const realLbl = TERRAIN_TYPES[r.type].label;
+      delete r.illusory; delete r.apparentType; delete r.illusoryCasterId; delete r.illusorySide;
+      appendTurn(`Disguise torn · ${realLbl}`,
+        `<div class="step">${who} blunders into the ${realLbl} disguised as ${apprLbl} — the true ground stands revealed (p.32).</div>`);
+    }
+  }
+}
 // Balrog immolation). The footprint is a circle of source's half-extent; a
 // target figure counts if its cell centre is within that circle plus half a
 // cell, so flames engulf the figures the source is physically standing on. The
@@ -4132,34 +4219,58 @@ function renderBg() {
   return `<g id="bg">${ticks.join('')}</g>`;
 }
 
+// Hallucinatory Terrain cue: an illusory region wears a violet dashed outline plus a
+// truth-tag so the caster/GM can see through their own trick on a shared screen — a
+// pure phantom reads ILLUSION, a disguised/veiled real region reveals its true type.
+// Purely cosmetic; mechanics always run off the real r.type elsewhere.
+const ILLUSION_COLOR = '#8e44ff';
+function illusionTag(r) {
+  if (!r.illusory) return '';
+  const real = TERRAIN_TYPES[r.type];
+  return real ? `REAL: ${(real.label || r.type).toUpperCase()}` : 'ILLUSION';
+}
 // Terrain layer (T1). Non-interactive (pointer-events:none) — placement and
 // removal are done by coordinate hit-test in terrain mode, not via DOM target,
 // so terrain never intercepts unit clicks in normal play.
 function renderTerrain() {
   if (!state.terrain.length && !state.terrainDraw) return '';
   const rects = state.terrain.map(r => {
-    const t = TERRAIN_TYPES[r.type] || { label: r.type, fill: '#999' };
+    // Reality-governs display: an illusory region is DRAWN as its apparent type
+    // (r.apparentType); 'open' means it's made to look like clear ground. Mechanics
+    // ignore all this and use the real r.type.
+    const dispType = r.illusory ? (r.apparentType || 'open') : r.type;
+    const openLook = dispType === 'open';
+    const t = TERRAIN_TYPES[dispType] || { label: openLook ? 'open ground' : dispType, fill: '#cbb88f' };
     const sel = r.id === state.terrainSelId;
     if (r.pts) {
       const w = inchesToPx(lineWidthInOf(r));
       const d = r.pts.map((p, i) => `${i ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
       const mid = r.pts[Math.floor(r.pts.length / 2)];
-      return `<path d="${d}" fill="none" stroke="${t.fill}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${sel ? 0.5 : 0.38}"/>` +
+      return `<path d="${d}" fill="none" stroke="${t.fill}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${openLook ? 0.12 : (sel ? 0.5 : 0.38)}"/>` +
         (sel ? `<path d="${d}" fill="none" stroke="${t.fill}" stroke-width="2" stroke-dasharray="7 4" stroke-opacity="1"/>` +
           r.pts.map(p => `<rect x="${p.x - 4}" y="${p.y - 4}" width="8" height="8" fill="#fff" fill-opacity="0.95" stroke="${t.fill}" stroke-width="1.5"/>`).join('') : '') +
-        `<text x="${mid.x}" y="${mid.y - w / 2 - 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${sel ? ` · ${lineWidthInOf(r)}″` : ''}</text>`;
+        (openLook ? '' : `<text x="${mid.x}" y="${mid.y - w / 2 - 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${sel ? ` · ${lineWidthInOf(r)}″` : ''}</text>`) +
+        (r.illusory ? `<path d="${d}" fill="none" stroke="${ILLUSION_COLOR}" stroke-width="2.5" stroke-dasharray="3 4" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.95"/>` +
+          `<text x="${mid.x}" y="${mid.y + w / 2 + 12}" text-anchor="middle" font-family="var(--sans)" font-size="9" fill="${ILLUSION_COLOR}" style="font-weight:800; letter-spacing:1px;">${illusionTag(r)}</text>` : '');
     }
     const x = r.x - r.w / 2, y = r.y - r.h / 2;
     const rot = r.rot || 0;
     const xf = rot ? ` transform="rotate(${rot} ${r.x} ${r.y})"` : '';
-    const strokeAttrs = sel
-      ? `stroke-opacity="1" stroke-width="3" stroke-dasharray="7 4"`
-      : `stroke-opacity="0.75" stroke-width="2"`;
+    const strokeAttrs = openLook
+      ? `stroke-opacity="${sel ? 0.4 : 0.15}" stroke-width="${sel ? 3 : 1}"${sel ? ' stroke-dasharray="7 4"' : ''}`
+      : sel
+        ? `stroke-opacity="1" stroke-width="3" stroke-dasharray="7 4"`
+        : `stroke-opacity="0.75" stroke-width="2"`;
     return `<g${xf}><rect x="${x}" y="${y}" width="${r.w}" height="${r.h}" rx="6" ` +
-      `fill="${t.fill}" fill-opacity="${sel ? 0.42 : 0.30}" stroke="${t.fill}" ${strokeAttrs}/></g>` +
+      `fill="${t.fill}" fill-opacity="${openLook ? 0.05 : (sel ? 0.42 : 0.30)}" stroke="${t.fill}" ${strokeAttrs}/></g>` +
+      // Hallucinatory Terrain cue (rotates with the region; tag drawn upright below)
+      (r.illusory ? `<g${xf}><rect x="${x}" y="${y}" width="${r.w}" height="${r.h}" rx="6" ` +
+        `fill="none" stroke="${ILLUSION_COLOR}" stroke-width="2.5" stroke-dasharray="3 4" stroke-opacity="0.95"/></g>` +
+        `<text x="${r.x}" y="${r.y - 8}" text-anchor="middle" font-family="var(--sans)" font-size="9" ` +
+        `fill="${ILLUSION_COLOR}" style="font-weight:800; letter-spacing:1px;">${illusionTag(r)}</text>` : '') +
       // label drawn outside the rotation so it stays upright and readable at any angle
-      `<text x="${r.x}" y="${r.y + 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
-      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${rot ? ` ${rot}°` : ''}</text>` +
+      (openLook ? '' : `<text x="${r.x}" y="${r.y + 4}" text-anchor="middle" font-family="var(--sans)" font-size="11" ` +
+      `fill="${t.fill}" style="font-weight:700; letter-spacing:0.5px;">${t.label}${rot ? ` ${rot}°` : ''}</text>`) +
       // resize handles on the selected region (corners + edge mids), drawn upright
       (sel ? terrainHandles(r).map(h =>
         `<rect x="${h.x - 4}" y="${h.y - 4}" width="8" height="8" fill="#fff" fill-opacity="0.95" ` +
@@ -5493,6 +5604,10 @@ function updateButtons() {
   if (elemSel) { const showElem = showSp && curSpell === 'conjureElem'; elemSel.hidden = !showElem; elemSel.disabled = !showElem; }
   const polySel = $('#dock-poly');
   if (polySel) { const showPoly = showSp && curSpell === 'polymorph'; polySel.hidden = !showPoly; polySel.disabled = !showPoly; }
+  const halluMode = $('#dock-hallu-mode'), halluType = $('#dock-hallu-type');
+  const showHallu = showSp && curSpell === 'halluTerr';
+  if (halluMode) { halluMode.hidden = !showHallu; halluMode.disabled = !showHallu; }
+  if (halluType) { halluType.hidden = !showHallu; halluType.disabled = !showHallu; }
   if (castBtn) {
     castBtn.hidden = !showSp;
     castBtn.disabled = !(scs && scs.ok && spMissileOk && tgtOk);
@@ -6057,6 +6172,7 @@ function onBoardMouseUp() {
         u.movedThisTurn = (state.dragging.movedBefore || 0) + moved;
         u.acted.moved = true;
         autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
+        dissipateHallucinationsOn(u);   // a living thing reveals/melts any Hallucinatory Terrain it stepped into (p.32)
       } else {
         discardUndo(state.dragging.undoTag);   // a click, not a move — no undo step
       }
@@ -6586,6 +6702,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   u.movedThisTurn = (u.movedThisTurn || 0) + stepCost;
   u.acted.moved = true;
   autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
+  dissipateHallucinationsOn(u);   // a living thing reveals/melts any Hallucinatory Terrain it stepped into (p.32)
   return true;
 }
 // Slice 8B: rotate the selected unit by deltaDeg, charging the facing-change
@@ -6925,6 +7042,7 @@ function followThroughCharge(charger) {
   charger.movedThisTurn = (charger.movedThisTurn || 0) + pathMoveCost(ox, oy, nx - ox, ny - oy, charger).cost;
   charger.x = nx; charger.y = ny;
   autoMoveTouch(charger);   // Wraith/Balrog touch any normals the follow-through swept into (p.33/p.34)
+  dissipateHallucinationsOn(charger);   // a living charger reveals/melts any Hallucinatory Terrain on the charge line (p.32)
   const cd = charger.side === 'A' ? 'a' : 'b';
   let out = `<div class="step"><b style="color:var(--side-${cd}-d)">${typeById(charger.type).name} (${charger.side})</b> victorious charger follows through ${pxToInches(movedPx).toFixed(1)}″ along the charge line (p.16)</div>`;
   if (foe) {
@@ -8820,10 +8938,10 @@ function renderTurnUI() {
     ? (ph.id === 'initiative' ? ['btn-roll-init']
       : ph.id === 'move1' ? ['btn-elect-order']
       : ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell']
+      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell']
       : ph.id === 'melee' ? ['btn-melee', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
+    : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
   const hintEl = $('#phase-hint');
@@ -8978,6 +9096,7 @@ $('#btn-cannon-shot').addEventListener('click', () => { const a = state.units.fi
 $('#btn-missile-type').addEventListener('click', () => { const a = state.units.find(u => u.id === state.selectedId); if (a && isMagicUser(a)) { a.missileType = a.missileType === 'lightning' ? 'fireball' : 'lightning'; renderTurnUI(); } });
 $('#btn-counter-magic').addEventListener('click', () => { resolveCounterMagic(); renderTurnUI(); });
 $('#dock-spell').addEventListener('change', () => renderTurnUI());
+$('#dock-hallu-mode').addEventListener('change', () => renderTurnUI());
 $('#btn-cast-spell').addEventListener('click', () => { castNamedSpell($('#dock-spell').value); renderTurnUI(); });
 $('#btn-batter-ram').addEventListener('click', () => { resolveRamBatter(); renderTurnUI(); });
 $('#btn-batter-creature').addEventListener('click', () => { resolveCreatureBatter(); renderTurnUI(); });
@@ -9122,6 +9241,11 @@ for (const f of POLYMORPH_FORMS) {   // fill the Polymorph form picker from the 
   const o = document.createElement('option');
   o.value = f; o.textContent = typeById(f)?.name || f;
   $('#dock-poly').appendChild(o);
+}
+for (const k of ['open', ...HALLU_PHANTOM_TYPES]) {   // fill the Hallucinatory Terrain "looks like" picker ('open' = clear ground, for veils)
+  const o = document.createElement('option');
+  o.value = k; o.textContent = k === 'open' ? 'Open ground' : ((TERRAIN_TYPES[k] && TERRAIN_TYPES[k].label) || k);
+  $('#dock-hallu-type').appendChild(o);
 }
 startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
@@ -9388,6 +9512,23 @@ renderBoard();
   console.assert(isNormalType('LF') === true && isNormalType('WRAITH') === false && isNormalType('BALROG') === false, 'isNormalType: men are normal, fantasy creatures are not');
   { const norm = { type:'LF' }; autoMoveTouch(norm); console.assert(norm._touchedThisTurn === undefined, 'move-touch: a normal unit never touches'); }
   { const dead = { type:'WRAITH', destroyed:true }; autoMoveTouch(dead); console.assert(dead._touchedThisTurn === undefined, 'move-touch: a destroyed Wraith no-ops'); }
+
+  // Hallucinatory Terrain (p.32) — reality-governs / disguise model.
+  console.assert(isLivingThing({ type:'HF' }) && isLivingThing({ type:'BALROG' }) && isLivingThing({ type:'DRAGON' }), 'hallu: men and corporeal monsters (incl. Balrog) are living');
+  console.assert(!isLivingThing({ type:'WRAITH' }) && !isLivingThing({ type:'WIGHT' }) && !isLivingThing({ type:'ELEMENTAL' }), 'hallu: undead and elementals are not living');
+  console.assert(!isLivingThing({ type:'HF', phantasm:true }) && !isLivingThing({ type:'HF', kind:'works' }) && !isLivingThing({ type:'HF', destroyed:true }), 'hallu: a phantasm, a works piece, and a dead figure are not living things');
+  { const _t = state.terrain;
+    // Phantom: real type 'open' ⇒ mechanically inert (woods is only the look)
+    state.terrain = [{ id:'tp', type:'open', apparentType:'wooded', illusory:true, x:100, y:100, w:240, h:192 }];
+    console.assert(terrainTypesAt(100, 100).length === 0, 'hallu: a phantom exerts no real effect (its real type is inert open ground)');
+    console.assert(terrainMoveMultAt(100, 100) === 1 && terrainNoChargeAt(100, 100) === null, 'hallu: a phantom woods neither slows nor blocks charges');
+    console.assert(illusionTag(state.terrain[0]) === 'ILLUSION', 'hallu: a pure phantom tags ILLUSION');
+    // Veil / disguise: real hill stays a hill mechanically even while shown as open ground
+    state.terrain = [{ id:'tv', type:'hill', apparentType:'open', illusory:true, x:100, y:100, w:240, h:192 }];
+    console.assert(terrainMoveMultAt(100, 100) === 0.5 && !!terrainNoChargeAt(100, 100), 'hallu: a veiled hill keeps its real slow + no-charge effect');
+    console.assert(illusionTag(state.terrain[0]) === 'REAL: HILL', 'hallu: a disguised real region reveals its true type in the tag');
+    state.terrain = _t;
+  }
 
   // Terrain (T1) — geometry + the 50% slow folded into effectiveMoveAllowance.
   { const _t = state.terrain;
