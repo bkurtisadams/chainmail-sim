@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.114 · Conjure Elemental control trigger corrected to match RAW (p.32): "disturbed (attacked)" means the summoning Wizard being ATTACKED at all — hit or miss — not merely wounded. New markAttacked(u) stamps u.attackedTurn whenever a unit is targeted in melee (both combatants, mutual contact) or caught under an enemy Wizard's missile (even on a save). checkElementalControl() now frees + flips the elemental when the caster is slain/gone OR newly attacked since conjuring (controlAtkTurn baseline, replacing the old hp-below-baseline test). Catapult/cannon area hits stay covered by the slain trigger (everything under the disc dies). Amends v0.11.113. -->
+<!-- chainmail-board.html · v0.11.116 · Fix: the contextual spell pickers never appeared. The phase-dock builder (dockIds.forEach → appendChild) only relocates whitelisted controls into #phase-dock, and #dock-element / #dock-poly were absent from both the missile-phase list and the phases-off list — so updateButtons toggled their hidden state on controls that were never placed in the dock. Added both to those two lists (they already sat in TURN_ACTION_BTNS). This surfaces the Polymorph form picker AND the Conjure element picker (the latter was silently hidden too, masked by its Air default). Builds on v0.11.115. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.114</title>
+<title>Chainmail — Battlefield · v0.11.116</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -296,7 +296,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.114</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.116</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -353,6 +353,7 @@
         <button id="btn-counter-magic" class="secondary" disabled hidden>Counter-magic</button>
         <select id="dock-spell" class="secondary" disabled hidden></select>
         <select id="dock-element" class="secondary" title="Element to conjure" disabled hidden><option value="air">Air</option><option value="earth">Earth</option><option value="fire">Fire</option><option value="water">Water</option></select>
+        <select id="dock-poly" class="secondary" title="Form to assume" disabled hidden><option value="HERO">Hero</option><option value="SUPER_HERO">Super Hero</option><option value="TROLL">Troll / Ogre</option><option value="GIANT">Giant</option></select>
         <button id="btn-cast-spell" class="secondary" disabled hidden>Cast spell</button>
         <button id="btn-batter-ram" disabled hidden>Batter (ram)</button>
         <button id="btn-batter-creature" disabled hidden>Batter (creature)</button>
@@ -513,6 +514,7 @@
 <div id="ctx-menu" class="ctx-menu" hidden>
   <div class="ctx-head" id="ctx-head">Unit</div>
   <button data-act="rename">Rename…</button>
+  <button data-act="revert-form">Revert form (end Polymorph)</button>
   <button data-act="restore">Restore unit (full reset)</button>
   <button data-act="reset-actions">Reset move &amp; actions (this round)</button>
   <button data-act="reset-status">Reset status (ready · clear paralysis)</button>
@@ -682,7 +684,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.114';
+const SIM_VERSION = '0.11.116';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -896,7 +898,7 @@ const PHASE_RAIL = Object.freeze(['Init', 'First Move', 'Last Move', 'Artillery'
 // Action buttons the phase rail relocates each render — into the live phase cell
 // (the primary action) or the dock beneath it (situational verbs). Parked in the
 // hidden #action-bank between renders so rebuilding the rail can't orphan listeners.
-const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
+const TURN_ACTION_BTNS = Object.freeze(['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']);
 // Which side may move in a given phase. Pure (state-free) so it is testable.
 function moverForPhase(phaseId, firstMover) {
   if (phaseId === 'move1') return firstMover;
@@ -1065,7 +1067,7 @@ const SPELLS = Object.freeze([
   { key: 'levitate',    name: 'Levitate',              complexity: 2, done: true  },
   { key: 'slowness',    name: 'Slowness',              complexity: 3, done: true  },
   { key: 'haste',       name: 'Haste',                 complexity: 3, done: true  },
-  { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: false },
+  { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: true  },
   { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
   { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: false },
   { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: true  },
@@ -1093,6 +1095,11 @@ const SPELL_DESC = Object.freeze({
   cloudkill:   'A 3×6×3″ poison cloud drifts from the caster, killing men, orcs, dwarves and the like.',
   antiMagic:   'A 5″ shell that blocks all magic in or out, for up to 6 turns.',
 });
+// Polymorph (p.32) target forms, per ruling: individual creature types from the
+// caster's own size up to a Giant — the physical/martial ones only. No mundane troop
+// units, and no magical creatures (Balrog, Dragon, Elemental, Wraith, Wight, Ent, Roc,
+// Lycanthrope). Edit this list to recut the allowed forms.
+const POLYMORPH_FORMS = Object.freeze(['HERO', 'SUPER_HERO', 'TROLL', 'GIANT']);
 // Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
 // (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
 const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
@@ -1374,7 +1381,7 @@ function resolveWizardMissile() {
 // Eligibility for a Wizard to cast counter-magic at an opposing Wizard.
 function counterMagicState(a, d) {
   if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
-  if (!d || d.destroyed || !isMagicUser(d) || d.side === a.side) return { ok: false, reason: 'target' };
+  if (!d || d.destroyed || (!isMagicUser(d) && !d.polymorphed) || d.side === a.side) return { ok: false, reason: 'target' };
   const occupied = !!(a.acted && a.acted.fired), suppressed = magicSuppressedThisTurn(a);
   const shielded = magicBlockedBetween(a.x, a.y, d.x, d.y);   // a shell between them blocks the counter
   const { target, role } = counterMagicTarget(magicMeta(a).penalty, magicMeta(d).penalty);
@@ -1398,6 +1405,7 @@ function resolveCounterMagic() {
     let dispelled = '';
     if (state.darkness && state.darkness.casterId === d.id) { state.darkness = null; dispelled += ' Darkness'; }
     if (state.wizardLight && state.wizardLight.casterId === d.id) { state.wizardLight = null; dispelled += ' Wizard Light'; }
+    if (d.polymorphed) { revertPolymorph(d); dispelled += ' Polymorph'; }
     body += `<div class="verdict v-rout">countered — ${d.side} ${magicMeta(d).label}'s magic is suppressed this turn${dispelled ? ' · dispels' + dispelled : ''}</div>`;
   } else body += `<div class="verdict v-noeffect">the counter fails</div>`;
   if (st.role === 'equal') body += `<div class="step" style="color:var(--ink-soft)">equal class — RAW casts dice for the stronger role; treated as 7+ for the caster here</div>`;
@@ -1426,7 +1434,9 @@ function castNamedSpell(spellKey) {
   const roll = roll2d6(state.rng).sum, res = resolveSpellCast(magicClassOf(a), spell.complexity, roll);
   a.acted.fired = true;
   let body = `<div class="step">${a.side} ${magicMeta(a).label} casts ${spell.name} (Complexity ${spell.complexity}) — rolled ${roll} → ${res}</div>`;
-  const opts = spellKey === 'conjureElem' ? { element: ($('#dock-element').value || 'air') } : {};
+  const opts = spellKey === 'conjureElem' ? { element: ($('#dock-element').value || 'air') }
+             : spellKey === 'polymorph'  ? { form: ($('#dock-poly').value || 'GIANT') }
+             : {};
   if (res === 'immediate') body += applySpellEffect(spellKey, a, d, opts);
   else if (res === 'deferred') {
     if (!state.pendingSpells) state.pendingSpells = [];
@@ -1519,7 +1529,27 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
     state.units.push(el);
     return `<div class="verdict v-rout">the Wizard conjures an Elemental of ${element}, bound to its summoner — strike the Wizard (or fell him) and it breaks free and turns on him</div>`;
   }
+  if (spellKey === 'polymorph') {
+    const form = (opts && opts.form) || 'GIANT';
+    if (!POLYMORPH_FORMS.includes(form)) return `<div class="verdict v-noeffect">that shape is beyond the spell — a Wizard may take only a physical form up to Giant size</div>`;
+    if (a.polymorphed) return `<div class="verdict v-noeffect">the Wizard already wears another semblance</div>`;
+    a.polyOrig = { type: a.type, hp: a.hp, maxHp: a.maxHp };
+    a.polymorphed = true; a.polyForm = form;
+    a.type = form;
+    a.maxHp = FIGHTING_STRENGTH[form] || a.maxHp; a.hp = a.maxHp;
+    return `<div class="verdict v-rout">the Wizard takes the semblance of a ${typeById(form)?.name || form} — it fights wholly as that form (no spellcasting) until it changes back or is countered</div>`;
+  }
   return '';
+}
+// Revert a polymorphed Wizard to its true form (the RAW "changes himself back", and
+// the dispel half of "or it is countered"). Restores the stored type and hp; while
+// polymorphed the piece's type is the form, so isMagicUser() is false and all its
+// magic — casting and counter-casting — is already disabled with no extra guard.
+function revertPolymorph(u) {
+  if (!u || !u.polymorphed || !u.polyOrig) return;
+  u.type = u.polyOrig.type;
+  u.maxHp = u.polyOrig.maxHp; u.hp = u.polyOrig.hp;
+  u.polymorphed = false; u.polyForm = null; u.polyOrig = null;
 }
 // Deferred casts (the Complexity table's D band, p.33) take effect at the start of
 // the following turn. endRound drains the queue; each spell re-resolves from its
@@ -4554,6 +4584,20 @@ function renderUnit(u) {
       })()
     : '';
 
+  const polyBadgeStr = u.polymorphed
+    ? (() => {
+        const txt = 'POLYMORPH';
+        const tw = txt.length * 6.5 + 14;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#5b7a3a" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.2">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
@@ -4576,6 +4620,7 @@ function renderUnit(u) {
       ${paralysisBadgeStr}
       ${reformBadgeStr}
       ${phantasmBadgeStr}
+      ${polyBadgeStr}
     </g>
   `;
 }
@@ -5442,6 +5487,8 @@ function updateButtons() {
   if (spellSel) { spellSel.hidden = !showSp; spellSel.disabled = !showSp; }
   const elemSel = $('#dock-element');
   if (elemSel) { const showElem = showSp && curSpell === 'conjureElem'; elemSel.hidden = !showElem; elemSel.disabled = !showElem; }
+  const polySel = $('#dock-poly');
+  if (polySel) { const showPoly = showSp && curSpell === 'polymorph'; polySel.hidden = !showPoly; polySel.disabled = !showPoly; }
   if (castBtn) {
     castBtn.hidden = !showSp;
     castBtn.disabled = !(scs && scs.ok && spMissileOk && tgtOk);
@@ -8291,6 +8338,7 @@ function onUnitContextMenu(evt, unitId) {
   state.ctxUnitId = unitId;
   const T = typeById(u.type);
   $('#ctx-head').textContent = `${u.side} · ${T.name} × ${u.count} · ${u.formation || 'line'}`;
+  $('#ctx-menu [data-act="revert-form"]').hidden = !u.polymorphed;
   // Show only the reshape options that apply to this unit
   document.querySelectorAll('#ctx-menu [data-act^="reshape-"]').forEach(b => {
     const target = b.dataset.act.replace('reshape-', '');
@@ -8505,6 +8553,8 @@ function onContextMenuAction(evt) {
   } else if (act === 'rename') {
     const entered = prompt('Name this unit (blank to clear):', u.label || '');
     if (entered !== null) u.label = entered.trim().slice(0, 40);
+  } else if (act === 'revert-form') {
+    revertPolymorph(u);
   } else if (act === 'delete') {
     if (state.editUnitId === u.id) cancelEdit();
     state.units = state.units.filter(x => x.id !== u.id);
@@ -8766,10 +8816,10 @@ function renderTurnUI() {
     ? (ph.id === 'initiative' ? ['btn-roll-init']
       : ph.id === 'move1' ? ['btn-elect-order']
       : ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell']
+      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell']
       : ph.id === 'melee' ? ['btn-melee', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
-    : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
+    : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
   dockIds.forEach(id => dock.appendChild($('#' + id)));
   // Phase guidance (enforce only): a now/next hint line + a single lit primary button.
   const hintEl = $('#phase-hint');
