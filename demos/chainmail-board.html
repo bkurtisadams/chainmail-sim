@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.106 · Add Fly / Land to the unit right-click context menu (discoverability, alongside the Selected-panel button). New data-act="toggle-fly" entry in #ctx-menu (flight cluster, by Breathe fire); shown only for canFly units in onUnitContextMenu and labelled Take off / Land per current airborne state; the dispatcher toggles u.airborne (resets turnsAloft; on landing clears altitudeIn + levitated), reusing the surrounding ctx pushUndo + renderBoard. No new behaviour — same toggle as the panel button, reachable both ways. -->
+<!-- chainmail-board.html · v0.11.107 · Dragon breath is now a true area cone (RAW): it sweeps every figure under the ½″→3″ × 9″ cone — friend and foe alike — instead of resolving against one designated target. The shift-click target only sets the cone direction AND its altitude: the cone burns the level it is aimed at, so a ground-aimed breath catches troops below but spares fliers overhead, and an air-aimed breath sweeps the airborne lane but spares the ground (e.g. a flying air elemental beside ground troops is untouched when the dragon breathes down at the troops). Per-unit save (DRAGON/SUPER_HERO/WIZARD/ELEMENTAL save on 2d6≥7) and mass loss-morale unchanged; flammable works only ignite on a ground-aimed breath. Builds on v0.11.106. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.106</title>
+<title>Chainmail — Battlefield · v0.11.107</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.106</span>
+      <span class="version-tag">v0.11.107</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -679,7 +679,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.106';
+const SIM_VERSION = '0.11.107';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -7856,82 +7856,78 @@ function onResolveDragonBreath(dragon) {
       `<div class="step">${typeById(dragon.type).name} has breathed 3× — it must land and remain stationary for one turn to rekindle (end a round without moving it).</div>`);
     return;
   }
-  const d = state.units.find(u => u.id === state.targetId);
-  if (!d || d.destroyed || d.id === dragon.id) {
+  const tgt = state.units.find(u => u.id === state.targetId);
+  if (!tgt || tgt.destroyed || tgt.id === dragon.id) {
     appendTurn(`Dragon breath — no target`,
-      `<div class="step">Set an enemy target first (shift-click), then breathe.</div>`);
+      `<div class="step">Set an enemy target first (shift-click) to aim the cone, then breathe.</div>`);
     return;
   }
-  if (d.side === dragon.side) {
+  if (tgt.side === dragon.side) {
     appendTurn(`Dragon breath — friendly target`,
-      `<div class="step">Target is on the same side.</div>`);
+      `<div class="step">Aim the cone at an enemy.</div>`);
     return;
   }
-  const dragT = typeById(dragon.type), dT = typeById(d.type);
-  const vx = d.x - dragon.x, vy = d.y - dragon.y;
+  const dragT = typeById(dragon.type);
+  const vx = tgt.x - dragon.x, vy = tgt.y - dragon.y;
   const len = Math.hypot(vx, vy) || 1;
   const ux = vx / len, uy = vy / len;
+  const breathLevel = !!tgt.airborne;   // the cone burns the level it is aimed at — down at the ground, or up among the fliers (p.34-38 / altitude design ruling)
 
-  let html = `<div class="step">${dragT.name} (${dragon.side}) breathes fire — ½″→3″ cone, ${DRAGON_BREATH_LEN_IN}″ long, aimed at ${d.side} · ${dT.name} (${(len/PX_PER_INCH).toFixed(1)}″ away)</div>`;
+  let html = `<div class="step">${dragT.name} (${dragon.side}) breathes fire — ½″→3″ cone, ${DRAGON_BREATH_LEN_IN}″ long, ${breathLevel ? 'sweeping the airborne lane' : 'belching down at the ground'} toward ${tgt.side} · ${typeById(tgt.type).name} (${(len / PX_PER_INCH).toFixed(1)}″ away)</div>`;
 
-  if (d.kind === 'individual') {
-    const r = pointInBreathCone(dragon.x, dragon.y, ux, uy, d.x, d.y);
-    if (!r.hit) {
-      html += `<div class="verdict v-noeffect">target not under the cone</div>`;
-    } else if (DRAGON_FIRE_SAVE_TYPES.has(d.type)) {
-      const dice = roll2d6(state.rng);
-      const saved = dice.sum >= 7;
-      html += `<div class="step">${dT.name} is touched — save 2d6 = ${dice.a}+${dice.b} = <b>${dice.sum}</b> (needs 7+)</div>`;
-      if (saved) {
-        html += `<div class="verdict v-stable">${dT.name} saves — no effect</div>`;
-      } else {
-        html += `<div class="verdict v-rout">${dT.name} → incinerated</div>`;
-        d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
-        cleanupEngagementsForUnit(d.id);
-        if (d.id === state.targetId) state.targetId = null;
+  // Area cone (RAW): every figure the cone touches burns — friend and foe alike — but only at the aimed altitude. A ground-aimed breath misses fliers overhead; an air-aimed breath misses the troops below.
+  let anyCaught = false;
+  for (const u of state.units) {
+    if (u.destroyed || u.id === dragon.id || u.kind === 'works') continue;
+    if (!!u.airborne !== breathLevel) continue;
+    const uT = typeById(u.type);
+    const friendTag = u.side === dragon.side ? ' (friendly!)' : '';
+    if (u.kind === 'individual') {
+      if (!pointInBreathCone(dragon.x, dragon.y, ux, uy, u.x, u.y).hit) continue;
+      anyCaught = true;
+      if (DRAGON_FIRE_SAVE_TYPES.has(u.type)) {
+        const dice = roll2d6(state.rng);
+        html += `<div class="step">${u.side} · ${uT.name}${friendTag} touched — save 2d6 = ${dice.a}+${dice.b} = <b>${dice.sum}</b> (7+)</div>`;
+        if (dice.sum >= 7) { html += `<div class="verdict v-stable">${uT.name} saves — no effect</div>`; continue; }
       }
+      html += `<div class="verdict v-rout">${u.side} · ${uT.name}${friendTag} → incinerated</div>`;
+      u.count = 0; u.destroyed = true; if (u.maxHp) u.hp = 0;
+      cleanupEngagementsForUnit(u.id); if (u.id === state.targetId) state.targetId = null;
     } else {
-      html += `<div class="verdict v-rout">${dT.name} → incinerated (dragon fire kills any opponent it touches)</div>`;
-      d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
-      cleanupEngagementsForUnit(d.id);
-      if (d.id === state.targetId) state.targetId = null;
-    }
-  } else {
-    const centers = massFigureCenters(d);
-    let hits = 0;
-    for (const c of centers) if (pointInBreathCone(dragon.x, dragon.y, ux, uy, c.x, c.y).hit) hits++;
-    html += `<div class="step">${hits} of ${d.count} figure${hits === 1 ? '' : 's'} under the cone → <b>${hits}</b> killed</div>`;
-    applyCasualties(d, hits);
-    if (hits > 0 && !d.destroyed) {
-      const cas = d.startCount - d.count;
-      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
-        fatigued: !!d.fatigued && state.settings.applyFatigue });
-      if (lr.triggered) {
-        const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
-        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
-        html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
-                `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
-        html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
-        if (!lr.passed) d.destroyed = true;
-      } else {
-        html += `<div class="verdict v-killed">${hits} killed</div>`;
+      const centers = massFigureCenters(u);
+      let hits = 0;
+      for (const c of centers) if (pointInBreathCone(dragon.x, dragon.y, ux, uy, c.x, c.y).hit) hits++;
+      if (hits <= 0) continue;
+      anyCaught = true;
+      const before = u.count;
+      applyCasualties(u, hits);
+      html += `<div class="step">${u.side} · ${uT.name}${friendTag} — ${hits} of ${before} figure${hits === 1 ? '' : 's'} under the cone → <b>${hits}</b> killed${u.destroyed ? ' (wiped out)' : ''}</div>`;
+      if (!u.destroyed) {
+        const cas = u.startCount - u.count;
+        const lr = resolveLossMorale({ type:u.type, startCount:u.startCount, casualties:cas, surrounded:false, rng:state.rng,
+          fatigued: !!u.fatigued && state.settings.applyFatigue });
+        if (lr.triggered) {
+          const pct = (lr.pct * 100).toFixed(1), thr = (lr.threshold.pct * 100).toFixed(1);
+          const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+          html += `<div class="step">${u.side} · ${uT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
+          html += `<div class="verdict v-${lr.passed ? 'stable' : lr.action}">${u.side} ${lr.passed ? 'holds' : lr.action}</div>`;
+          if (!lr.passed) { u.destroyed = true; cleanupEngagementsForUnit(u.id); if (u.id === state.targetId) state.targetId = null; }
+        }
       }
-    } else if (hits === 0) {
-      html += `<div class="verdict v-noeffect">no figures under the cone</div>`;
-    } else {
-      html += `<div class="verdict v-rout">${dT.name} wiped out</div>`;
     }
-    if (d.destroyed && d.id === state.targetId) state.targetId = null;
   }
+  if (!anyCaught) html += `<div class="verdict v-noeffect">nothing under the cone at that level</div>`;
 
-  const litW = igniteFlammableWorks(w => w.side !== dragon.side && pointInBreathCone(dragon.x, dragon.y, ux, uy, w.x, w.y).hit);
-  if (litW.length) html += `<div class="step" style="color:#a8400f">the breath sets ${litW.join(', ')} alight — burns ${BOILING_OIL.woodBurnTurns} turns</div>`;
+  if (!breathLevel) {
+    const litW = igniteFlammableWorks(w => w.side !== dragon.side && pointInBreathCone(dragon.x, dragon.y, ux, uy, w.x, w.y).hit);
+    if (litW.length) html += `<div class="step" style="color:#a8400f">the breath sets ${litW.join(', ')} alight — burns ${BOILING_OIL.woodBurnTurns} turns</div>`;
+  }
 
   dragon.breathsUsed = used + 1;
   dragon.acted.fired = true;
   const remaining = 3 - dragon.breathsUsed;
   html += `<div class="step" style="color:var(--ink-soft)">breath ${dragon.breathsUsed}/3${remaining <= 0 ? ' — must rekindle (stationary turn)' : ` · ${remaining} left`}</div>`;
-  appendTurn(`Dragon breath · ${dragT.name} (${dragon.side}) → ${dT.name}`, html);
+  appendTurn(`Dragon breath · ${dragT.name} (${dragon.side}) cone${breathLevel ? ' · airborne' : ''}`, html);
   renderBoard();
 }
 
