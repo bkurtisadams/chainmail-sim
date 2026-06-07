@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.109 · Revert the new-unit form from the two-column grid (v0.11.96) back to a single column, compacted to match the Selected panel: drop the #new-unit-panel grid/label-over-control overrides so fields fall back to the base single-row .field style (label left, control right), tighten the row rhythm to margin-bottom 3px, widen labels to 84px to keep them on one line. Checkbox and field-note rows render inline as before. CSS only — no behaviour change. Builds on v0.11.108. -->
+<!-- chainmail-board.html · v0.11.110 · Phantasmal Forces (Fantasy spell №1, Complexity 2, p.31) now implemented — 8→9 of 16 spells done. Per Kurt's ruling the apparition is a real unit with no disbelief mechanic: shift-click any non-works unit as the template, cast, and an apparition of it spawns on the caster's side beside the Wizard. It moves and fights exactly as its apparent type (✦ insubstantial/immunity intentionally NOT modelled — it is fought and killed like the real thing), but the Wizard must maintain it: cullPhantasms() vanishes it the instant the caster moves or falls, or after PHANTASM_DURATION=4 turns (the "four turns, maxi-duration" cap), swept from maintainSpells() and again at the endRound boundary before movedThisTurn resets. Phantasm-Wizards are barred from casting (no recursive apparitions). Cue: a translucent violet dashed ring + a PHANTASM-n countdown badge. 'any'-target cast hint corrected (template/bearing). Range-leash to caster omitted as a faithful simplification. Builds on v0.11.109. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.109</title>
+<title>Chainmail — Battlefield · v0.11.110</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -314,7 +314,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.109</span>
+      <span class="version-tag">v0.11.110</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
@@ -674,7 +674,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.109';
+const SIM_VERSION = '0.11.110';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1046,7 +1046,7 @@ const WIZARD_LIGHT_RANGE_IN = 24;
 // The 16 listed spells with casting Complexity. Effects land one at a time; `done`
 // marks those modeled so far (the rest are listed for the picker and as a roadmap).
 const SPELLS = Object.freeze([
-  { key: 'phantasmal',  name: 'Phantasmal Forces',     complexity: 2, done: false },
+  { key: 'phantasmal',  name: 'Phantasmal Forces',     complexity: 2, done: true  },
   { key: 'darkness',    name: 'Darkness',              complexity: 1, done: true  },
   { key: 'wizardLight', name: 'Wizard Light',          complexity: 1, done: true  },
   { key: 'detection',   name: 'Detection',             complexity: 2, done: false },
@@ -1082,6 +1082,27 @@ function maintainSpells() {
     const c = state.units.find(u => u.id === state.antiMagic.casterId);
     if (!c || c.destroyed || state.turn >= state.antiMagic.untilTurn) state.antiMagic = null;
   }
+  cullPhantasms();
+}
+// Phantasmal Forces (p.31): the apparition is a normal unit — it is fought and
+// killed like any other (no disbelief mechanic). The caster must MAINTAIN it: it
+// vanishes the moment the Wizard moves or falls, or after PHANTASM_DURATION turns
+// (the "four turns, maxi-duration" cap). Like the zone spells it lapses silently;
+// "disturbed by attack" is modelled only as the caster's destruction (a faithful
+// simplification matching darkness/protection). Marked destroyed (filtered by
+// !u.destroyed everywhere) rather than spliced, mirroring every other removal path.
+const PHANTASM_DURATION = 4;   // turns
+function cullPhantasms() {
+  for (const u of state.units) {
+    if (!u.phantasm || u.destroyed) continue;
+    const c = state.units.find(x => x.id === u.casterId);
+    if (!c || c.destroyed || (c.movedThisTurn || 0) > 0 || state.turn >= u.phantasmUntil) {
+      u.destroyed = true;
+      cleanupEngagementsForUnit(u.id);
+      if (u.id === state.selectedId) state.selectedId = null;
+      if (u.id === state.targetId) state.targetId = null;
+    }
+  }
 }
 // Darkness gloom level (p.31): 0 light (cast turn), 1 semi-darkness (next turn), 2
 // full darkness (third turn on). 0 when no Darkness is active.
@@ -1106,7 +1127,7 @@ function moveSpellFactor(u) {
   return ms.kind === 'haste' ? 1.5 : ms.kind === 'slow' ? 0.5 : 1;
 }
 // Side a spell's target must be on (absent = no target needed).
-const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend' });
+const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend', phantasmal: 'any' });
 function spellTargetOk(spell, a, d) {
   const need = SPELL_TARGET[spell.key]; if (!need) return true;
   if (!a || !d || d.destroyed || d.kind === 'works' || d.id === a.id) return false;
@@ -1331,7 +1352,7 @@ function resolveCounterMagic() {
 // Eligibility to cast a spell: a stationary, unoccupied, unsuppressed magic-user
 // (p.32 — a Wizard must be stationary and undisturbed to cast/maintain).
 function spellCastState(a) {
-  if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed) return null;
+  if (!a || a.kind !== 'individual' || !isMagicUser(a) || a.destroyed || a.phantasm) return null;
   const moved = (a.movedThisTurn || 0) > 0, occupied = !!(a.acted && a.acted.fired), suppressed = magicSuppressedThisTurn(a);
   return { moved, occupied, suppressed, ok: !moved && !occupied && !suppressed };
 }
@@ -1389,6 +1410,35 @@ function applySpellEffect(spellKey, a, d) {
     state.cloudkill = { casterId: a.id, side: a.side, x: a.x + ux * half, y: a.y + uy * half, dirX: ux, dirY: uy };
     const k = resolveCloudkillKills(state.cloudkill);
     return `<div class="verdict v-rout">a ${CLOUD_DEPTH_IN}″×${CLOUD_WIDTH_IN}″ killing cloud forms and rolls away from the caster</div>` + k.html;
+  }
+  if (spellKey === 'phantasmal') {
+    if (!d || d.destroyed) return `<div class="verdict v-noeffect">no template remains — the apparition fails to form</div>`;
+    if (d.kind === 'works' || d.phantasm) return `<div class="verdict v-noeffect">only a real unit or creature can be apparated</div>`;
+    if (magicBlockedBetween(a.x, a.y, d.x, d.y)) return `<div class="verdict v-noeffect">an anti-magic shell blocks the spell</div>`;
+    const ph = { ...d };
+    ph.id = state.nextId++;
+    ph.side = a.side;
+    ph.phantasm = true; ph.casterId = a.id; ph.phantasmUntil = state.turn + PHANTASM_DURATION;
+    ph.leader = false; ph.mercenary = false;
+    ph.alignment = d.alignment || defaultAlignment(d.type);
+    ph.acted = { moved: false, fired: false, fought: false };
+    ph.conditions = {};
+    ph._touchedThisTurn = [];
+    ph.spawnTurn = state.turn;
+    ph.movedThisTurn = 0; ph.shotsThisTurn = 0; ph.lastFiredTurn = null;
+    ph.status = 'ready'; ph.fatigued = false; ph.moveStreak = 0;
+    ph.charged = false; ph.chargedLastTurn = false; ph.chargeDir = null; ph.prisoners = 0;
+    ph.breathsUsed = 0; ph.pendingHits = 0; ph.indirect = false; ph.cover = 'none';
+    ph.levitated = false; ph.airborne = false; ph.altitudeIn = 0; ph.turnsAloft = 0; ph.levitateUntil = 0;
+    ph.moveSpell = null; ph.reform = null; ph.halfMovePaused = false; ph.splitFired = false; ph.splitLeg1 = 0;
+    ph.count = d.startCount || d.count || 1; ph.startCount = ph.count;
+    const off = inchesToPx(2) * (a.side === 'A' ? 1 : -1);
+    ph.x = a.x + off; ph.y = a.y;
+    ph.facing = a.side === 'A' ? 90 : 270; ph.turnStartFacing = ph.facing;
+    if (state.settings.snapToGrid) { const sp = snapPos(ph, ph.x, ph.y); ph.x = sp.x; ph.y = sp.y; }
+    state.units.push(ph);
+    const what = typeById(ph.type)?.name || (ph.kind === 'individual' ? 'figure' : 'unit');
+    return `<div class="verdict v-rout">an apparition of ${what} (×${ph.count}) takes shape beside the caster — it fights as the real thing but holds only while the Wizard stays put, up to ${PHANTASM_DURATION} turns</div>`;
   }
   return '';
 }
@@ -4299,6 +4349,7 @@ function renderUnit(u) {
   let outline = '';
   if (sel) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
   else if (tgt) outline = `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="none" stroke="var(--rear)" stroke-width="2" stroke-dasharray="4 3"/>`;
+  if (u.phantasm) outline += `<rect x="${xL-4}" y="${yT-4}" width="${w+8}" height="${h+8}" rx="3" fill="rgba(122,79,176,0.10)" stroke="rgba(122,79,176,0.85)" stroke-width="1.6" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`;
   // Phase guidance (enforce only): ring the side that may move this phase (green,
   // outer) and dim the side that may not, so "whose move" reads off the board.
   const guideP = PHASES[state.phaseIdx];
@@ -4394,6 +4445,21 @@ function renderUnit(u) {
       })()
     : '';
 
+  const phantasmBadgeStr = u.phantasm
+    ? (() => {
+        const left = Math.max(0, (u.phantasmUntil || state.turn) - state.turn);
+        const txt = `PHANTASM ${left}`;
+        const tw = txt.length * 6.5 + 14;
+        const y = labelY + 14 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#7a4fb0" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.2">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
       ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
@@ -4413,6 +4479,7 @@ function renderUnit(u) {
       ${statusBadgeStr}
       ${paralysisBadgeStr}
       ${reformBadgeStr}
+      ${phantasmBadgeStr}
     </g>
   `;
 }
@@ -5285,7 +5352,7 @@ function updateButtons() {
       scs.occupied ? 'This Wizard has already used its magic this turn' :
       scs.suppressed ? 'This Wizard’s magic is suppressed this turn' :
       !spMissileOk ? 'Cast in the Missile phase' :
-      !tgtOk ? (needTgt === 'friend' ? 'Target a friendly unit of ≤20 figures (shift-click)' : 'Target an enemy unit of ≤20 figures (shift-click)') :
+      !tgtOk ? (needTgt === 'friend' ? 'Target a friendly unit of ≤20 figures (shift-click)' : needTgt === 'any' ? 'Shift-click any unit to set the template/bearing' : 'Target an enemy unit of ≤20 figures (shift-click)') :
       `Cast ${SPELL_BY_KEY[curSpell] ? SPELL_BY_KEY[curSpell].name : ''} (Complexity ${SPELL_BY_KEY[curSpell] ? SPELL_BY_KEY[curSpell].complexity : '?'}) — resolved vs your class (p.31)`;
   }
   const rb = ramBatterState(a, d);
@@ -8685,6 +8752,7 @@ function endRound() {
   state.lastMissile = null;
   tickHazards();
   tickCloudkill();
+  cullPhantasms();   // expire apparitions at the boundary: duration elapsed, or the caster moved during the turn just ended (before movedThisTurn resets below)
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
