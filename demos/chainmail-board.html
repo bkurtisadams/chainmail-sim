@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.96 · Panel compaction (Selected / Target / New unit), approved from the before/after mockup. The Selected and Target stat blocks (one shared renderer) now lay out as a 2-column grid: short stats (Side, Morale, Facing, Point, Size, …) pair two-per-row, while long lines span both columns — a post-render pass tags any .stat whose value text exceeds 15 chars or contains a <small> with class “wide” (grid-column 1/-1), so Move used, On terrain (when long), Melee wpn, and the conditional warnings stay full width. The New unit form becomes a 2-column grid with the label stacked tight above each control (#new-unit-panel display:grid; .field flex-direction:column; controls width:100%); the h2, any field carrying a .field-note (Points, Pikes, Leader, Mercenary, works note), and the checkbox rows span the full width — checkbox rows stay horizontal via :has(input[type=checkbox]). All scoped by #id so other .field/.stat users are untouched; the mass/individual/works show-hide still flows (display:none drops cells from the grid). CSS + one small JS tagging loop; no engine or rules changes. Uses :has() (modern browsers). -->
+<!-- chainmail-board.html · v0.11.97 · Revert the Selected/Target stat panes to single-row (one stat per full-width row, as before v0.11.96): the 2-column stat grid squeezed each cell to ~half the 240px panel, so keys and values wrapped and collided. Dropped the #selected-pane/#target-pane grid CSS and the .wide-tagging JS loop. The New unit form KEEPS its 2-column label-over-control grid (that looked good). No engine or rules changes; layout only. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.96</title>
+<title>Chainmail — Battlefield · v0.11.97</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -155,9 +155,7 @@
     color: var(--ink-soft); }
   .stat .v { font-variant-numeric: tabular-nums; font-weight: 700; }
   .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
-  /* Compact panels: 2-up stat grid (long lines span) + 2-up new-unit form (label over control) */
-  #selected-pane:not(.empty), #target-pane:not(.empty) { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
-  #selected-pane .stat.wide, #target-pane .stat.wide { grid-column: 1 / -1; }
+  /* Compact new-unit form: label over control, two per row (Selected/Target stay single-row) */
   #new-unit-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; align-items: start; }
   #new-unit-panel > h2 { grid-column: 1 / -1; margin-bottom: 2px; }
   #new-unit-panel .field { flex-direction: column; align-items: stretch; gap: 2px; margin-bottom: 0; }
@@ -312,7 +310,7 @@
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
       <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
-      <span class="version-tag">v0.11.96</span>
+      <span class="version-tag">v0.11.97</span>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-info" style="display:none"><span class="phase-tag" id="phase">Turn 1 · Side A</span></div>
@@ -669,7 +667,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.96';
+const SIM_VERSION = '0.11.97';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4592,15 +4590,6 @@ function updateSidebar() {
           (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '')) +
       (u.weapon ? `<div class="stat"><span class="k">Weapon</span><span class="v">${u.weapon} · ${WEAPON_RANGES[u.weapon]}″</span></div>` +
                   `<div class="stat"><span class="k">Shots</span><span class="v">${Math.max(0, missileShotsRemaining(u))} / ${missileShotsAllowed(u)}${(rangedWeaponById(u.weapon)?.halfRoF && missileShotsRemaining(u) <= 0) ? ' · reloading' : ''}</span></div>` : '');
-  }
-  // Compact stat grid: long values (or any with a <small>) span both columns.
-  for (const pane of ['#selected-pane', '#target-pane']) {
-    const el = $(pane);
-    if (!el || el.classList.contains('empty')) continue;
-    el.querySelectorAll('.stat').forEach(srow => {
-      const v = srow.querySelector('.v');
-      if (v && (v.textContent.length > 15 || v.querySelector('small'))) srow.classList.add('wide');
-    });
   }
 }
 
