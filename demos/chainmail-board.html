@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.123 · Hallucinatory Terrain phantom: the caster now PLACES it. Old behaviour dropped the phantom at a fixed offset beside the Wizard and failed the whole cast if a unit stood there — the player had no say in location. Now an immediate phantom cast ARMS placement (state.phantomPlace) instead of spawning: the board shows a crosshair and the Wizard’s next click (anywhere, even on a unit) drops the illusory feature centred there via placePhantomAt(); Esc cancels. The occupancy auto-fail is gone. Plumbed through interactive:true on the immediate applySpellEffect call (deferred casts stay non-interactive and fall back to dropping it beside the caster). Click intercepted at the top of onBoardMouseDown + onUnitMouseDown; .placing crosshair driven from state in renderBoard; phantomPlace cleared on undo/restore, reset, and endRound. Disguise mode unchanged. Test: interactive cast arms placement, spawns nothing yet. node --check clean. Builds on v0.11.122. -->
+<!-- chainmail-board.html · v0.11.124 · Wire up the last two Fantasy spells — CONCEALMENT (C3) and DETECTION (C2) — closing the 16-spell list, plus a new concealment STATE the engine lacked. u.concealed={source:’spell’|’innate’,by,penalty}: a hidden unit is physically present but can’t be targeted/fired-at/charged/meleed by an enemy that can’t perceive it (canPerceive gate on melee/missile/pass-through/wizard-missile, with tooltips). Perceivers: own side; innate DETECTORS (SUPER_HERO/WRAITH/DRAGON 15″/ROC 48″ — Roc’s hidden-vs-invisible split stubbed, treated as full detector); or a side under Detection. Reveal-on-attack clears it (hooked at melee + normal-missile + wizard-missile resolution). Concealment (target friend) hides a unit independent of the caster, ending on attack/dispel. Detection (no target) arms state.detection[side], piercing all hidden enemies SAVE a stronger enemy Wizard’s work (penalty compare); lapses if the caster moves or is attacked (maintainSpells). Innate invisibility activated via a Vanish/Reveal toggle for WIZARD/ELF/SPRITE/HOBBIT (Hobbit only in cover). Concealed units render ghosted + HIDDEN badge + Selected-pane row. Tests: perception, Dragon range, stronger-Wizard caveat, both casts, vanish eligibility. node --check clean. Builds on v0.11.123. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.123</title>
+<title>Chainmail — Battlefield · v0.11.124</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -298,7 +298,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.123</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.124</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -376,7 +376,7 @@
     <svg id="board" viewBox="0 0 960 540"></svg>
     <aside class="side-panel">
       <div class="panel">
-        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
+        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-vanish" class="edit-btn" hidden title="Become invisible / reappear (hidden until it attacks; Hobbits only in cover)">Vanish</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
         <div id="selected-pane" class="empty">none</div>
       </div>
       <div class="panel">
@@ -688,7 +688,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.123';
+const SIM_VERSION = '0.11.124';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1068,8 +1068,8 @@ const SPELLS = Object.freeze([
   { key: 'phantasmal',  name: 'Phantasmal Forces',     complexity: 2, done: true  },
   { key: 'darkness',    name: 'Darkness',              complexity: 1, done: true  },
   { key: 'wizardLight', name: 'Wizard Light',          complexity: 1, done: true  },
-  { key: 'detection',   name: 'Detection',             complexity: 2, done: false },
-  { key: 'concealment', name: 'Concealment',           complexity: 3, done: false },
+  { key: 'detection',   name: 'Detection',             complexity: 2, done: true  },
+  { key: 'concealment', name: 'Concealment',           complexity: 3, done: true  },
   { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: true  },
   { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: true  },
   { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: true  },
@@ -1117,6 +1117,55 @@ const POLYMORPH_FORMS = Object.freeze([
 // (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
 const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
 function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.type)); }
+// --- Concealment & Detection (p.31-32) -----------------------------------
+// A unit may be hidden via the Concealment spell or innate invisibility; the flag
+// is u.concealed = { source:'spell'|'innate', by, penalty } (penalty = the
+// concealing Wizard's class tier, for Detection's stronger-Wizard rule). A hidden
+// unit is still physically present — it just cannot be targeted/fired-at/charged/
+// meleed by an enemy that can't perceive it.
+const isConcealed = (u) => !!u && !!u.concealed && !u.destroyed;
+// Types that can vanish at will (ability A, p.43). Hobbits only in cover (brush/woods).
+const INVISIBLE_TYPES = new Set(['WIZARD', 'ELF', 'SPRITE', 'HOBBIT']);
+function canVanish(u) {
+  if (!u || u.destroyed || !INVISIBLE_TYPES.has(u.type)) return false;
+  return u.type !== 'HOBBIT' || terrainCoverAt(u.x, u.y) !== 'none';   // Hobbit blends only in brush/woods
+}
+// Innate detectors of the hidden/invisible (ability F, p.43). Dragon sees 15″, Roc
+// 48″; the rest are table-wide. NOTE: RAW gives the Roc hidden-but-not-invisible
+// sight (p.36) — that hidden/invisible split is stubbed; the Roc is a full detector here.
+const DETECTORS = new Set(['SUPER_HERO', 'WRAITH', 'DRAGON', 'ROC']);
+const DETECT_RANGE_IN = Object.freeze({ DRAGON: 15, ROC: 48 });
+// Can `observer` perceive `target`'s concealment? Innate detectors (in range) and any
+// side under a Detection spell can — except Detection fails against a STRONGER enemy
+// Wizard's concealment (lower penalty = stronger), per p.32.
+function canDetectHidden(observer, target) {
+  if (!observer) return false;
+  if (DETECTORS.has(observer.type)) {
+    const rng = DETECT_RANGE_IN[observer.type];
+    if (rng == null || pxToInches(Math.hypot(observer.x - target.x, observer.y - target.y)) <= rng) return true;
+  }
+  const det = state.detection && state.detection[observer.side];
+  if (det) {
+    const src = target.concealed;
+    const strongerEnemyWizard = src && src.source === 'spell' && src.penalty != null && src.penalty < det.penalty;
+    if (!strongerEnemyWizard) return true;
+  }
+  return false;
+}
+// The gate every attack consults: a hidden enemy is unperceived (and so untargetable)
+// unless the observer is on its side or can detect it.
+function canPerceive(observer, target) {
+  if (!isConcealed(target)) return true;
+  if (!observer || observer.side === target.side) return true;
+  return canDetectHidden(observer, target);
+}
+// Reveal-on-attack (p.32): a hidden unit that strikes is hidden no longer.
+function revealOnAttack(u) {
+  if (u && u.concealed) {
+    u.concealed = null;
+    appendTurn('Revealed', `<div class="step">${u.side} ${typeById(u.type)?.name || 'unit'} strikes — its concealment falls away (p.32)</div>`);
+  }
+}
 // A Wizard must stay alive and stationary to maintain a spell (p.32); clear any
 // whose caster is gone, dead, or moved this turn.
 function maintainSpells() {
@@ -1130,6 +1179,14 @@ function maintainSpells() {
   if (state.antiMagic) {
     const c = state.units.find(u => u.id === state.antiMagic.casterId);
     if (!c || c.destroyed || state.turn >= state.antiMagic.untilTurn) state.antiMagic = null;
+  }
+  // Detection (p.32) holds for a side while its caster stays still and unharmed.
+  if (state.detection) {
+    for (const side of ['A', 'B']) {
+      const det = state.detection[side]; if (!det) continue;
+      const c = state.units.find(u => u.id === det.casterId);
+      if (!c || c.destroyed || (c.movedThisTurn || 0) > 0 || c.attackedTurn === state.turn) state.detection[side] = null;
+    }
   }
   cullPhantasms();
 }
@@ -1201,7 +1258,7 @@ function moveSpellFactor(u) {
   return ms.kind === 'haste' ? 1.5 : ms.kind === 'slow' ? 0.5 : 1;
 }
 // Side a spell's target must be on (absent = no target needed).
-const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend', phantasmal: 'any', confusion: 'enemy' });
+const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend', phantasmal: 'any', confusion: 'enemy', concealment: 'friend' });
 function spellTargetOk(spell, a, d) {
   const need = SPELL_TARGET[spell.key]; if (!need) return true;
   if (!a || !d || d.destroyed || d.kind === 'works' || d.id === a.id) return false;
@@ -1341,7 +1398,9 @@ function resolveWizardMissile() {
   const d = state.units.find(u => u.id === state.targetId);
   const st = wizardMissileState(a, d);
   if (!st || !st.ok) return;
+  if (d && !canPerceive(a, d)) return;   // can't hurl a bolt at a foe you can't see (p.32)
   pushUndo('wizard-missile');
+  revealOnAttack(a);   // loosing a missile reveals a hidden Wizard (p.32)
   const missile = WIZARD_MISSILES[a.missileType || 'fireball'], kind = missile.kind;
   const penalty = magicMeta(a).penalty;
   const impact = { x: d.x, y: d.y };
@@ -1620,6 +1679,27 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
     shiftTerrainRegion(r, Math.sin(f) * step, -Math.cos(f) * step);   // facing vector (sinφ, −cosφ)
     const lbl = (TERRAIN_TYPES[r.illusory ? (r.apparentType || 'open') : r.type] && TERRAIN_TYPES[r.illusory ? (r.apparentType || 'open') : r.type].label) || r.type;
     return `<div class="verdict v-rout">the Wizard heaves the ${lbl} ${MOVING_TERRAIN_STEP_IN}″ across the field</div>`;
+  }
+  if (spellKey === 'concealment') {
+    // p.32: hides one unit/creature from all save those who can detect the hidden.
+    // Independent of the caster (Kurt's ruling); ends when the unit attacks or is dispelled.
+    if (!d || d.destroyed) return `<div class="verdict v-noeffect">the target is gone — the spell lapses</div>`;
+    if (d.kind === 'works') return `<div class="verdict v-noeffect">only a unit or creature can be concealed, not siege works</div>`;
+    if (magicBlockedBetween(a.x, a.y, d.x, d.y)) return `<div class="verdict v-noeffect">an anti-magic shell blocks the spell</div>`;
+    d.concealed = { source: 'spell', by: a.id, penalty: magicMeta(a).penalty };
+    return `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} fades from sight — hidden from all but those who can detect the hidden, until it attacks</div>`;
+  }
+  if (spellKey === 'detection') {
+    // p.32: the caster's side perceives hidden enemies (save a stronger Wizard's work)
+    // and the use of enemy magic. Holds while the caster stays still and unharmed
+    // (maintainSpells). No unit target.
+    if (!state.detection) state.detection = { A: null, B: null };
+    state.detection[a.side] = { casterId: a.id, penalty: magicMeta(a).penalty };
+    const foe = a.side === 'A' ? 'B' : 'A';
+    const nowSeen = state.units.filter(u => u.side === foe && isConcealed(u) && canDetectHidden(a, u)).length;
+    const enemyMagic = [state.darkness, state.cloudkill].filter(s => s && s.side === foe).length
+      + state.units.filter(u => u.side === foe && (u.phantasm || u.concealed)).length;
+    return `<div class="verdict v-rout">${a.side} gains the Sight — ${nowSeen ? `${nowSeen} hidden ${nowSeen === 1 ? 'enemy stands' : 'enemies stand'} revealed` : 'no hidden foe within reach'}${enemyMagic ? ' · enemy magic is at work on the field' : ''}; holds while the caster is still and unharmed</div>`;
   }
   return '';
 }
@@ -2936,6 +3016,7 @@ const state = {
   wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
   protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
   cloudkill: null,      // active Cloudkill { casterId, side, x, y, dirX, dirY } — drifting killing gas (p.32)
+  detection: { A: null, B: null },   // active Detection per side { casterId, penalty } — perceives hidden enemies (p.32)
   pendingSpells: [],    // deferred casts (Complexity D band, p.33) awaiting next-turn resolution
   antiMagic: null,      // active Anti-Magic Shell { casterId, side, untilTurn } — 5" magic-proof sphere (p.32)
   settings: {
@@ -4169,7 +4250,7 @@ function renderBoard() {
     renderTerrain() +
     renderHazards() +
     renderGrid() +
-    `<g id="units">${state.units.map(renderUnit).join('')}</g>` +
+    `<g id="units">${state.units.map(u => isConcealed(u) ? `<g opacity="0.5">${renderUnit(u)}</g>` : renderUnit(u)).join('')}</g>` +
     `<g id="overlay">${renderDarkness()}${renderProtection()}${renderAntiMagic()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
@@ -4798,6 +4879,20 @@ function renderUnit(u) {
           </g>`;
       })();
 
+  const concealedBadgeStr = isConcealed(u)
+    ? (() => {
+        const txt = 'HIDDEN';
+        const tw = txt.length * 6.5 + 14;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#3b6ea8" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.4">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
@@ -4821,6 +4916,7 @@ function renderUnit(u) {
       ${phantasmBadgeStr}
       ${polyBadgeStr}
       ${confusedBadgeStr}
+      ${concealedBadgeStr}
     </g>
   `;
 }
@@ -4995,7 +5091,8 @@ function renderDragRuler() {
 
 function updateSidebar() {
   { const _selU = state.selectedId != null && state.units.find(x => x.id === state.selectedId && !x.destroyed); const _eb = $('#btn-edit'); if (_eb) _eb.hidden = !_selU;
-    const _fb = $('#btn-fly'); if (_fb) { const f = _selU && canFly(_selU); _fb.hidden = !f; if (f) _fb.textContent = _selU.airborne ? 'Land' : 'Fly'; } }
+    const _fb = $('#btn-fly'); if (_fb) { const f = _selU && canFly(_selU); _fb.hidden = !f; if (f) _fb.textContent = _selU.airborne ? 'Land' : 'Fly'; }
+    const _vb = $('#btn-vanish'); if (_vb) { const v = _selU && (isConcealed(_selU) || canVanish(_selU)); _vb.hidden = !v; if (v) _vb.textContent = isConcealed(_selU) ? 'Reveal' : 'Vanish'; } }
   for (const [pane, id, swSel] of [['#selected-pane', state.selectedId, '#selected-swatch'], ['#target-pane', state.targetId, '#target-swatch']]) {
     const el = $(pane);
     const sw = $(swSel);
@@ -5087,6 +5184,7 @@ function updateSidebar() {
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
       (canFly(u) ? `<div class="stat"><span class="k">Altitude</span><span class="v"${u.airborne ? ' style="color:#8a6d2e"' : ''}>${u.airborne ? (u.levitated ? `LEVITATING · ${(u.altitudeIn||0)}″ up · ${Math.max(0,(u.levitateUntil||0)-state.turn)}t left` : `AIRBORNE · fly ${flySpeedOf(u)}″${maxAloftOf(u) !== Infinity ? ` · aloft ${(u.turnsAloft||0)}/${maxAloftOf(u)}` : ''}`) : 'grounded'}</span></div>` : '') +
+      (isConcealed(u) ? `<div class="stat"><span class="k">Hidden</span><span class="v" style="color:#3b6ea8">${u.concealed.source === 'spell' ? 'concealed' : 'invisible'} — unseen until it attacks</span></div>` : '') +
       (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>`
         : isConfusionPending(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#8a6d3b">moves reverse next turn</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
@@ -5600,14 +5698,16 @@ function updateButtons() {
   const splitFireCase   = !!(a && atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
   const passThroughCase = !!(a && d && canPassThroughFire(a, d));
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
-  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform && canActInDark(a));
-  $('#btn-melee').title = (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fight (p.31)' : '';
-  const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d) && canActInDark(a);
+  $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform && canActInDark(a) && canPerceive(a, d));
+  $('#btn-melee').title = (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fight (p.31)'
+    : (a && d && !canPerceive(a, d)) ? 'The target is concealed — you cannot see it to fight it (p.32)' : '';
+  const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d) && canActInDark(a) && canPerceive(a, d);
   const gb = giantBoulderState(a, d);
   const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile') && canActInDark(a));
   $('#btn-missile').disabled = !(missileEnabled || boulderReady);
   $('#btn-missile').title =
     (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fire (p.31)' :
+    (a && d && !canPerceive(a, d)) ? 'The target is concealed — you cannot see it to fire on it (p.32)' :
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
     (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' :
     (!missileEnabled && boulderReady) ? `Hurl a boulder — −${SIEGE_WEAPONS.smallCatapult.points} to the ${d && d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure'} (≤${GIANT_ROCK_RANGE_IN}″)` :
@@ -6779,6 +6879,7 @@ function canPassThroughFire(firer, target) {
   if (firer.side === target.side) return false;                          // enemy only
   if (firer.charged || (firer.movedThisTurn || 0) > 1e-9) return false;  // shooter must be stationary
   if (!atHalfMovePause(target)) return false;                            // foe at its half-move firing pause
+  if (!canPerceive(firer, target)) return false;                         // a concealed foe can't be shot (p.32)
   return canSideMoveNow(target.side);                                    // and that foe is the side moving now
 }
 
@@ -7170,6 +7271,7 @@ function onResolveMelee() {
     return;
   }
   markAttacked(a); markAttacked(d);   // melee is mutual contact — both are "attacked" (Conjure Elemental control, p.32)
+  revealOnAttack(a); revealOnAttack(d);   // meleeing reveals a hidden combatant (p.32)
   // Dispatch by kind:
   //  · both mass → mass melee
   //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
@@ -8797,6 +8899,7 @@ function resetBoard() {
   state.terrainDraw = null; state.terrainVertex = null;
   state.terrainMode = false; syncTerrainButton();
   state.phantomPlace = null;
+  state.detection = { A: null, B: null };
   state.selectedId = null;
   state.targetId = null;
   state.dragging = null;
@@ -9191,6 +9294,14 @@ $('#btn-back-setup').addEventListener('click', backToSetup);
 $('#btn-spawn').addEventListener('click', (e) => { e.stopPropagation(); spawnUnit(); });
 $('#btn-edit').addEventListener('click', (e) => { e.stopPropagation(); if (state.selectedId != null) beginEditUnit(state.selectedId); });
 $('#btn-fly').addEventListener('click', (e) => { e.stopPropagation(); const u = state.units.find(x => x.id === state.selectedId); if (!u || !canFly(u)) return; pushUndo('fly'); u.airborne = !u.airborne; u.turnsAloft = 0; if (!u.airborne) { u.altitudeIn = 0; u.levitated = false; u.levitateUntil = 0; } renderBoard(); updateSidebar(); });
+$('#btn-vanish').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const u = state.units.find(x => x.id === state.selectedId); if (!u) return;
+  if (isConcealed(u)) { pushUndo('reveal'); u.concealed = null; }
+  else if (canVanish(u)) { pushUndo('vanish'); u.concealed = { source: 'innate', by: u.id, penalty: null }; }
+  else return;
+  renderBoard(); updateSidebar(); renderTurnUI();
+});
 $('#btn-edit-cancel').addEventListener('click', (e) => { e.stopPropagation(); cancelEdit(); });
 $('#btn-melee').addEventListener('click', () => { onResolveMelee(); renderTurnUI(); });
 $('#btn-fire-engine').addEventListener('click', () => { resolveEngineFire(); renderTurnUI(); });
@@ -9216,6 +9327,7 @@ $('#btn-missile').addEventListener('click', () => {
   const firedBefore = !!(a && a.acted && a.acted.fired);
   const leg1 = a ? (a.movedThisTurn || 0) : 0;
   onResolveMissile();
+  if (a && !firedBefore && a.acted && a.acted.fired) revealOnAttack(a);   // a hidden shooter reveals on loosing (p.32)
   // A shot that actually resolved from the half-move pause is a split-move-fire:
   // record leg 1 so the balance is capped at ≤½ (effectiveMoveAllowance).
   if (split && !firedBefore && a.acted && a.acted.fired) { a.splitFired = true; a.splitLeg1 = leg1; }
@@ -9669,6 +9781,33 @@ renderBoard();
     const out = applySpellEffect('movingTerr', sorc, null, { regionId: 'mt' });
     console.assert(region.x === bx && /only a full Wizard/.test(out), 'movingTerr: lesser magic-users cannot move terrain');
     state.terrain = _t;
+  }
+
+  // Concealment & Detection (p.32).
+  { const _det = state.detection, _t2 = state.turn;
+    state.detection = { A: null, B: null };
+    const hidA = { id: 71, side: 'A', kind: 'individual', type: 'ELF', x: 100, y: 100, concealed: { source: 'spell', by: 9, penalty: 0 } };
+    const lf   = { id: 72, side: 'B', kind: 'mass', type: 'LF', x: 110, y: 100 };
+    const ally = { id: 73, side: 'A', kind: 'individual', type: 'HERO', x: 120, y: 100 };
+    const dragNear = { id: 74, side: 'B', kind: 'individual', type: 'DRAGON', x: 100 + inchesToPx(10), y: 100 };
+    const dragFar  = { id: 75, side: 'B', kind: 'individual', type: 'DRAGON', x: 100 + inchesToPx(40), y: 100 };
+    console.assert(isConcealed(hidA), 'conceal: flag reads concealed');
+    console.assert(!canPerceive(lf, hidA), 'conceal: a plain enemy cannot perceive the hidden');
+    console.assert(canPerceive(ally, hidA), 'conceal: a unit\'s own side always perceives it');
+    console.assert(canPerceive(dragNear, hidA) && !canPerceive(dragFar, hidA), 'conceal: a Dragon detects within 15″, not beyond');
+    state.detection = { A: null, B: { casterId: 80, penalty: 4 } };   // B has a Seer's Detection
+    console.assert(!canPerceive(lf, hidA), 'detect: a Seer\'s Detection does NOT pierce a stronger (Wizard) concealment');
+    state.detection = { A: null, B: { casterId: 80, penalty: 0 } };   // B has a Wizard's Detection
+    console.assert(canPerceive(lf, hidA), 'detect: an equal/stronger Wizard\'s Detection reveals the hidden');
+    const wiz = { id: 76, side: 'A', kind: 'individual', type: 'WIZARD', magicClass: 'wizard', x: 50, y: 50 };
+    const friend = { id: 77, side: 'A', kind: 'mass', type: 'HF', x: 60, y: 50 };
+    applySpellEffect('concealment', wiz, friend, {});
+    console.assert(friend.concealed && friend.concealed.source === 'spell', 'conceal spell: hides the friendly target');
+    state.detection = { A: null, B: null };
+    applySpellEffect('detection', wiz, null, {});
+    console.assert(state.detection.A && state.detection.A.casterId === 76, 'detect spell: arms Detection for the caster\'s side');
+    console.assert(canVanish({ type: 'WIZARD', x: 0, y: 0 }) && !canVanish({ type: 'HOBBIT', x: 0, y: 0 }) && !canVanish({ type: 'HF', x: 0, y: 0 }), 'vanish: Wizard yes, Hobbit needs cover, Heavy Foot never');
+    state.detection = _det; state.turn = _t2;
   }
 
   // Terrain (T1) — geometry + the 50% slow folded into effectiveMoveAllowance.
