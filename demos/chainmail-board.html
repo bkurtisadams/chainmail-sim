@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.120 · Wire up two more Fantasy spells (p.32). CONFUSION (Complexity 4, target enemy): cast lands in the magic phase after movement, so it sets d.confusedTurn = castTurn+1 and bites the target’s NEXT movement turn — every move it makes then comes out reversed. nudgeUnit negates the step vector up front (cost/blocking use the real reversed path); the drag handler reflects the drop about the drag’s start; isConfusedNow gates both and is true only on the one confused turn; endRound clears it once past. CONFUSED on-board badge + Selected-pane row; logs on a reversed drag. (Rotation is left un-inverted — RAW’s example is movement; easy to extend.) MOVING TERRAIN (Complexity 6, Wizard-only via magicClassOf gate): heaves the selected real region MOVING_TERRAIN_STEP_IN=6″ in the caster’s facing direction (aim by rotating the Wizard), repeatable each turn; new shiftTerrainRegion() translates rect centre or polyline points and clamps to the board. SPELLS marks both done; SPELL_DESC sharpened; SPELL_TARGET gains confusion:enemy; opts plumb movingTerr regionId. Tests: confusion timing + works guard; movingTerr Wizard-only + facing heave. node --check clean. Builds on v0.11.119. -->
+<!-- chainmail-board.html · v0.11.121 · Confusion (p.32) usability. (1) Reverse the drag LIVE: a confused unit’s desired point is reflected about the drag start before snap/clamp, so it moves opposite the cursor in real time and the cost/blocking read the real reversed path (matches the nudge, which already negates its vector); the old snap-on-commit reflection is removed (it would double-reverse) — only the log line remains. (2) Cast-turn feedback: new isConfusionPending(u) (cast but not yet the confused turn) drives a muted “CONFUSED · NEXT” badge + Selected-pane row, so the deferred effect isn’t invisible until next turn; the active turn still shows the solid CONFUSED badge/row. No rules change — still one turn, cast-after-movement delay, auto-clear. Tests: pending-vs-active window. node --check clean. Builds on v0.11.120. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.120</title>
+<title>Chainmail — Battlefield · v0.11.121</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -297,7 +297,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.120</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.121</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -687,7 +687,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.120';
+const SIM_VERSION = '0.11.121';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1627,6 +1627,9 @@ function shiftTerrainRegion(r, dx, dy) {
 // true only on that turn (set to castTurn+1, cleared in endRound once past). Movement
 // hooks invert the player's intended move while it holds.
 function isConfusedNow(u) { return !!u && !u.destroyed && u.confusedTurn != null && state.turn === u.confusedTurn; }
+// True after the cast but before the confused turn arrives (the deferred-effect window),
+// so the target shows a "next turn" marker the instant Confusion lands.
+function isConfusionPending(u) { return !!u && !u.destroyed && u.confusedTurn != null && state.turn < u.confusedTurn; }
 // Revert a polymorphed Wizard to its true form (the RAW "changes himself back", and
 // the dispel half of "or it is countered"). Restores the stored type and hp; while
 // polymorphed the piece's type is the form, so isMagicUser() is false and all its
@@ -4751,19 +4754,20 @@ function renderUnit(u) {
       })()
     : '';
 
-  const confusedBadgeStr = isConfusedNow(u)
-    ? (() => {
-        const txt = 'CONFUSED';
-        const tw = txt.length * 6.5 + 14;
+  const confusedBadgeStr = (() => {
+        const conf = isConfusedNow(u) ? { txt: 'CONFUSED', fill: '#b0792f' }
+                   : isConfusionPending(u) ? { txt: 'CONFUSED · NEXT', fill: '#9a8a6a' }
+                   : null;
+        if (!conf) return '';
+        const tw = conf.txt.length * 6.5 + 14;
         const y = badgeY0 + badgeRow * 16; badgeRow++;
         return `
           <g transform="translate(${u.x} ${y})" pointer-events="none">
-            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#b0792f" opacity="0.95"/>
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="${conf.fill}" opacity="0.95"/>
             <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
-                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.2">${txt}</text>
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.2">${conf.txt}</text>
           </g>`;
-      })()
-    : '';
+      })();
 
   return `
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
@@ -5054,7 +5058,8 @@ function updateSidebar() {
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
       (canFly(u) ? `<div class="stat"><span class="k">Altitude</span><span class="v"${u.airborne ? ' style="color:#8a6d2e"' : ''}>${u.airborne ? (u.levitated ? `LEVITATING · ${(u.altitudeIn||0)}″ up · ${Math.max(0,(u.levitateUntil||0)-state.turn)}t left` : `AIRBORNE · fly ${flySpeedOf(u)}″${maxAloftOf(u) !== Infinity ? ` · aloft ${(u.turnsAloft||0)}/${maxAloftOf(u)}` : ''}`) : 'grounded'}</span></div>` : '') +
-      (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>` : '') +
+      (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>`
+        : isConfusionPending(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#8a6d3b">moves reverse next turn</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
@@ -6161,6 +6166,10 @@ function onBoardMouseMove(evt) {
   const pt = svgPoint(evt);
   let nx = pt.x - state.dragging.grabOffsetX;
   let ny = pt.y - state.dragging.grabOffsetY;
+  if (isConfusedNow(u)) {   // Confusion (p.32): the unit moves OPPOSITE the cursor, live — reflect the desired point about the drag's start before snap/clamp so cost and blocking read the real reversed path
+    nx = 2 * state.dragging.originX - nx;
+    ny = 2 * state.dragging.originY - ny;
+  }
   // Slice 8F: snap the desired position to the grid first, so movement lands on
   // whole-inch steps. Snapping before the enforce clamp means hard-enforce still
   // wins at the cap (a snapped point past the budget gets pulled back in).
@@ -6224,13 +6233,7 @@ function onBoardMouseUp() {
         const moved = pathMoveCost(state.dragging.originX, state.dragging.originY, u.x - state.dragging.originX, u.y - state.dragging.originY, u).cost;
         u.movedThisTurn = (state.dragging.movedBefore || 0) + moved;
         u.acted.moved = true;
-        if (isConfusedNow(u)) {   // Confusion (p.32): reflect the drag about its start — the move comes out reversed
-          const ox = state.dragging.originX, oy = state.dragging.originY;
-          u.x = Math.max(20, Math.min(BOARD_W - 20, 2 * ox - u.x));
-          u.y = Math.max(20, Math.min(BOARD_H - 20, 2 * oy - u.y));
-          u.movedThisTurn = (state.dragging.movedBefore || 0) + pathMoveCost(ox, oy, u.x - ox, u.y - oy, u).cost;
-          appendTurn('Confusion', `<div class="step">${u.side} ${typeById(u.type)?.name || 'unit'} is bewildered — its move comes out reversed (p.32)</div>`);
-        }
+        if (isConfusedNow(u)) appendTurn('Confusion', `<div class="step">${u.side} ${typeById(u.type)?.name || 'unit'} is bewildered — its move came out reversed (p.32)</div>`);
         autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
         dissipateHallucinationsOn(u);   // a living thing reveals/melts any Hallucinatory Terrain it stepped into (p.32)
       } else {
@@ -9600,6 +9603,10 @@ renderBoard();
     const d = { id: 2, side: 'B', kind: 'individual', type: 'HF', x: 200, y: 100 };
     applySpellEffect('confusion', a, d, {});
     console.assert(d.confusedTurn === 6, 'confusion: cast bites the NEXT turn (castTurn+1)');
+    console.assert(isConfusionPending(d) && !isConfusedNow(d), 'confusion: pending on the cast turn, not yet active');
+    state.turn = 6;
+    console.assert(isConfusedNow(d) && !isConfusionPending(d), 'confusion: active on the confused turn, no longer pending');
+    state.turn = 5;
     const works = { id: 3, side: 'B', kind: 'works', type: 'HF', x: 200, y: 100 };
     applySpellEffect('confusion', a, works, {});
     console.assert(works.confusedTurn == null, 'confusion: siege works cannot be confused');
