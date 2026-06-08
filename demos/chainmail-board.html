@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.122 · Fix: region-targeting spells were uncastable. Hallucinatory Terrain DISGUISE mode and Moving Terrain read state.terrainSelId, but toggleTerrain() nulled that selection on leaving Terrain mode — and you must leave Terrain mode to select the Wizard and cast, so the region target was always gone (“select a real terrain region first”). Now leaving Terrain mode keeps terrainSelId (only the in-flight draw/drag/resize transients are dropped), so a region stays armed for the cast. Phantom mode was unaffected (it spawns its own region). One-line behaviour change; no engine logic touched. Builds on v0.11.121. -->
+<!-- chainmail-board.html · v0.11.123 · Hallucinatory Terrain phantom: the caster now PLACES it. Old behaviour dropped the phantom at a fixed offset beside the Wizard and failed the whole cast if a unit stood there — the player had no say in location. Now an immediate phantom cast ARMS placement (state.phantomPlace) instead of spawning: the board shows a crosshair and the Wizard’s next click (anywhere, even on a unit) drops the illusory feature centred there via placePhantomAt(); Esc cancels. The occupancy auto-fail is gone. Plumbed through interactive:true on the immediate applySpellEffect call (deferred casts stay non-interactive and fall back to dropping it beside the caster). Click intercepted at the top of onBoardMouseDown + onUnitMouseDown; .placing crosshair driven from state in renderBoard; phantomPlace cleared on undo/restore, reset, and endRound. Disguise mode unchanged. Test: interactive cast arms placement, spawns nothing yet. node --check clean. Builds on v0.11.122. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.122</title>
+<title>Chainmail — Battlefield · v0.11.123</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -140,6 +140,7 @@
     background: var(--field); border: 2px solid var(--field-edge); border-radius: 6px;
     cursor: default; user-select: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18); }
   #board.spawning { cursor: crosshair; }
+  #board.placing  { cursor: crosshair; }
   #board.panning  { cursor: grabbing; }
   aside { display: flex; flex-direction: column; gap: 12px; }
   .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 9px 12px; }
@@ -297,7 +298,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.122</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.123</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -687,7 +688,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.122';
+const SIM_VERSION = '0.11.123';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1451,7 +1452,7 @@ function castNamedSpell(spellKey) {
              : spellKey === 'halluTerr'  ? { mode: ($('#dock-hallu-mode').value || 'phantom'), terrType: ($('#dock-hallu-type').value || 'wooded'), regionId: state.terrainSelId }
              : spellKey === 'movingTerr' ? { regionId: state.terrainSelId }
              : {};
-  if (res === 'immediate') body += applySpellEffect(spellKey, a, d, opts);
+  if (res === 'immediate') body += applySpellEffect(spellKey, a, d, { ...opts, interactive: true });
   else if (res === 'deferred') {
     if (!state.pendingSpells) state.pendingSpells = [];
     state.pendingSpells.push({ casterId: a.id, spellKey, targetId: d ? d.id : null, castTurn: state.turn, opts });
@@ -1578,6 +1579,13 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
     // is that the foe can't tell it's false until a living thing strides through.
     if (apparent === 'open' || !HALLU_PHANTOM_TYPES.includes(apparent)) return `<div class="verdict v-noeffect">choose a feature for the phantom — woods, rough, marsh, a hill, a pond, a ditch, or a gulley</div>`;
     const t = TERRAIN_TYPES[apparent];
+    // Interactive cast: arm placement so the Wizard sets WHERE it appears (the next
+    // board click drops it). Deferred casts (resolved next turn, no click) fall back
+    // to dropping it beside the caster.
+    if (opts.interactive) {
+      state.phantomPlace = { terrType: apparent, casterId: a.id, side: a.side };
+      return `<div class="verdict v-rout">choose where the phantom ${t.label} appears — click the board (Esc to cancel)</div>`;
+    }
     const wPx = inchesToPx(t.wIn || 8), hPx = inchesToPx(t.hIn || 6);
     const off = (wPx / 2 + inchesToPx(2)) * (a.side === 'A' ? 1 : -1);
     const region = {
@@ -1585,10 +1593,9 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
       x: a.x + off, y: a.y, w: wPx, h: hPx, rot: 0,
       illusory: true, illusoryCasterId: a.id, illusorySide: a.side,
     };
-    if (state.units.some(u => isLivingThing(u) && inTerrainRect(u.x, u.y, region))) return `<div class="verdict v-noeffect">a living thing already stands on that ground — the apparition cannot take hold</div>`;
     state.terrain.push(region);
-    state.terrainSelId = region.id;   // select it so the caster can reposition/resize with the terrain tools
-    return `<div class="verdict v-rout">a phantom ${t.label} shimmers over open ground beside the caster — it has no real effect, but the foe can't tell until a living thing strides in (drag/resize it like any region)</div>`;
+    state.terrainSelId = region.id;
+    return `<div class="verdict v-rout">a phantom ${t.label} shimmers into being beside the caster — no real effect, revealed when a living thing strides in</div>`;
   }
   if (spellKey === 'confusion') {
     // p.32: "up to 20 of the enemy ... react in absolutely the opposite manner ...
@@ -1630,6 +1637,26 @@ function isConfusedNow(u) { return !!u && !u.destroyed && u.confusedTurn != null
 // True after the cast but before the confused turn arrives (the deferred-effect window),
 // so the target shows a "next turn" marker the instant Confusion lands.
 function isConfusionPending(u) { return !!u && !u.destroyed && u.confusedTurn != null && state.turn < u.confusedTurn; }
+// Hallucinatory Terrain phantom placement (p.32): once a phantom cast is armed
+// (state.phantomPlace), the Wizard's next board click drops the illusory feature
+// centred there — so the caster chooses exactly where it appears.
+function placePhantomAt(pt) {
+  const pp = state.phantomPlace; if (!pp) return;
+  const t = TERRAIN_TYPES[pp.terrType];
+  state.phantomPlace = null;
+  if (!t) { renderBoard(); return; }
+  const wPx = inchesToPx(t.wIn || 8), hPx = inchesToPx(t.hIn || 6);
+  const region = {
+    id: 'tr' + (state.nextId++), type: 'open', apparentType: pp.terrType,   // type 'open' ⇒ inert (not in TERRAIN_TYPES)
+    x: Math.max(0, Math.min(BOARD_W, pt.x)), y: Math.max(0, Math.min(BOARD_H, pt.y)),
+    w: wPx, h: hPx, rot: 0, illusory: true, illusoryCasterId: pp.casterId, illusorySide: pp.side,
+  };
+  state.terrain.push(region);
+  state.terrainSelId = region.id;   // armed for repositioning via the terrain tool
+  appendTurn('Hallucinatory Terrain', `<div class="step">a phantom ${t.label} shimmers into being where the Wizard willed it — no real effect, revealed when a living thing strides in (p.32)</div>`);
+  renderBoard();
+  renderTurnUI();
+}
 // Revert a polymorphed Wizard to its true form (the RAW "changes himself back", and
 // the dispel half of "or it is countered"). Restores the stored type and hp; while
 // polymorphed the piece's type is the form, so isMagicUser() is false and all its
@@ -2891,6 +2918,7 @@ const state = {
   terrain: [],            // T1: placed terrain regions { id, type, x, y, w, h } (centre + size, px)
   hazards: [],            // persistent board area-effects (boiling oil p.23): { id, kind, side, sourceId, poly:[{x,y}], turnsLeft }
   terrainMode: false,     // T1: terrain placement mode (parity with the measure tool)
+  phantomPlace: null,     // Hallucinatory Terrain (p.32): armed phantom { terrType, casterId, side } awaiting a placement click
   terrainType: 'hill',    // T1: type dropped on a board click while in terrain mode
   terrainSelId: null,     // T4-edit: id of the selected placed region (move/rotate/delete target)
   terrainDrag: null,      // T4-edit: in-flight terrain reposition drag
@@ -4134,6 +4162,7 @@ syncPikeRow();
 
 function renderBoard() {
   const board = $('#board');
+  board.classList.toggle('placing', !!state.phantomPlace);   // crosshair while a phantom awaits placement (p.32)
   applyViewBox();
   board.innerHTML =
     renderBg() +
@@ -6061,6 +6090,7 @@ function toggleArcForAll() {
 }
 
 function onBoardMouseDown(evt) {
+  if (state.phantomPlace && evt.button === 0) { placePhantomAt(svgPoint(evt)); return; }   // drop the armed phantom where clicked (p.32)
   if (state.terrainMode && evt.button === 0) { onTerrainMouseDown(svgPoint(evt)); return; }
   if (state.measure.active && evt.button === 0) { measureClick(svgPoint(evt), null); return; }
   // Middle-click → pan; ignore on units (their handlers stopPropagation)
@@ -6073,6 +6103,7 @@ function onBoardMouseDown(evt) {
 
 function onUnitMouseDown(evt, unitId) {
   evt.stopPropagation();
+  if (state.phantomPlace) { placePhantomAt(svgPoint(evt)); return; }   // place even when the click lands on a unit (p.32)
   if (state.terrainMode) { onTerrainMouseDown(svgPoint(evt)); return; }
   const u = state.units.find(u => u.id === unitId);
   if (!u || u.destroyed) return;
@@ -6475,6 +6506,7 @@ function applySnapshot(s) {
   state.rngSeed = s.rngSeed;
   $('#log').innerHTML = s.logHtml;
   state.dragging = null; state.panning = null; state.terrainDrag = null; state.terrainResize = null;   // drop any in-flight interaction
+  state.phantomPlace = null;   // an armed phantom placement doesn't survive an undo/restore
 }
 
 // --- Save / Load board to JSON ------------------------------------------
@@ -6867,6 +6899,7 @@ function onKeyDown(evt) {
     }
   }
   if (evt.key === '?') { openHelp(); evt.preventDefault(); return; }
+  if (evt.key === 'Escape' && state.phantomPlace) { state.phantomPlace = null; appendTurn('Hallucinatory Terrain', `<div class="step" style="color:var(--ink-soft)">placement cancelled — the phantom never forms</div>`); renderBoard(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#help-modal').hidden) { closeHelp(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#settings-modal').hidden) { closeSettings(); evt.preventDefault(); return; }
   if (evt.key === 'Escape' && !$('#ctx-menu').hidden) { closeContextMenu(); evt.preventDefault(); return; }
@@ -8763,6 +8796,7 @@ function resetBoard() {
   state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;
   state.terrainDraw = null; state.terrainVertex = null;
   state.terrainMode = false; syncTerrainButton();
+  state.phantomPlace = null;
   state.selectedId = null;
   state.targetId = null;
   state.dragging = null;
@@ -9100,6 +9134,7 @@ function toggleInitiativeOrder() {
 
 function endRound() {
   pushUndo('endRound');
+  state.phantomPlace = null;   // an unplaced phantom doesn't carry into the next turn
   resolveMissilePhase();   // safety net: never carry held missile hits across the turn boundary
   state.turn += 1;
   state.lastCatapultHit = null;
@@ -9595,6 +9630,12 @@ renderBoard();
     state.terrain = [{ id:'tv', type:'hill', apparentType:'open', illusory:true, x:100, y:100, w:240, h:192 }];
     console.assert(terrainMoveMultAt(100, 100) === 0.5 && !!terrainNoChargeAt(100, 100), 'hallu: a veiled hill keeps its real slow + no-charge effect');
     console.assert(illusionTag(state.terrain[0]) === 'REAL: HILL', 'hallu: a disguised real region reveals its true type in the tag');
+    // Phantom placement (p.32): an interactive cast arms placement and spawns nothing yet.
+    const _pp = state.phantomPlace;
+    state.terrain = [];
+    applySpellEffect('halluTerr', { id: 9, side: 'A', kind: 'individual', type: 'WIZARD', magicClass: 'wizard', x: 100, y: 100, facing: 90 }, null, { mode: 'phantom', terrType: 'wooded', interactive: true });
+    console.assert(state.phantomPlace && state.phantomPlace.terrType === 'wooded' && state.terrain.length === 0, 'hallu phantom: interactive cast arms placement (no region until the placement click)');
+    state.phantomPlace = _pp;
     state.terrain = _t;
   }
 
