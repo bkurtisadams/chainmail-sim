@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.118 · Hallucinatory Terrain (Fantasy spell, Complexity 4, p.32) on a reality-governs / disguise model (per the AD&D PHB elaboration): the spell changes only how ground LOOKS, never the real terrain or its effects. A region’s mechanical type stays r.type; r.apparentType is what’s drawn. Two casts — PHANTOM conjures a feature (woods/rough/marsh/hill/pond/ditch/gulley) over open ground as a new region with real type “open” (inert, not in TERRAIN_TYPES) so it exerts NO effect, its worth being that the foe can’t tell it’s false; DISGUISE re-skins the selected real region as any feature, or as “open” to veil it (the Chainmail appear/not-exist endpoints). The illusion holds until a LIVING thing strides in: dissipateHallucinationsOn (fired from the same three move-commit hooks as autoMoveTouch) removes a pure phantom and reveals a disguised real region. Living = any corporeal mover; NON_LIVING_TYPES (undead Wight/Wraith + Elementals, plus phantasms/works) don’t trigger — Balrog/Dragon/Ent etc. count as living (Kurt’s ruling); side-agnostic. Render draws the apparent type with a violet dashed outline + truth-tag (ILLUSION / REAL: <type>); no effect-gating. Dock gains #dock-hallu-mode + #dock-hallu-type. Builds on v0.11.117. -->
+<!-- chainmail-board.html · v0.11.120 · Wire up two more Fantasy spells (p.32). CONFUSION (Complexity 4, target enemy): cast lands in the magic phase after movement, so it sets d.confusedTurn = castTurn+1 and bites the target’s NEXT movement turn — every move it makes then comes out reversed. nudgeUnit negates the step vector up front (cost/blocking use the real reversed path); the drag handler reflects the drop about the drag’s start; isConfusedNow gates both and is true only on the one confused turn; endRound clears it once past. CONFUSED on-board badge + Selected-pane row; logs on a reversed drag. (Rotation is left un-inverted — RAW’s example is movement; easy to extend.) MOVING TERRAIN (Complexity 6, Wizard-only via magicClassOf gate): heaves the selected real region MOVING_TERRAIN_STEP_IN=6″ in the caster’s facing direction (aim by rotating the Wizard), repeatable each turn; new shiftTerrainRegion() translates rect centre or polyline points and clamps to the board. SPELLS marks both done; SPELL_DESC sharpened; SPELL_TARGET gains confusion:enemy; opts plumb movingTerr regionId. Tests: confusion timing + works guard; movingTerr Wizard-only + facing heave. node --check clean. Builds on v0.11.119. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.118</title>
+<title>Chainmail — Battlefield · v0.11.120</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -157,8 +157,8 @@
   input.wheel-num { -moz-appearance: textfield; appearance: textfield; }
   input.wheel-num::-webkit-inner-spin-button,
   input.wheel-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0;
-    border-bottom: 1px dashed var(--rule); }
+  .stat { display: flex; align-items: center; justify-content: space-between; font-size: 13px;
+    line-height: 1.15; padding: 2px 0; border-bottom: 1px dashed var(--rule); }
   .stat:last-child { border-bottom: 0; }
   .stat .k { font-family: var(--sans); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase;
     color: var(--ink-soft); }
@@ -166,8 +166,9 @@
   .empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; }
   /* Compact new-unit form: single column, dense label-left rows in the Selected-panel rhythm */
   #new-unit-panel > h2 { margin-bottom: 4px; }
-  #new-unit-panel .field { margin-bottom: 3px; }
+  #new-unit-panel .field { margin-bottom: 2px; }
   #new-unit-panel .field > label { width: 84px; }
+  #new-unit-panel .field select, #new-unit-panel .field input { padding: 2px 6px; }
 
   #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
@@ -296,7 +297,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.118</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.120</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -686,7 +687,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.118';
+const SIM_VERSION = '0.11.120';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1059,6 +1060,7 @@ function counterMagicTarget(casterPenalty, oppPenalty) {
 function magicSuppressedThisTurn(u) { return !!u && u.magicSuppressedTurn === state.turn; }
 // --- Spells (p.31-32) ----------------------------------------------------
 const WIZARD_LIGHT_RANGE_IN = 24;
+const MOVING_TERRAIN_STEP_IN = 6;   // inches a terrain feature is heaved per cast (p.32)
 // The 16 listed spells with casting Complexity. Effects land one at a time; `done`
 // marks those modeled so far (the rest are listed for the picker and as a roadmap).
 const SPELLS = Object.freeze([
@@ -1068,13 +1070,13 @@ const SPELLS = Object.freeze([
   { key: 'detection',   name: 'Detection',             complexity: 2, done: false },
   { key: 'concealment', name: 'Concealment',           complexity: 3, done: false },
   { key: 'conjureElem', name: 'Conjure Elemental',     complexity: 5, done: true  },
-  { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: false },
+  { key: 'movingTerr',  name: 'Moving Terrain',        complexity: 6, done: true  },
   { key: 'protEvil',    name: 'Protection from Evil',  complexity: 3, done: true  },
   { key: 'levitate',    name: 'Levitate',              complexity: 2, done: true  },
   { key: 'slowness',    name: 'Slowness',              complexity: 3, done: true  },
   { key: 'haste',       name: 'Haste',                 complexity: 3, done: true  },
   { key: 'polymorph',   name: 'Polymorph',             complexity: 4, done: true  },
-  { key: 'confusion',   name: 'Confusion',             complexity: 4, done: false },
+  { key: 'confusion',   name: 'Confusion',             complexity: 4, done: true  },
   { key: 'halluTerr',   name: 'Hallucinatory Terrain', complexity: 4, done: true  },
   { key: 'cloudkill',   name: 'Cloudkill',             complexity: 5, done: true  },
   { key: 'antiMagic',   name: 'Anti-Magic Shell',      complexity: 6, done: true  },
@@ -1090,13 +1092,13 @@ const SPELL_DESC = Object.freeze({
   detection:   'Reveals hidden enemies or enemy magic (but not against a stronger Wizard).',
   concealment: 'Hides one unit or creature from all but those able to detect the hidden.',
   conjureElem: 'Summons one elemental of a kind; if the caster is disturbed it turns on him.',
-  movingTerr:  'Shifts vegetation, hills, and the like across the battlefield.',
+  movingTerr:  'Wizard-only — heaves a terrain feature (woods, a hill, and the like) several inches across the field in the direction the caster faces.',
   protEvil:    'A 12″ circle that keeps evil creatures out.',
   levitate:    'The target rises 6″ per turn for up to 6 turns; no lateral movement.',
   slowness:    'Up to 20 figures move at half speed for 2 turns.',
   haste:       'Up to 20 figures gain +50% movement for 3 turns.',
   polymorph:   'The caster takes the form of anything up to giant size.',
-  confusion:   'Up to 20 enemy figures act in the opposite manner for one turn.',
+  confusion:   'A target enemy unit reacts in the opposite manner next turn — its every move comes out reversed. Lasts one turn.',
   halluTerr:   'Disguises terrain — conjures a phantom feature over open ground, or makes a real region look like something else (or like nothing). Only the look changes; the real ground keeps its effects, and the illusion lasts until a living thing strides in.',
   cloudkill:   'A 3×6×3″ poison cloud drifts from the caster, killing men, orcs, dwarves and the like.',
   antiMagic:   'A 5″ shell that blocks all magic in or out, for up to 6 turns.',
@@ -1198,7 +1200,7 @@ function moveSpellFactor(u) {
   return ms.kind === 'haste' ? 1.5 : ms.kind === 'slow' ? 0.5 : 1;
 }
 // Side a spell's target must be on (absent = no target needed).
-const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend', phantasmal: 'any' });
+const SPELL_TARGET = Object.freeze({ haste: 'friend', slowness: 'enemy', cloudkill: 'any', levitate: 'friend', phantasmal: 'any', confusion: 'enemy' });
 function spellTargetOk(spell, a, d) {
   const need = SPELL_TARGET[spell.key]; if (!need) return true;
   if (!a || !d || d.destroyed || d.kind === 'works' || d.id === a.id) return false;
@@ -1447,6 +1449,7 @@ function castNamedSpell(spellKey) {
   const opts = spellKey === 'conjureElem' ? { element: ($('#dock-element').value || 'air') }
              : spellKey === 'polymorph'  ? { form: ($('#dock-poly').value || 'GIANT') }
              : spellKey === 'halluTerr'  ? { mode: ($('#dock-hallu-mode').value || 'phantom'), terrType: ($('#dock-hallu-type').value || 'wooded'), regionId: state.terrainSelId }
+             : spellKey === 'movingTerr' ? { regionId: state.terrainSelId }
              : {};
   if (res === 'immediate') body += applySpellEffect(spellKey, a, d, opts);
   else if (res === 'deferred') {
@@ -1587,8 +1590,43 @@ function applySpellEffect(spellKey, a, d, opts = {}) {
     state.terrainSelId = region.id;   // select it so the caster can reposition/resize with the terrain tools
     return `<div class="verdict v-rout">a phantom ${t.label} shimmers over open ground beside the caster — it has no real effect, but the foe can't tell until a living thing strides in (drag/resize it like any region)</div>`;
   }
+  if (spellKey === 'confusion') {
+    // p.32: "up to 20 of the enemy ... react in absolutely the opposite manner ...
+    // if they advanced, they will be retreated instead. Duration is but one turn."
+    // Cast lands in the magic phase, after movement, so it bites the target's NEXT
+    // movement turn: every move it makes then comes out reversed (see nudgeUnit and
+    // the drag-commit handler). One unit = the "up to 20 figures" stack.
+    if (!d || d.destroyed) return `<div class="verdict v-noeffect">the target is gone — the spell lapses</div>`;
+    if (d.kind === 'works') return `<div class="verdict v-noeffect">only troops can be confused, not siege works</div>`;
+    if (magicBlockedBetween(a.x, a.y, d.x, d.y)) return `<div class="verdict v-noeffect">an anti-magic shell blocks the spell</div>`;
+    d.confusedTurn = state.turn + 1;
+    return `<div class="verdict v-rout">${d.side} ${typeById(d.type)?.name || 'unit'} is bewildered — next turn its every move comes out reversed (p.32)</div>`;
+  }
+  if (spellKey === 'movingTerr') {
+    // p.32: "Causing the shifting of vegetation hills, etc. A spell possible only to
+    // a Wizard." Heaves the selected real region MOVING_TERRAIN_STEP_IN inches in the
+    // caster's facing direction (aim by rotating the Wizard). Repeatable each turn.
+    if (magicClassOf(a) !== 'wizard') return `<div class="verdict v-noeffect">only a full Wizard can move terrain — lesser magic-users cannot (p.32)</div>`;
+    const r = state.terrain.find(t => t.id === opts.regionId);
+    if (!r) return `<div class="verdict v-noeffect">select a terrain region first (terrain tool), then cast to heave it</div>`;
+    const step = inchesToPx(MOVING_TERRAIN_STEP_IN), f = (a.facing || 0) * Math.PI / 180;
+    shiftTerrainRegion(r, Math.sin(f) * step, -Math.cos(f) * step);   // facing vector (sinφ, −cosφ)
+    const lbl = (TERRAIN_TYPES[r.illusory ? (r.apparentType || 'open') : r.type] && TERRAIN_TYPES[r.illusory ? (r.apparentType || 'open') : r.type].label) || r.type;
+    return `<div class="verdict v-rout">the Wizard heaves the ${lbl} ${MOVING_TERRAIN_STEP_IN}″ across the field</div>`;
+  }
   return '';
 }
+// Translate a terrain region (rect centre or every polyline point) by (dx,dy),
+// keeping it on the board. Used by Moving Terrain (p.32).
+function shiftTerrainRegion(r, dx, dy) {
+  const cx = (x) => Math.max(0, Math.min(BOARD_W, x)), cy = (y) => Math.max(0, Math.min(BOARD_H, y));
+  if (r.pts) r.pts = r.pts.map(p => ({ x: cx(p.x + dx), y: cy(p.y + dy) }));
+  else { r.x = cx(r.x + dx); r.y = cy(r.y + dy); }
+}
+// Confusion (p.32): a unit is bewildered on its one confused turn — isConfusedNow is
+// true only on that turn (set to castTurn+1, cleared in endRound once past). Movement
+// hooks invert the player's intended move while it holds.
+function isConfusedNow(u) { return !!u && !u.destroyed && u.confusedTurn != null && state.turn === u.confusedTurn; }
 // Revert a polymorphed Wizard to its true form (the RAW "changes himself back", and
 // the dispel half of "or it is countered"). Restores the stored type and hp; while
 // polymorphed the piece's type is the form, so isMagicUser() is false and all its
@@ -4713,8 +4751,21 @@ function renderUnit(u) {
       })()
     : '';
 
+  const confusedBadgeStr = isConfusedNow(u)
+    ? (() => {
+        const txt = 'CONFUSED';
+        const tw = txt.length * 6.5 + 14;
+        const y = badgeY0 + badgeRow * 16; badgeRow++;
+        return `
+          <g transform="translate(${u.x} ${y})" pointer-events="none">
+            <rect x="${-tw/2}" y="-8" width="${tw}" height="14" rx="2" fill="#b0792f" opacity="0.95"/>
+            <text x="0" y="2.5" font-family="sans-serif" font-size="9.5" font-weight="700"
+                  fill="#f3ead4" text-anchor="middle" letter-spacing="1.2">${txt}</text>
+          </g>`;
+      })()
+    : '';
+
   return `
-      ${arc ? `<g transform="translate(${u.x} ${u.y}) rotate(${u.facing})" pointer-events="none">${arc}</g>` : ''}
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
         ${pips}
@@ -4736,6 +4787,7 @@ function renderUnit(u) {
       ${reformBadgeStr}
       ${phantasmBadgeStr}
       ${polyBadgeStr}
+      ${confusedBadgeStr}
     </g>
   `;
 }
@@ -5002,6 +5054,7 @@ function updateSidebar() {
         ? `<div class="stat"><span class="k">Move streak</span><span class="v">${u.moveStreak} / ${MOVE_FATIGUE_THRESHOLD(u.type)}</span></div>`
         : '') +
       (canFly(u) ? `<div class="stat"><span class="k">Altitude</span><span class="v"${u.airborne ? ' style="color:#8a6d2e"' : ''}>${u.airborne ? (u.levitated ? `LEVITATING · ${(u.altitudeIn||0)}″ up · ${Math.max(0,(u.levitateUntil||0)-state.turn)}t left` : `AIRBORNE · fly ${flySpeedOf(u)}″${maxAloftOf(u) !== Infinity ? ` · aloft ${(u.turnsAloft||0)}/${maxAloftOf(u)}` : ''}`) : 'grounded'}</span></div>` : '') +
+      (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
@@ -6171,6 +6224,13 @@ function onBoardMouseUp() {
         const moved = pathMoveCost(state.dragging.originX, state.dragging.originY, u.x - state.dragging.originX, u.y - state.dragging.originY, u).cost;
         u.movedThisTurn = (state.dragging.movedBefore || 0) + moved;
         u.acted.moved = true;
+        if (isConfusedNow(u)) {   // Confusion (p.32): reflect the drag about its start — the move comes out reversed
+          const ox = state.dragging.originX, oy = state.dragging.originY;
+          u.x = Math.max(20, Math.min(BOARD_W - 20, 2 * ox - u.x));
+          u.y = Math.max(20, Math.min(BOARD_H - 20, 2 * oy - u.y));
+          u.movedThisTurn = (state.dragging.movedBefore || 0) + pathMoveCost(ox, oy, u.x - ox, u.y - oy, u).cost;
+          appendTurn('Confusion', `<div class="step">${u.side} ${typeById(u.type)?.name || 'unit'} is bewildered — its move comes out reversed (p.32)</div>`);
+        }
         autoMoveTouch(u);   // Wraith/Balrog touch the normal foes they moved into (p.33/p.34)
         dissipateHallucinationsOn(u);   // a living thing reveals/melts any Hallucinatory Terrain it stepped into (p.32)
       } else {
@@ -6691,6 +6751,7 @@ function nudgeUnit(u, dxPx, dyPx) {
   if (!unitMayMoveNow(u)) return false;        // phase gate (free in setup / for fresh reinforcements)
   if (u.halfMovePaused) return false;          // held at the half-move checkpoint; resume first
   const freeMove = state.setup || u.spawnTurn === state.turn;
+  if (isConfusedNow(u)) { dxPx = -dxPx; dyPx = -dyPx; }   // Confusion (p.32): the move comes out reversed
   const stepCost = pathMoveCost(u.x, u.y, dxPx, dyPx, u).cost;   // T2b: path-aware (slow terrain + crossings)
   if (!freeMove && state.settings.enforceMovement && remainingMoveIn(u) < stepCost - 1e-9) return false;
   if (!freeMove && state.settings.enforceMovement && moveBlockScale(u.x, u.y, dxPx, dyPx, u) < 1 - 1e-9) return false;   // T2a: blocked by woods (p.9)
@@ -9045,6 +9106,7 @@ function endRound() {
   for (const u of state.units) {
     if (u.kind === 'works') { if (u.burning) advanceBurn(u); u.movedThisTurn = 0; u.turnStartFacing = u.facing; clearActed(u); continue; }
     releaseExpiredParalysis(u, state.turn);
+    if (u.confusedTurn != null && state.turn > u.confusedTurn) u.confusedTurn = null;   // Confusion lasts one turn (p.32)
     if (u.levitated) { if (state.turn >= u.levitateUntil) { u.levitated = false; u.airborne = false; u.altitudeIn = 0; } else { u.altitudeIn = Math.min(LEVITATE_MAX_IN, (u.altitudeIn || 0) + LEVITATE_RISE_IN); } }
     if (u.airborne) { u.turnsAloft = (u.turnsAloft || 0) + 1; if (maxAloftOf(u) !== Infinity && u.turnsAloft > maxAloftOf(u) && state.settings.enforceMovement) { u.airborne = false; u.altitudeIn = 0; u.turnsAloft = 0; } }
     if (u.reform) u.acted.moved = true;   // a reforming turn is active (counts toward fatigue/streak)
@@ -9527,6 +9589,34 @@ renderBoard();
     state.terrain = [{ id:'tv', type:'hill', apparentType:'open', illusory:true, x:100, y:100, w:240, h:192 }];
     console.assert(terrainMoveMultAt(100, 100) === 0.5 && !!terrainNoChargeAt(100, 100), 'hallu: a veiled hill keeps its real slow + no-charge effect');
     console.assert(illusionTag(state.terrain[0]) === 'REAL: HILL', 'hallu: a disguised real region reveals its true type in the tag');
+    state.terrain = _t;
+  }
+
+  // Confusion (p.32) — one-turn move reversal.
+  { const _turn = state.turn; state.turn = 5;
+    console.assert(isConfusedNow({ confusedTurn: 5 }) && !isConfusedNow({ confusedTurn: 6 }) && !isConfusedNow({ confusedTurn: 4 }), 'confusion: active only on its confused turn');
+    console.assert(!isConfusedNow({ confusedTurn: 5, destroyed: true }) && !isConfusedNow({}), 'confusion: dead/untouched units are not confused');
+    const a = { id: 1, side: 'A', kind: 'individual', type: 'WIZARD', x: 100, y: 100 };
+    const d = { id: 2, side: 'B', kind: 'individual', type: 'HF', x: 200, y: 100 };
+    applySpellEffect('confusion', a, d, {});
+    console.assert(d.confusedTurn === 6, 'confusion: cast bites the NEXT turn (castTurn+1)');
+    const works = { id: 3, side: 'B', kind: 'works', type: 'HF', x: 200, y: 100 };
+    applySpellEffect('confusion', a, works, {});
+    console.assert(works.confusedTurn == null, 'confusion: siege works cannot be confused');
+    state.turn = _turn;
+  }
+
+  // Moving Terrain (p.32) — Wizard-only terrain heave.
+  { const _t = state.terrain;
+    const region = { id: 'mt', type: 'wooded', x: 300, y: 300, w: 240, h: 192 };
+    state.terrain = [region];
+    const wiz = { kind: 'individual', type: 'WIZARD', magicClass: 'wizard', facing: 90, x: 100, y: 300 };   // faces +x (right)
+    applySpellEffect('movingTerr', wiz, null, { regionId: 'mt' });
+    console.assert(Math.abs(region.x - (300 + inchesToPx(MOVING_TERRAIN_STEP_IN))) < 0.01 && Math.abs(region.y - 300) < 0.01, 'movingTerr: a Wizard heaves the region in its facing direction');
+    const sorc = { kind: 'individual', type: 'WIZARD', magicClass: 'sorcerer', facing: 90, x: 100, y: 300 };
+    const bx = region.x;
+    const out = applySpellEffect('movingTerr', sorc, null, { regionId: 'mt' });
+    console.assert(region.x === bx && /only a full Wizard/.test(out), 'movingTerr: lesser magic-users cannot move terrain');
     state.terrain = _t;
   }
 
