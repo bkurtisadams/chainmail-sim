@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.121 · Confusion (p.32) usability. (1) Reverse the drag LIVE: a confused unit’s desired point is reflected about the drag start before snap/clamp, so it moves opposite the cursor in real time and the cost/blocking read the real reversed path (matches the nudge, which already negates its vector); the old snap-on-commit reflection is removed (it would double-reverse) — only the log line remains. (2) Cast-turn feedback: new isConfusionPending(u) (cast but not yet the confused turn) drives a muted “CONFUSED · NEXT” badge + Selected-pane row, so the deferred effect isn’t invisible until next turn; the active turn still shows the solid CONFUSED badge/row. No rules change — still one turn, cast-after-movement delay, auto-clear. Tests: pending-vs-active window. node --check clean. Builds on v0.11.120. -->
+<!-- chainmail-board.html · v0.11.122 · Fix: region-targeting spells were uncastable. Hallucinatory Terrain DISGUISE mode and Moving Terrain read state.terrainSelId, but toggleTerrain() nulled that selection on leaving Terrain mode — and you must leave Terrain mode to select the Wizard and cast, so the region target was always gone (“select a real terrain region first”). Now leaving Terrain mode keeps terrainSelId (only the in-flight draw/drag/resize transients are dropped), so a region stays armed for the cast. Phantom mode was unaffected (it spawns its own region). One-line behaviour change; no engine logic touched. Builds on v0.11.121. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.121</title>
+<title>Chainmail — Battlefield · v0.11.122</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -297,7 +297,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.121</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.122</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -687,7 +687,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.121';
+const SIM_VERSION = '0.11.122';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6282,7 +6282,10 @@ function toggleTerrain() {
     state.dragging = null;
     if (state.measure.active) { state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton(); }
   } else {
-    state.terrainSelId = null; state.terrainDrag = null; state.terrainResize = null;   // leaving the mode drops the editing selection
+    // Keep terrainSelId on exit so a region stays "armed" for region-targeting
+    // spells (Hallucinatory Terrain disguise, Moving Terrain) cast after leaving
+    // the editing mode; only the in-flight edit transients are dropped.
+    state.terrainDrag = null; state.terrainResize = null;
     state.terrainDraw = null; state.terrainVertex = null;   // …and any in-progress draw/vertex edit
   }
   syncTerrainButton();
