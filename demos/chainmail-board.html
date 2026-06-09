@@ -35,7 +35,26 @@
   .toolbar .tb-setup { padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
   .toolbar .tb-now { background: rgba(216,178,90,0.07); border-radius: 5px; padding: 4px 5px; margin: -2px -3px; }
   .toolbar .tb-pin-right { margin-left: auto; }
-  .tb-setup .brand { font-family: var(--serif); font-size: 20px; font-weight: 700; margin: 0 6px 0 0; line-height: 1; }
+  .tb-setup .brand {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 6px 0 0;
+  line-height: 1;
+}
+
+.tb-setup .brand .version-tag {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.72;
+  position: static;
+}
   .toolbar .phase-tag { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--ink-soft); padding: 4px 10px; background: rgba(216,178,90,0.18); border-radius: 3px;
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
@@ -317,7 +336,7 @@
       <button id="btn-help" class="secondary" title="Hotkey reference (?)">?</button>
       <button id="btn-back-setup" class="secondary" hidden>↩ Setup</button>
       <button id="btn-reset" class="danger">Reset board</button>
-      <button id="btn-joust" class="gold tb-pin-right">⚔ Joust / Tournament</button>
+      <button id="btn-joust" class="gold tb-pin-right">⚔ Joust</button>
     </div>
     <div class="tb-row tb-now">
       <div class="tn-track">
