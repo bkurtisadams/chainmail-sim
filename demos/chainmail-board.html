@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.130 · Add battlefield day/dim/night light state so fantasy light penalties and darkness-capable creatures apply beyond spell effects. Built on v0.11.129. -->
+<!-- chainmail-board.html · v0.11.131 · Split the merged Troll / Ogre fantastic type into separate Ogre and True Troll units with distinct RAW combat, morale, point value, and immunity handling. Built on v0.11.130. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.130</title>
+<title>Chainmail — Battlefield · v0.11.131</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.130</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.131</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -716,7 +716,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.130';
+const SIM_VERSION = '0.11.131';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -905,7 +905,7 @@ const MOVE_ALLOWANCE = {
   // Fantasy types (Appendix D — ground move only this slice; fly moves come
   // with the fantasy resolver slice)
   HERO:12, SUPER_HERO:12, WIZARD:12, BALROG:6, DRAGON:9, ELEMENTAL:12,
-  ENT:6, GIANT:12, LYCAN:9, ROC:24, TROLL:9, WIGHT:9, WRAITH:18,
+  ENT:6, GIANT:12, LYCAN:9, ROC:24, OGRE:9, TROLL:9, WIGHT:9, WRAITH:18,
   // Fantasy races (Appendix D)
   ORC:9, GIANT_ORC:9, GOBLIN:6, KOBOLD:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
 };
@@ -920,7 +920,7 @@ const CHARGE_ALLOWANCE = {
   PE:12, LV:12, LF:12, HF:12, EHF:12, SP:15, AF:9,
   LH:30, MH:24, HH:18, MK:18,
   HERO:15, SUPER_HERO:15, WIZARD:12, BALROG:9, DRAGON:15, ELEMENTAL:12,
-  ENT:6, GIANT:18, LYCAN:12, ROC:24, TROLL:12, WIGHT:9, WRAITH:24,
+  ENT:6, GIANT:18, LYCAN:12, ROC:24, OGRE:12, TROLL:12, WIGHT:9, WRAITH:24,
   ORC:12, GIANT_ORC:12, GOBLIN:9, KOBOLD:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
 };
 
@@ -983,7 +983,8 @@ const FANTASTIC_TYPES = Object.freeze([
   { id:'GIANT',      name:'Giant',         morale:'—',  point:50  },
   { id:'LYCAN',      name:'Lycanthrope',   morale:20,   point:20  },
   { id:'ROC',        name:'Roc',           morale:'—',  point:20  },
-  { id:'TROLL',      name:'Troll / Ogre',  morale:8,    point:15  },
+  { id:'OGRE',       name:'Ogre',          morale:8,    point:15  },
+  { id:'TROLL',      name:'True Troll',    morale:'—',  point:75  },
   { id:'WIGHT',      name:'Wight / Ghoul', morale:10,   point:10  },
   { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
 ]);
@@ -1078,6 +1079,7 @@ function resolveMissileHit(targetType, missileKind, roll, casterPenalty, element
     case 'GIANT':      return adj < 5 ? 'routed' : adj < 9 ? 'driven_back' : 'no_effect';
     case 'DRAGON':     return 'driven_back';
     case 'ELEMENTAL':  return ELEMENTAL_DRIVEBACK[element] === missileKind ? 'driven_back' : 'no_effect';
+    case 'TROLL':      return 'no_effect';
     default:           return 'destroyed';
   }
 }
@@ -1141,12 +1143,12 @@ const SPELL_DESC = Object.freeze({
 });
 // Polymorph (p.32) target forms. Per ruling the spell is mainly a disguise / spying /
 // roleplaying tool, so the Wizard may take the semblance of any non-magical creature
-// from man-size up to a Giant: the demi-human races, ordinary men-at-arms, ogres
-// (TROLL) and giants. Excluded: magical creatures (Balrog, Dragon, Elemental, Wraith,
-// Wight, Ent, Roc, Lycanthrope). The dock picker is built from this list — edit to recut.
+// from man-size up to a Giant: the demi-human races, ordinary men-at-arms, Ogres
+// and Giants. Excluded: magical creatures (Balrog, Dragon, Elemental, Wraith,
+// Wight, True Troll, Ent, Roc, Lycanthrope). The dock picker is built from this list — edit to recut.
 const POLYMORPH_FORMS = Object.freeze([
   'MAN', 'HOBBIT', 'SPRITE', 'GNOME', 'DWARF', 'KOBOLD', 'GOBLIN', 'ORC', 'GIANT_ORC', 'ELF',
-  'HERO', 'SUPER_HERO', 'TROLL', 'GIANT',
+  'HERO', 'SUPER_HERO', 'OGRE', 'GIANT',
 ]);
 // Creatures that can fight through darkness. Wizards and the listed monsters can
 // see in darkness; Dwarves/Gnomes are included because their rules say they operate
@@ -1154,7 +1156,7 @@ const POLYMORPH_FORMS = Object.freeze([
 const SEES_IN_DARK = new Set([
   'GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC',
   'DWARF', 'GNOME',
-  'WRAITH', 'LYCAN', 'TROLL', 'BALROG', 'DRAGON', 'WIGHT',
+  'WRAITH', 'LYCAN', 'OGRE', 'TROLL', 'BALROG', 'DRAGON', 'WIGHT',
 ]);
 function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.type)); }
 // --- Concealment & Detection (p.31-32) -----------------------------------
@@ -1348,7 +1350,7 @@ const PROTECTION_RADIUS_IN = 6;
 // Rocs, Elementals, men, and anything unlisted default Neutral. Protection from Evil
 // keeps out Chaos.
 const LAW_DEFAULT   = new Set(['HOBBIT', 'DWARF', 'GNOME', 'HERO', 'SUPER_HERO', 'ENT', 'ELF', 'SPRITE']);
-const CHAOS_DEFAULT = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC', 'WRAITH', 'WIGHT', 'TROLL', 'BALROG', 'DRAGON', 'OGRE']);
+const CHAOS_DEFAULT = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC', 'WRAITH', 'WIGHT', 'OGRE', 'TROLL', 'BALROG', 'DRAGON']);
 function defaultAlignment(type) {
   if (CHAOS_DEFAULT.has(type)) return 'chaos';
   if (LAW_DEFAULT.has(type)) return 'law';
@@ -1851,7 +1853,7 @@ function populateSpellHelp() {
 // the small living folk) dies. The cloud is aimed by a bearing target at cast and
 // then runs itself; multiple simultaneous clouds are a later refinement (singleton).
 const CLOUD_DEPTH_IN = 3, CLOUD_WIDTH_IN = 6, CLOUD_SPEED_IN = 6;
-const CLOUDKILL_IMMUNE = new Set(['HERO', 'SUPER_HERO', 'WIZARD', 'DRAGON', 'GIANT', 'BALROG', 'TROLL', 'ENT', 'ROC', 'WRAITH', 'WIGHT', 'ELEMENTAL', 'LYCAN']);
+const CLOUDKILL_IMMUNE = new Set(['HERO', 'SUPER_HERO', 'WIZARD', 'DRAGON', 'GIANT', 'BALROG', 'OGRE', 'TROLL', 'ENT', 'ROC', 'WRAITH', 'WIGHT', 'ELEMENTAL', 'LYCAN']);
 const cloudkillKills = (u) => !!u && u.kind !== 'works' && !CLOUDKILL_IMMUNE.has(u.type);
 // Figures of `t` under the cloud: a CLOUD_DEPTH_IN x CLOUD_WIDTH_IN rectangle centred
 // at (cl.x,cl.y), depth along travel, width across — mapped onto figuresUnderRect
@@ -2025,7 +2027,7 @@ const SIZES = {
 };
 const SIZE_BY_TYPE = {
   HERO: 'man', SUPER_HERO: 'man', WIZARD: 'man', WRAITH: 'man', WIGHT: 'man', LYCAN: 'man',
-  TROLL: 'large', BALROG: 'large',
+  OGRE: 'large', TROLL: 'large', BALROG: 'large',
   GIANT: 'huge', DRAGON: 'huge', ELEMENTAL: 'huge', ENT: 'huge', ROC: 'huge',
   // Fantasy races (scale table)
   HOBBIT: 'tiny', SPRITE: 'tiny',
@@ -2555,7 +2557,7 @@ const MASS_TO_INDIV_ARMOR_IDX = {
 // rules use special defense for monsters; this is a usable approximation.
 const FANTASY_TO_INDIV_ARMOR_IDX = {
   HERO: 4, SUPER_HERO: 5, WIZARD: 0,
-  TROLL: 1, WIGHT: 0, WRAITH: 0, LYCAN: 1,
+  OGRE: 1, TROLL: 1, WIGHT: 0, WRAITH: 0, LYCAN: 1,
   GIANT: 1, ENT: 4, ROC: 4, DRAGON: 6, BALROG: 6, ELEMENTAL: 0,
   GIANT_ORC: 6,
 };
@@ -2573,7 +2575,7 @@ function targetArmorIdx(target) {
 // mass casualties bleed into. Types not listed default to 1 — they can't
 // fight a mass unit through this path, only through fantasy combat.
 const FIGHTING_STRENGTH = {
-  HERO: 4, SUPER_HERO: 8, WIZARD: 2, WRAITH: 2, LYCAN: 4, TROLL: 6,
+  HERO: 4, SUPER_HERO: 8, WIZARD: 2, WRAITH: 2, LYCAN: 4, OGRE: 6, TROLL: 3,
   BALROG: 2, GIANT: 12, ENT: 6, DRAGON: 4, ROC: 4, ELEMENTAL: 4, WIGHT: 1,
 };
 // Class used for the synthetic mass figures when an individual fights a mass
@@ -2582,9 +2584,11 @@ const FIGHTING_STRENGTH = {
 // Deferred approximations folded in here: Lycanthrope defends as HF; Giant
 // defends as AF with an extra die; Roc/Wight attack-vs-defend class split;
 // Elemental subtype (Air/Water = LH, Earth = HH, Fire = MH) collapsed to HH.
+// Ogres attack as six Heavy Foot. True Trolls use Giant-like fantasy combat,
+// but against men fight as three Armored Foot.
 const FANTASY_FIGHTING_CLASS = {
   DRAGON: 'HH', BALROG: 'HH', ELEMENTAL: 'HH', ROC: 'LH', WIGHT: 'LH',
-  TROLL: 'HF', GIANT: 'HF',
+  OGRE: 'HF', TROLL: 'AF', GIANT: 'HF',
 };
 const fightingClassFor = (type) => FANTASY_FIGHTING_CLASS[type] || 'AF';
 // A few creatures defend as a different class than they attack (fantasy supp.):
@@ -2624,7 +2628,17 @@ const MAGIC_TIERS = Object.freeze({
 // instead of fantasy combat. Anything outside this set forces fantasy combat.
 const MORTAL_TYPES = new Set(['HERO', 'SUPER_HERO', 'MAN', 'BERSERKER', ...FANTASY_RACE_IDS]);
 
+// True Trolls split out from the old merged Troll/Ogre type (Appendix D):
+// Ogres use the ordinary FCT entries where applicable; True Trolls fight as
+// Giants on the Fantasy Combat Table, but can only be killed by Hero-types,
+// Balrogs, Elementals, Giants, or magical weapons. Magical-weapon special kills
+// are deferred, so this table covers the FCT combatants only.
+const TRUE_TROLL_DEFENSE_TARGETS = Object.freeze({ HERO:10, SUPER_HERO:8, BALROG:8, ELEMENTAL:6, GIANT:10 });
 function fantasyTarget(attackerType, defenderType) {
+  if (attackerType === 'TROLL') attackerType = 'GIANT';
+  if (defenderType === 'TROLL') return TRUE_TROLL_DEFENSE_TARGETS[attackerType] ?? null;
+  if (attackerType === 'OGRE') attackerType = 'TROLL';
+  if (defenderType === 'OGRE') defenderType = 'TROLL';
   const row = FANTASY_TARGETS[attackerType];
   if (!row) return null;
   return row[defenderType];
@@ -2806,10 +2820,8 @@ function catapultScatter(overDie, underDie) {
 // rock, though here a Giant only ever targets structures). Everything non-fantastic
 // (men-at-arms, the fantasy races) is always vulnerable, so we gate only on the
 // fantastic-individual types the rule OMITS. Super-Heroes are immune (the list names
-// Heroes and Anti-heroes, not Super-Heroes). RULING: the sim folds Troll & Ogre into
-// one TROLL type; RAW the Ogre IS subject and the Troll is NOT — defaulted to immune
-// (the Troll reading, matching this type's stat block). Drop TROLL from the set to
-// make the merged Troll/Ogre catapult-vulnerable instead.
+// Heroes and Anti-heroes, not Super-Heroes). Ogres are subject to catapult fire;
+// True Trolls are not.
 const CATAPULT_IMMUNE = new Set(['SUPER_HERO', 'WIZARD', 'BALROG', 'DRAGON', 'ELEMENTAL', 'GIANT', 'WRAITH', 'TROLL']);
 const catapultImmune = (u) => !!u && CATAPULT_IMMUNE.has(u.type);
 // Arquebusiers (p.13): per-man d6 vs a range band (score-or-better); a hit kills any armour.
@@ -3061,10 +3073,9 @@ function resolveRamContact(ram, target, d1, d2) {
 }
 // Fantastic creatures batter fortifications directly (Fantastic Sieges, p.39). Defense
 // points removed per turn in contact: Earth Elemental −6, Balrog −4 (+inflame wood),
-// Giant −3, Troll/Ent −2. (The table's Ogre −1 and Wizard fire-ball/lightning −3 aren't
-// here: the sim has no Ogre type, and the Wizard's −3 is a ranged spell for a later
-// slice. The sim's single ELEMENTAL is read as the earth elemental.)
-const FANTASTIC_BATTER = { ELEMENTAL: 6, BALROG: 4, GIANT: 3, ENT: 2, TROLL: 2 };
+// Giant −3, True Troll/Ent −2, Ogre −1. (Wizard fire-ball/lightning −3 is a
+// ranged spell for a later slice. The sim's single ELEMENTAL is read as the earth elemental.)
+const FANTASTIC_BATTER = { ELEMENTAL: 6, BALROG: 4, GIANT: 3, ENT: 2, TROLL: 2, OGRE: 1 };
 const STRUCTURE_INFLAMERS = new Set(['BALROG']);   // a batterer whose touch also sets wood alight
 const GIANT_ROCK_RANGE_IN = 20;                    // a Giant out of contact hurls rocks as a small catapult (p.35)
 // Apply a creature's structural points to a defense-value target; an inflamer also
@@ -6787,7 +6798,20 @@ function saveScenario() {
 }
 // Fill any fields newer than the save with the same defaults spawnUnit uses, so
 // a board written by an older build still loads cleanly.
-function hydrateUnit(u) {
+function versionLessThan(a, b) {
+  const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const da = pa[i] || 0, db = pb[i] || 0;
+    if (da !== db) return da < db;
+  }
+  return false;
+}
+function hydrateUnit(u, saveVersion) {
+  // v0.11.131 split the old merged Troll / Ogre entry. Older saves used the
+  // Ogre morale/PV/normal-combat profile, so legacy TROLL pieces migrate to OGRE.
+  if (u && u.type === 'TROLL' && versionLessThan(saveVersion || '0.0.0', '0.11.131')) u.type = 'OGRE';
   if (!u.acted) u.acted = { moved: false, fired: false, fought: false };
   const def = {
     movedThisTurn: 0, shotsThisTurn: 0, lastFiredTurn: null, status: 'ready',
@@ -6817,7 +6841,7 @@ function loadScenario(data) {
     saveSettings();
   }
   const snap = data.state;
-  snap.units = snap.units.map(hydrateUnit);
+  snap.units = snap.units.map(u => hydrateUnit(u, data.simVersion));
   applySnapshot(snap);
   syncLightSelect();
   state.editUnitId = null; syncEditMode();                                  // load = fresh context (mirror resetBoard hygiene)
@@ -8374,12 +8398,12 @@ function onIndivMissile(a, d) {
 // (FIGHTING_STRENGTH — e.g. 4 for a Hero, the "four simultaneous kills" rule,
 // p.30). Types explicitly impervious to normal missile fire (Wraith, Balrog,
 // Ent, Dragon, Wight/Ghoul, Wizard, Elemental) are unharmed.
-const MISSILE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'WIGHT', 'WIZARD', 'ELEMENTAL']);
+const MISSILE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'WIGHT', 'WIZARD', 'ELEMENTAL', 'TROLL']);
 // Impervious to *normal melee* too — mass troops inflict no casualties on them
 // (they still deal their own kills). Wizard and Wight are missile-immune only,
 // so they can be meleed normally. Magical weapons / fantastic combat (Appendix
 // E) and the Hero/Super-Hero dragon exception are deferred to later slices.
-const MELEE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'ELEMENTAL']);
+const MELEE_IMMUNE_INDIV = new Set(['WRAITH', 'BALROG', 'ENT', 'DRAGON', 'ELEMENTAL', 'TROLL']);
 function indivArmorIdxToMassGroup(idx) {
   if (idx <= 1) return 'unarmored';     // none / leather
   if (idx <= 5) return 'half';          // shield, leather+sh, chain, chain+sh
@@ -9740,18 +9764,22 @@ renderBoard();
   const orcArquebusDark = resolveArquebus({ rangeIn:6, shooters:1, diePenalty:0, rng: always(2) });
   console.assert(orcArquebusDark.kills === 1 && orcArquebusLight.kills === 0, 'orc bright light: arquebus die is reduced by 1');
 
-  // Fantasy combat — HERO vs TROLL base target 9. 12 kills, 9 falls back, 2 no effect.
-  const fcKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(6) });
-  console.assert(fcKill.target === 9 && fcKill.outcome === 'killed', 'Hero vs Troll rolling 12 → killed');
-  const fcFall = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(5)]) });
-  console.assert(fcFall.outcome === 'fallback', 'Hero vs Troll rolling exactly 9 → fall back');
-  const fcNone = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(1) });
-  console.assert(fcNone.outcome === 'no_effect', 'Hero vs Troll rolling 2 → no effect');
+  // Fantasy combat — OGRE keeps the old Troll/Ogre table, while True Trolls use their special Appendix D thresholds.
+  const fcOgreKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'OGRE' }, rng: always(6) });
+  console.assert(fcOgreKill.target === 9 && fcOgreKill.outcome === 'killed', 'Hero vs Ogre uses old Troll/Ogre target 9; rolling 12 → killed');
+  const fcTrollKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(6) });
+  console.assert(fcTrollKill.target === 10 && fcTrollKill.outcome === 'killed', 'Hero vs True Troll target 10; rolling 12 → killed');
+  const fcTrollFall = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(6)]) });
+  console.assert(fcTrollFall.outcome === 'fallback', 'Hero vs True Troll rolling exactly 10 → fall back');
+  const fcTrollDenied = resolveFantasyCombat({ attacker:{ type:'DRAGON' }, defender:{ type:'TROLL' }, rng: always(6) });
+  console.assert(!fcTrollDenied.ok, 'Dragon has no kill entry vs True Troll');
+  const fcTrollAsGiant = resolveFantasyCombat({ attacker:{ type:'TROLL' }, defender:{ type:'HERO' }, rng: always(6) });
+  console.assert(fcTrollAsGiant.target === FANTASY_TARGETS.GIANT.HERO, 'True Troll attacks on the Giant FCT row');
 
   // Fantasy-vs-mass melee profiles (Slice 6X).
-  console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('TROLL') === 'HF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, TROLL HF, HERO default AF');
-  console.assert(FIGHTING_STRENGTH.DRAGON === 4 && FIGHTING_STRENGTH.ENT === 6 && FIGHTING_STRENGTH.WIGHT === 1, 'fantasy fighting strengths wired');
-  console.assert(MELEE_IMMUNE_INDIV.has('DRAGON') && !MELEE_IMMUNE_INDIV.has('WIZARD') && !MELEE_IMMUNE_INDIV.has('TROLL'), 'melee immunity: dragon yes, wizard/troll no');
+  console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('OGRE') === 'HF' && fightingClassFor('TROLL') === 'AF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, OGRE HF, True Troll AF vs men, HERO default AF');
+  console.assert(FIGHTING_STRENGTH.DRAGON === 4 && FIGHTING_STRENGTH.ENT === 6 && FIGHTING_STRENGTH.WIGHT === 1 && FIGHTING_STRENGTH.OGRE === 6 && FIGHTING_STRENGTH.TROLL === 3, 'fantasy fighting strengths wired');
+  console.assert(MELEE_IMMUNE_INDIV.has('DRAGON') && !MELEE_IMMUNE_INDIV.has('WIZARD') && MELEE_IMMUNE_INDIV.has('TROLL') && !MELEE_IMMUNE_INDIV.has('OGRE'), 'melee immunity: dragon/true troll yes, wizard/ogre no');
   // Dragon fights as 4 Heavy Horse: HH vs HF = 3 dice/man, kills 5-6 → 4×3 = 12 dice; all-6 → 12 kills.
   const dragVsMass = resolveMassMelee({ attacker:{ type:'HH', count:4 }, defender:{ type:'HF', count:20 }, rng: always(6) });
   console.assert(dragVsMass.attacker.totalDice === 12 && dragVsMass.attacker.killsDealt === 12, 'dragon (4×HH) all-6 → 12 kills vs HF mass');
@@ -10119,7 +10147,7 @@ renderBoard();
 
   // Figure size tiers (Slice 7C): footprint scales with size; man unchanged.
   console.assert(sizeOf('DRAGON') === 'huge' && sizeOf('GIANT') === 'huge' && sizeOf('ROC') === 'huge', 'dragons/giants/rocs huge');
-  console.assert(sizeOf('TROLL') === 'large' && sizeOf('BALROG') === 'large', 'trolls/balrogs large');
+  console.assert(sizeOf('OGRE') === 'large' && sizeOf('TROLL') === 'large' && sizeOf('BALROG') === 'large', 'ogres/trolls/balrogs large');
   console.assert(sizeOf('HERO') === 'man' && sizeOf('WIGHT') === 'man' && sizeOf('LYCAN') === 'man', 'heroes/wights/lycanthropes man-sized');
   console.assert(unitBounds({ kind:'individual', type:'HERO' }).pip === 20, 'man footprint unchanged (pip 20)');
   console.assert(unitBounds({ kind:'individual', type:'DRAGON' }).pip > unitBounds({ kind:'individual', type:'HERO' }).pip, 'huge footprint larger than man');
@@ -10147,8 +10175,8 @@ renderBoard();
     console.assert(unitPointValue(armed) - unitPointValue(plain) === 10 * 10, 'points: a magic-armed Elf company costs 10/figure more (p.29)'); }
   { const hero = { kind:'individual', type:'HERO', magicWeapon:2 }, plain = { kind:'individual', type:'HERO', magicWeapon:null };
     console.assert(unitPointValue(hero) - unitPointValue(plain) === 10, 'points: a Hero\u2019s magic sword adds 10 (super-swords carry no premium)'); }
-  console.assert(elfMagicBonus('GIANT') === 0 && elfMagicBonus('TROLL') === 0, 'elf vs fantastics → Appendix E scores (deferred → 0)');
-  console.assert(DWARF_HALFKILL_VS.has('TROLL') && DWARF_HALFKILL_VS.has('GIANT') && !DWARF_HALFKILL_VS.has('HF'), 'dwarf half-kills vs trolls/giants only');
+  console.assert(elfMagicBonus('GIANT') === 0 && elfMagicBonus('OGRE') === 0 && elfMagicBonus('TROLL') === 0, 'elf vs fantastics → Appendix E scores (deferred → 0)');
+  console.assert(DWARF_HALFKILL_VS.has('OGRE') && DWARF_HALFKILL_VS.has('TROLL') && DWARF_HALFKILL_VS.has('GIANT') && !DWARF_HALFKILL_VS.has('HF'), 'dwarf half-kills vs ogres/trolls/giants only');
   const elfVsGob = resolveMassMelee({ attacker:{ type:'ELF', count:10, bonusDice: elfMagicBonus('GOBLIN') }, defender:{ type:'GOBLIN', count:20, defendType:'LF' }, rng: always(6) });
   console.assert(elfVsGob.attacker.totalDice === 13, 'elf magic +3 vs goblins adds 3 dice (10 + 3)');
   console.assert(Math.floor(4 * 1.5) === 6 && Math.floor(5 * 1.5) === 7, 'hobbit sling: every two firing count three');
@@ -10634,6 +10662,7 @@ renderBoard();
 
   // Board sizing (resizable playing area)
   console.assert(clampBoardIn(40, 72) === 40 && clampBoardIn(5, 72) === 24 && clampBoardIn(9999, 72) === 600 && clampBoardIn('x', 72) === 72, 'board size clamps to 24–600″, NaN falls back to default');
+  console.assert(versionLessThan('0.11.130', '0.11.131') && !versionLessThan('0.11.131', '0.11.131'), 'versionLessThan compares dotted sim versions');
 
   // Siege structures as battered defense-value pieces
   console.assert(structureDefenseRange('curtain').min === 25 && structureDefenseRange('bastion').max === 60, 'structures expose the C.7 defense ranges');
@@ -10669,7 +10698,7 @@ renderBoard();
     const r2 = resolveRamContact({}, wall, 3, 4);
     console.assert(!r2.disabled && r2.remaining === 25 - RAM_DAMAGE_PER_TURN, 'ram: an undisabled ram removes 2 defense/turn'); }
   // Fantastic creature siege batter (p.39)
-  console.assert(FANTASTIC_BATTER.ELEMENTAL === 6 && FANTASTIC_BATTER.BALROG === 4 && FANTASTIC_BATTER.GIANT === 3 && FANTASTIC_BATTER.TROLL === 2 && FANTASTIC_BATTER.ENT === 2, 'fantastic siege: −X structural points per creature');
+  console.assert(FANTASTIC_BATTER.ELEMENTAL === 6 && FANTASTIC_BATTER.BALROG === 4 && FANTASTIC_BATTER.GIANT === 3 && FANTASTIC_BATTER.TROLL === 2 && FANTASTIC_BATTER.ENT === 2 && FANTASTIC_BATTER.OGRE === 1, 'fantastic siege: −X structural points per creature');
   { const wall = { defenseMax:30, defenseLeft:30 };
     console.assert(applyCreatureBatter('GIANT', wall, FANTASTIC_BATTER.GIANT).remaining === 27, 'fantastic siege: a Giant chips a 30-defense wall by 3');
     console.assert(applyCreatureBatter('ELEMENTAL', wall, FANTASTIC_BATTER.ELEMENTAL).remaining === 21, 'fantastic siege: an Earth Elemental then removes 6 more'); }
@@ -10682,7 +10711,7 @@ renderBoard();
   console.assert(applyCreatureBatter('HERO', { defenseMax:30, defenseLeft:30 }, FANTASTIC_BATTER.HERO) === null, 'fantastic siege: a non-siege creature (no points) cannot batter');
   console.assert(SIEGE_WEAPONS.smallCatapult.points === 2, 'fantastic siege: a Giant out of contact hurls a rock as a small catapult (−2)');
   // Catapult fire vs fantastic figures (p.39): only the lesser fantastic creatures can be crushed.
-  console.assert(['SUPER_HERO','WIZARD','BALROG','DRAGON','ELEMENTAL','GIANT','WRAITH','TROLL'].every(t => catapultImmune({ type:t })), 'catapult: the mighty fantastic individuals shrug off a catapult hit');
+  console.assert(['SUPER_HERO','WIZARD','BALROG','DRAGON','ELEMENTAL','GIANT','WRAITH','TROLL'].every(t => catapultImmune({ type:t })) && !catapultImmune({ type:'OGRE' }), 'catapult: True Troll immune, Ogre subject');
   console.assert(['HERO','WIGHT','LYCAN','ENT','ROC'].every(t => !catapultImmune({ type:t })), 'catapult: Heroes, Wights/Ghouls, Lycanthropes, Ents and Rocs are subject to catapult fire');
   console.assert(['MAN','HF','MK','ELF','ORC','HOBBIT','SPRITE','DWARF','GNOME','GOBLIN','KOBOLD'].every(t => !catapultImmune({ type:t })), 'catapult: men-at-arms and every fantasy race are always vulnerable');
   console.assert(catapultImmune(null) === false && catapultImmune({}) === false, 'catapult: a missing or typeless piece is not flagged immune');
@@ -10760,13 +10789,13 @@ renderBoard();
   console.assert(resolveMissileHit('GIANT','fire',4,0) === 'routed' && resolveMissileHit('GIANT','fire',5,0) === 'driven_back' && resolveMissileHit('GIANT','fire',9,0) === 'no_effect', 'missile: Giant bands <5 / <9 / 9+');
   console.assert(resolveMissileHit('DRAGON','lightning',12,0) === 'driven_back', 'missile: Dragon always driven back');
   console.assert(resolveMissileHit('ELEMENTAL','fire',7,0,'air') === 'driven_back' && resolveMissileHit('ELEMENTAL','lightning',7,0,'air') === 'no_effect', 'missile: Air elemental yields to fire only');
-  console.assert(resolveMissileHit('TROLL','fire',2,0) === 'destroyed' && resolveMissileHit('HF','lightning',12,0) === 'destroyed', 'missile: ordinary creatures/men destroyed');
+  console.assert(resolveMissileHit('OGRE','fire',2,0) === 'destroyed' && resolveMissileHit('TROLL','fire',12,0) === 'no_effect' && resolveMissileHit('HF','lightning',12,0) === 'destroyed', 'missile: Ogre destroyed, True Troll ignores wizard missiles, ordinary men destroyed');
   console.assert(counterMagicTarget(0,4).target === 7 && counterMagicTarget(0,4).role === 'stronger', 'counter: Wizard vs Seer 7+');
   console.assert(counterMagicTarget(4,0).target === 11 && counterMagicTarget(4,0).role === 'weaker', 'counter: Seer vs Wizard 11+');
   console.assert(counterMagicTarget(2,1).target === 8 && counterMagicTarget(1,1).target === 7 && counterMagicTarget(1,1).role === 'equal', 'counter: gap 1 -> 8, equal -> 7');
   console.assert(SPELLS.length === 16 && SPELL_BY_KEY.darkness.complexity === 1 && SPELL_BY_KEY.wizardLight.complexity === 1, 'spells: catalog of 16, darkness/light are C1');
   console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ type:'GIANT_ORC' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins/giant orcs & wizards see in dark, heavy foot do not');
-  console.assert(['DWARF','GNOME','WRAITH','LYCAN','TROLL','BALROG','DRAGON','WIGHT'].every(type => seesInDark({ type })), 'darkness: dwarf/gnome and listed fantastic creatures operate in dark');
+  console.assert(['DWARF','GNOME','WRAITH','LYCAN','OGRE','TROLL','BALROG','DRAGON','WIGHT'].every(type => seesInDark({ type })), 'darkness: dwarf/gnome and listed fantastic creatures operate in dark');
   console.assert(SPELL_BY_KEY.haste.done && SPELL_BY_KEY.slowness.done && SPELL_BY_KEY.haste.complexity === 3, 'spells: haste/slowness implemented at C3');
   console.assert(moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn } }) === 1.5 && moveSpellFactor({ moveSpell:{ kind:'slow', untilTurn: state.turn } }) === 0.5 && moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn - 1 } }) === 1 && moveSpellFactor({}) === 1, 'spells: haste 1.5 / slow 0.5 / expired & none 1');
   (() => { const sv = state.darkness, su = state.units, st = state.turn;
