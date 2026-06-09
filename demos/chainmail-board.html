@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.125 · Enforce CATAPULT FIRE VS. FANTASTIC FIGURES (p.39): only the lesser fantastic creatures may be crushed by a catapult’s hit area. New CATAPULT_IMMUNE set + catapultImmune() predicate gate resolveCatapultAntipersonnel — a piece under the area whose type is SUPER_HERO/WIZARD/BALROG/DRAGON/ELEMENTAL/GIANT/WRAITH/TROLL is logged “not subject to catapult fire (p.39)” and takes no damage, while Heroes, Wights/Ghouls, Lycanthropes, Ents, Rocs, men-at-arms and every fantasy race stay vulnerable. Trailing verdict now distinguishes immunity from overhead cover (anyImmune flag). RULING: the sim folds Troll & Ogre into one TROLL type — RAW the Ogre is subject, the Troll is not; defaulted to immune (drop TROLL from the set to flip). Giant thrown rock already targets structures only, so no antipersonnel gate needed there. Tests: immune set, vulnerable fantastic types, mass races, null/typeless guard. node --check clean. Builds on v0.11.124. -->
+<!-- chainmail-board.html · v0.11.126 · MAGIC ITEMS slice 1 — introduce the magic sword as a per-unit property (u.magicWeapon: null|1|2|3) and make the Elf melee bonus RAW-correct. New MAGIC_SWORD_BEARERS set (ELF/HERO/SUPER_HERO/WIZARD) + a “Magic sword” editor picker (syncMagicItemsRow shows it for elves — mass or single — and hero/wizard individuals; readMagicSword reads it back, eligibility-gated). Elves seed to +1 by default (their RAW standard kit), everyone else opts in. elfMagicBonus is now gated at the mass-melee call site on the Elf being magic-armed (a swordless Elf gets no dice), and Kobolds drop from the goblin +3 to the generic +1 (the elf entry names only Goblins). Point value: a magic sword adds a flat 10 per figure (p.29; super-swords carry no premium), so a magic-armed Elf company is 10/figure over its base 4. Round-trips via structuredClone; hydrateUnit migrates old saves (Elves load magic-armed, others swordless). MAGIC_ITEM_PV defines sword/armor/arrows (only sword consumed this slice). Deferred to later slices: the FCT +tier and the six elf-vs-fantastic scores, the +1 die for non-elf bearers, magic armor, enchanted arrows, and the 12″ sword-light. Tests: Kobold +1, migration defaults, swordless preservation, per-figure + individual point cost. node --check clean. Builds on v0.11.125. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.125</title>
+<title>Chainmail — Battlefield · v0.11.126</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -298,7 +298,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.125</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.126</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -435,6 +435,12 @@
         </div>
         <div class="field f-indiv-only"><label>Melee wpn</label><select id="f-mtm-weapon"></select></div>
         <div class="field f-indiv-only"><label>Armor</label><select id="f-armor"></select></div>
+        <div class="field" id="f-magic-sword-row" style="display:none"><label>Magic sword</label><select id="f-magic-sword">
+          <option value="">none</option>
+          <option value="1">+1 · magic</option>
+          <option value="2">+2 · super</option>
+          <option value="3">+3 · super</option>
+        </select><span class="field-note">+10 pts · elves come armed (p.29)</span></div>
         <div class="field f-indiv-only">
           <label>Mounted</label>
           <input type="checkbox" id="f-mounted">
@@ -688,7 +694,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.125';
+const SIM_VERSION = '0.11.126';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -780,17 +786,23 @@ const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t 
 // Asymmetric defend class for a mass type (Appendix D), if it differs from cls.
 const defendTypeForMass = (id) => typeById(id)?.defendCls;
 
-// Elves with magical weapons add dice in normal combat (Appendix D): +3 vs
-// goblins/kobolds, +2 vs orcs, +1 vs any other normal troops. Their Appendix-E
-// scores vs fantastic individuals are deferred (0 here). For now every Elf unit
-// is treated as magic-armed; a per-unit toggle arrives with the magical-weapons
-// feature.
+// Elves with magical weapons add dice in normal combat (elf entry, p.29): +3 vs
+// Goblins, +2 vs Orcs, +1 (the generic extra die) vs any other normal troops.
+// Kobolds are NOT named in the elf entry, so they take the generic +1 — not the
+// goblin +3. Scores vs fantastic individuals (Hero 9 / Super-Hero 11 / Wizard 10
+// / Wraith 8 / Wight 6 / Lycanthrope 9) are an FCT path and land in a later slice
+// (0 here). This bonus is the magic sword's effect: the CALLER gates it on the
+// Elf's u.magicWeapon, so only magic-armed Elves receive it.
 function elfMagicBonus(oppType) {
-  if (oppType === 'GOBLIN' || oppType === 'KOBOLD') return 3;
+  if (oppType === 'GOBLIN') return 3;
   if (oppType === 'ORC') return 2;
-  if (FANTASTIC_TYPES.find(t => t.id === oppType)) return 0; // Appendix E scores deferred
+  if (FANTASTIC_TYPES.find(t => t.id === oppType)) return 0; // FCT scores deferred
   return 1;
 }
+// Types that may bear a magic sword (elf entry + Magical Weapons rule, p.29):
+// "Elves, hero-types, and certain magic users." Elves come magic-armed as standard
+// kit (default on); the others opt in. Works/mass-of-men are excluded.
+const MAGIC_SWORD_BEARERS = new Set(['ELF', 'HERO', 'SUPER_HERO', 'WIZARD']);
 // Elementals add melee dice by the foe's altitude (p.38): an Air Elemental adds
 // two dice against airborne opponents, an Earth Elemental one die against
 // earthbound (grounded) ones. Fire/Water carry no altitude die.
@@ -1866,6 +1878,12 @@ const WEAPON_PV = Object.freeze({
   light_crossbow:1.5, heavy_crossbow:1.5, arquebus:1.5,
   throwing_axe:0, throwing_spear:0, javelin:0, pike:1,
 });
+// Magic-item point values (p.29). Each is a flat 10 in the book; super-swords
+// (+2/+3) carry no listed premium, so every sword tier costs the same 10. Added
+// per figure for a mass unit (a magic-armed Elf company therefore costs 10/figure
+// on top of its base 4). armor + arrows are defined here for the later slices that
+// apply their effects; only `sword` is consumed in this slice.
+const MAGIC_ITEM_PV = Object.freeze({ sword: 10, armor: 10, arrows: 10 });
 // Engine costs (p.27): light catapult/cannon 15, heavy 20, bombard 30. Other
 // works (towers, rams, mantlets, ladders, abatis, structures) have no RAW PV (0).
 const WORKS_PV = Object.freeze({ catLight:15, catHeavy:20, gunLight:15, gunHeavy:20, bombard:30 });
@@ -1885,15 +1903,23 @@ function unitPointValue(u, countOverride) {
   if (!u) return 0;
   if (u.kind === 'works') return WORKS_PV[u.worksType] || 0;
   if (u.kind === 'individual') {
-    if (isMagicUser(u)) return magicMeta(u).point;
-    const ft = fantasticTypeById(u.type);
-    if (ft) return typeof ft.point === 'number' ? ft.point : 0;
-    const racePV = (u.type !== 'MAN' && u.type !== 'BERSERKER') ? TROOP_PV[u.type] : undefined;
-    const v = racePV != null ? racePV : manFootMountPV(u);
-    return u.mercenary ? v / 2 : v;
+    let v;
+    if (isMagicUser(u)) v = magicMeta(u).point;
+    else {
+      const ft = fantasticTypeById(u.type);
+      if (ft) v = typeof ft.point === 'number' ? ft.point : 0;
+      else {
+        const racePV = (u.type !== 'MAN' && u.type !== 'BERSERKER') ? TROOP_PV[u.type] : undefined;
+        const base = racePV != null ? racePV : manFootMountPV(u);
+        v = u.mercenary ? base / 2 : base;
+      }
+    }
+    if (u.magicWeapon) v += MAGIC_ITEM_PV.sword;   // p.29 — flat 10, any tier
+    return v;
   }
   const base = TROOP_PV[u.type] ?? 0;
-  const wpn = (WEAPON_PV[u.weapon] || 0) + (u.polearm ? WEAPON_PV.pike : 0);
+  const wpn = (WEAPON_PV[u.weapon] || 0) + (u.polearm ? WEAPON_PV.pike : 0)
+            + (u.magicWeapon ? MAGIC_ITEM_PV.sword : 0);   // p.29 — 10 per magic-armed figure
   const n = countOverride != null ? countOverride : (u.count || 1);
   const v = (base + wpn) * n;
   return u.mercenary ? v / 2 : v;
@@ -4165,6 +4191,7 @@ function syncKindFields() {
   }
   syncPikeRow();
   syncMagicRow();
+  syncMagicItemsRow();
   syncAlignmentDefault();
 }
 // Reset the Alignment picker to the current type's default (a manual choice is kept
@@ -4180,6 +4207,26 @@ function syncMagicRow() {
   const set = (id, on) => { const r = $(id); if (r) r.style.display = on ? '' : 'none'; };
   set('#f-magic-row', wiz); set('#f-missile-row', wiz); set('#f-element-row', elem);
 }
+// The Magic sword picker shows for any magic-sword bearer (Elf — mass or single —
+// plus Hero/Super-Hero/Wizard individuals), never for works or rank-and-file men.
+// On a type change it seeds the RAW default: Elves come magic-armed (+1), everyone
+// else starts at none. loadUnitIntoPanel overrides with the unit's stored value
+// after this runs, so editing an existing piece keeps its real selection.
+function syncMagicItemsRow() {
+  const kind = $('#f-kind').value, type = $('#f-type').value;
+  const eligible = kind !== 'works' && MAGIC_SWORD_BEARERS.has(type);
+  const row = $('#f-magic-sword-row'); if (!row) return;
+  row.style.display = eligible ? '' : 'none';
+  const sel = $('#f-magic-sword');
+  if (eligible && sel) sel.value = (type === 'ELF') ? '1' : '';
+}
+// Read the Magic sword picker into a stored value (null | 1 | 2 | 3), gated by
+// eligibility so an ineligible type can never carry a sword via a stale field.
+function readMagicSword(type) {
+  if (!MAGIC_SWORD_BEARERS.has(type)) return null;
+  const t = parseInt($('#f-magic-sword').value, 10);
+  return (t === 1 || t === 2 || t === 3) ? t : null;
+}
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
 
@@ -4191,10 +4238,12 @@ function formUnitSpec() {
   if (kind === 'works') return { kind: 'works', worksType: $('#f-works-type').value };
   if (kind === 'individual') return { kind: 'individual', type: $('#f-type').value,
     armor: $('#f-armor').value, mounted: $('#f-mounted').checked, mercenary: merc,
+    magicWeapon: readMagicSword($('#f-type').value),
     magicClass: $('#f-type').value === 'WIZARD' ? ($('#f-magic-class').value || 'wizard') : undefined };
   const type = $('#f-type').value;
   const pikeable = (type === 'HF' || type === 'AF' || type === 'SP');
   return { kind: 'mass', type, weapon: $('#f-weapon').value || null,
+    magicWeapon: readMagicSword(type),
     count: Math.max(1, parseInt($('#f-count').value, 10) || 0),
     polearm: pikeable ? $('#f-pike').checked : false, mercenary: merc };
 }
@@ -4202,7 +4251,7 @@ function updateFormPoints() {
   const el = $('#f-points'); if (!el) return;
   el.textContent = `${fmtPts(unitPointValue(formUnitSpec()))} pts`;
 }
-['f-kind', 'f-type', 'f-count', 'f-weapon', 'f-pike', 'f-mtm-weapon', 'f-armor', 'f-mounted', 'f-works-type', 'f-merc'].forEach(id => {
+['f-kind', 'f-type', 'f-count', 'f-weapon', 'f-pike', 'f-mtm-weapon', 'f-armor', 'f-mounted', 'f-works-type', 'f-merc', 'f-magic-sword'].forEach(id => {
   const el = $('#' + id);
   if (el) { el.addEventListener('change', updateFormPoints); el.addEventListener('input', updateFormPoints); }
 });
@@ -4250,6 +4299,7 @@ function syncPikeRow() {
 }
 $('#f-type').addEventListener('change', syncPikeRow);
 $('#f-type').addEventListener('change', syncMagicRow);
+$('#f-type').addEventListener('change', syncMagicItemsRow);
 $('#f-type').addEventListener('change', syncAlignmentDefault);
 syncPikeRow();
 
@@ -6675,6 +6725,9 @@ function hydrateUnit(u) {
   };
   for (const k in def) if (u[k] === undefined) u[k] = def[k];
   if (u.turnStartFacing === undefined) u.turnStartFacing = u.facing || 0;
+  // Magic sword (p.29): saves predating this field load Elves magic-armed (their
+  // RAW standard kit, preserving prior behaviour) and everyone else swordless.
+  if (u.magicWeapon === undefined) u.magicWeapon = (u.type === 'ELF') ? 1 : null;
   return u;
 }
 function loadScenario(data) {
@@ -7397,9 +7450,10 @@ function onResolveMelee() {
     standingHorseFirstRound: false,
     fatigued: !!d.fatigued && state.settings.applyFatigue,
   };
-  // Magic-armed Elves add dice keyed to the opponent (Appendix D).
-  const aElfBonus = a.type === 'ELF' ? elfMagicBonus(d.type) : 0;
-  const dElfBonus = d.type === 'ELF' ? elfMagicBonus(a.type) : 0;
+  // Magic-armed Elves add dice keyed to the opponent (elf entry, p.29). A
+  // swordless Elf (u.magicWeapon falsy) gets nothing — the bonus is the sword's.
+  const aElfBonus = (a.type === 'ELF' && a.magicWeapon) ? elfMagicBonus(d.type) : 0;
+  const dElfBonus = (d.type === 'ELF' && d.magicWeapon) ? elfMagicBonus(a.type) : 0;
   if (aElfBonus) attackerParams.bonusDice = (attackerParams.bonusDice || 0) + aElfBonus;
   if (dElfBonus) defenderParams.bonusDice = (defenderParams.bonusDice || 0) + dElfBonus;
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
@@ -8519,6 +8573,7 @@ function spawnUnit() {
     side, kind, type,
     alignment: $('#f-alignment').value || defaultAlignment(type),
     weapon,
+    magicWeapon: readMagicSword(type),
     mercenary: $('#f-merc').checked,
     label: ($('#f-label').value || '').trim().slice(0, 40),
     spawnTurn: state.setup ? 0 : state.turn,
@@ -8614,6 +8669,7 @@ function loadUnitIntoPanel(u) {
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
   $('#f-alignment').value = alignmentOf(u);
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
+  $('#f-magic-sword').value = u.magicWeapon ? String(u.magicWeapon) : '';   // overrides the type-default seeded by syncMagicItemsRow
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
     $('#f-magic-class').value = u.magicClass || 'wizard';
@@ -9965,9 +10021,19 @@ renderBoard();
   console.assert(mGob.w === mHF.w && mGob.h === mHF.h, 'race footprint/frontage unchanged (fixed ground scale)');
 
   // Race specials (Slice 7F).
-  console.assert(elfMagicBonus('GOBLIN') === 3 && elfMagicBonus('KOBOLD') === 3, 'elf +3 dice vs goblins/kobolds');
+  console.assert(elfMagicBonus('GOBLIN') === 3, 'elf +3 dice vs goblins (RAW elf entry)');
+  console.assert(elfMagicBonus('KOBOLD') === 1, 'elf: kobolds are not named in the elf entry → generic +1, not +3');
   console.assert(elfMagicBonus('ORC') === 2, 'elf +2 dice vs orcs');
   console.assert(elfMagicBonus('HF') === 1 && elfMagicBonus('DWARF') === 1, 'elf +1 die vs normal troops/other races');
+  // Magic items (p.29) — slice 1: magic sword flag, migration, and point cost.
+  console.assert(MAGIC_ITEM_PV.sword === 10, 'magic sword: flat 10 points (p.29)');
+  console.assert(hydrateUnit({ type:'ELF' }).magicWeapon === 1, 'migration: a saved Elf loads magic-armed (RAW standard kit)');
+  console.assert(hydrateUnit({ type:'HF' }).magicWeapon === null && hydrateUnit({ type:'HERO' }).magicWeapon === null, 'migration: non-elves load with no magic sword');
+  console.assert(hydrateUnit({ type:'ELF', magicWeapon:null }).magicWeapon === null, 'migration: an explicit swordless Elf is left swordless (not re-armed)');
+  { const armed = { kind:'mass', type:'ELF', count:10, magicWeapon:1 }, plain = { kind:'mass', type:'ELF', count:10, magicWeapon:null };
+    console.assert(unitPointValue(armed) - unitPointValue(plain) === 10 * 10, 'points: a magic-armed Elf company costs 10/figure more (p.29)'); }
+  { const hero = { kind:'individual', type:'HERO', magicWeapon:2 }, plain = { kind:'individual', type:'HERO', magicWeapon:null };
+    console.assert(unitPointValue(hero) - unitPointValue(plain) === 10, 'points: a Hero\u2019s magic sword adds 10 (super-swords carry no premium)'); }
   console.assert(elfMagicBonus('GIANT') === 0 && elfMagicBonus('TROLL') === 0, 'elf vs fantastics → Appendix E scores (deferred → 0)');
   console.assert(DWARF_HALFKILL_VS.has('TROLL') && DWARF_HALFKILL_VS.has('GIANT') && !DWARF_HALFKILL_VS.has('HF'), 'dwarf half-kills vs trolls/giants only');
   const elfVsGob = resolveMassMelee({ attacker:{ type:'ELF', count:10, bonusDice: elfMagicBonus('GOBLIN') }, defender:{ type:'GOBLIN', count:20, defendType:'LF' }, rng: always(6) });
