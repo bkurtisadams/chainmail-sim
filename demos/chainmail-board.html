@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.126 · MAGIC ITEMS slice 1 — introduce the magic sword as a per-unit property (u.magicWeapon: null|1|2|3) and make the Elf melee bonus RAW-correct. New MAGIC_SWORD_BEARERS set (ELF/HERO/SUPER_HERO/WIZARD) + a “Magic sword” editor picker (syncMagicItemsRow shows it for elves — mass or single — and hero/wizard individuals; readMagicSword reads it back, eligibility-gated). Elves seed to +1 by default (their RAW standard kit), everyone else opts in. elfMagicBonus is now gated at the mass-melee call site on the Elf being magic-armed (a swordless Elf gets no dice), and Kobolds drop from the goblin +3 to the generic +1 (the elf entry names only Goblins). Point value: a magic sword adds a flat 10 per figure (p.29; super-swords carry no premium), so a magic-armed Elf company is 10/figure over its base 4. Round-trips via structuredClone; hydrateUnit migrates old saves (Elves load magic-armed, others swordless). MAGIC_ITEM_PV defines sword/armor/arrows (only sword consumed this slice). Deferred to later slices: the FCT +tier and the six elf-vs-fantastic scores, the +1 die for non-elf bearers, magic armor, enchanted arrows, and the 12″ sword-light. Tests: Kobold +1, migration defaults, swordless preservation, per-figure + individual point cost. node --check clean. Builds on v0.11.125. -->
+<!-- chainmail-board.html · v0.11.127 · Add Orc bright-light penalties and Giant Orc support Add Builds on v0.11.125. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.126</title>
+<title>Chainmail — Battlefield · v0.11.127</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -298,7 +298,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.126</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.127</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -771,9 +771,10 @@ const TYPES = Object.freeze([
   // Fantasy races (Appendix D). cls is the attack class; defendCls (when given)
   // is the class used when they're struck — Dwarves/Goblins/Kobolds attack as
   // Heavy Foot but defend as Light Foot. Size + per-race specials handled
-  // elsewhere/deferred (see SIZE_BY_TYPE; vision, light penalty, Elf bonuses,
+  // elsewhere/deferred (see SIZE_BY_TYPE; vision, Elf bonuses,
   // Dwarf half-kills-vs-big, obedience die, sprite/elf invisibility, etc.).
-  { id:'ORC',    name:'Orc',            cls:'HF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'ORC',       name:'Orc',            cls:'HF', morale:5, loss:{ pct:1/3,  score:7 } },
+  { id:'GIANT_ORC', name:'Giant Orc',      cls:'AF', morale:5, loss:{ pct:1/3,  score:7 } },
   { id:'GOBLIN', name:'Goblin',         cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
   { id:'KOBOLD', name:'Kobold',         cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
   { id:'DWARF',  name:'Dwarf',          cls:'HF', defendCls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
@@ -871,7 +872,7 @@ const MASS_ARMOR_BY_TYPE = {
   PE:'unarmored', LF:'unarmored', LV:'half',
   HF:'half', EHF:'half', SP:'half', AF:'fully',
   LH:'half', MH:'half', HH:'fully', MK:'fully',
-  ORC:'half', GOBLIN:'unarmored', KOBOLD:'unarmored', DWARF:'half', GNOME:'half',
+  ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', DWARF:'half', GNOME:'half',
   ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
 };
 
@@ -884,7 +885,7 @@ const MOVE_ALLOWANCE = {
   HERO:12, SUPER_HERO:12, WIZARD:12, BALROG:6, DRAGON:9, ELEMENTAL:12,
   ENT:6, GIANT:12, LYCAN:9, ROC:24, TROLL:9, WIGHT:9, WRAITH:18,
   // Fantasy races (Appendix D)
-  ORC:9, GOBLIN:6, KOBOLD:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
+  ORC:9, GIANT_ORC:9, GOBLIN:6, KOBOLD:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
 };
 
 // Charge move distance (p.10 charge column / Appendix D). A declared charge
@@ -898,7 +899,7 @@ const CHARGE_ALLOWANCE = {
   LH:30, MH:24, HH:18, MK:18,
   HERO:15, SUPER_HERO:15, WIZARD:12, BALROG:9, DRAGON:15, ELEMENTAL:12,
   ENT:6, GIANT:18, LYCAN:12, ROC:24, TROLL:12, WIGHT:9, WRAITH:24,
-  ORC:12, GOBLIN:9, KOBOLD:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
+  ORC:12, GIANT_ORC:12, GOBLIN:9, KOBOLD:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
 };
 
 // Move/counter-move turn sequence (Slice 8D, p.9). `side` marks the two move
@@ -1021,7 +1022,7 @@ const magicMeta    = (u) => MAGIC_CLASS_META[magicClassOf(u)];
 function unitMorale(u) {
   if (isMagicUser(u)) return magicMeta(u).morale;
   const t = typeById(u.type);
-  return t ? t.morale : '—';
+  return t ? lightMoraleRating(u, t.morale) : '—';
 }
 
 // --- Wizard missiles (p.31) ----------------------------------------------
@@ -1122,12 +1123,12 @@ const SPELL_DESC = Object.freeze({
 // (TROLL) and giants. Excluded: magical creatures (Balrog, Dragon, Elemental, Wraith,
 // Wight, Ent, Roc, Lycanthrope). The dock picker is built from this list — edit to recut.
 const POLYMORPH_FORMS = Object.freeze([
-  'MAN', 'HOBBIT', 'SPRITE', 'GNOME', 'DWARF', 'KOBOLD', 'GOBLIN', 'ORC', 'ELF',
+  'MAN', 'HOBBIT', 'SPRITE', 'GNOME', 'DWARF', 'KOBOLD', 'GOBLIN', 'ORC', 'GIANT_ORC', 'ELF',
   'HERO', 'SUPER_HERO', 'TROLL', 'GIANT',
 ]);
 // Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
 // (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
-const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC']);
+const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC']);
 function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.type)); }
 // --- Concealment & Detection (p.31-32) -----------------------------------
 // A unit may be hidden via the Concealment spell or innate invisibility; the flag
@@ -1261,6 +1262,19 @@ function litByWizardLight(x, y) {
   const c = state.units.find(u => u.id === wl.casterId); if (!c) return false;
   return Math.hypot(x - c.x, y - c.y) <= inchesToPx(WIZARD_LIGHT_RANGE_IN);
 }
+// Orcs react to full daylight / bright light as Goblins do (p.29): -1 morale
+// and -1 from each die they roll. The board has no ambient-daylight toggle yet,
+// so this fires for Wizard Light now; a future UI can set settings.fullBrightLight.
+const LIGHT_SENSITIVE_TYPES = new Set(['ORC', 'GIANT_ORC']);
+function inBrightLight(u) {
+  if (!u || u.destroyed) return false;
+  return !!(state.settings && state.settings.fullBrightLight) || litByWizardLight(u.x, u.y);
+}
+function lightPenaltyApplies(u) { return !!u && LIGHT_SENSITIVE_TYPES.has(u.type) && inBrightLight(u); }
+function lightDiePenalty(u) { return lightPenaltyApplies(u) ? 1 : 0; }
+function lightMoraleRating(u, base) {
+  return lightPenaltyApplies(u) && typeof base === 'number' ? Math.max(1, base - 1) : base;
+}
 // Haste/Slowness (p.32): a timed move-rate change on one unit — u.moveSpell =
 // { kind:'haste'|'slow', untilTurn }. Haste ×1.5 (3 turns), Slowness ×0.5 (2 turns).
 // Fixed-duration, so it needs no maintenance once cast.
@@ -1296,7 +1310,7 @@ const PROTECTION_RADIUS_IN = 6;
 // Rocs, Elementals, men, and anything unlisted default Neutral. Protection from Evil
 // keeps out Chaos.
 const LAW_DEFAULT   = new Set(['HOBBIT', 'DWARF', 'GNOME', 'HERO', 'SUPER_HERO', 'ENT', 'ELF', 'SPRITE']);
-const CHAOS_DEFAULT = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'WRAITH', 'WIGHT', 'TROLL', 'BALROG', 'DRAGON', 'OGRE']);
+const CHAOS_DEFAULT = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC', 'WRAITH', 'WIGHT', 'TROLL', 'BALROG', 'DRAGON', 'OGRE']);
 function defaultAlignment(type) {
   if (CHAOS_DEFAULT.has(type)) return 'chaos';
   if (LAW_DEFAULT.has(type)) return 'law';
@@ -1867,10 +1881,10 @@ function renderCloudkill() {
 // Heavy Foot, Swiss Pikemen → Heavy Foot (note 2 — "Heavy Foot plus weapon", so
 // the pike comes from the weapon adder), Mounted Knights → Heavy Horse. Fantasy
 // races use the Appendix-D values (Sprite 4, Dwarf/Gnome 2, Goblin/Kobold 1½,
-// Elf 4, Orc 2, Hobbit —, costed 0).
+// Elf 4, Orc 2, Giant Orc 2½, Hobbit —, costed 0).
 const TROOP_PV = Object.freeze({
   PE:0.5, LV:0.75, LF:1, HF:2, EHF:2, AF:2.5, LH:3, MH:4, HH:5, SP:2, MK:5,
-  ORC:2, GOBLIN:1.5, KOBOLD:1.5, DWARF:2, GNOME:2, ELF:4, HOBBIT:0, SPRITE:4,
+  ORC:2, GIANT_ORC:2.5, GOBLIN:1.5, KOBOLD:1.5, DWARF:2, GNOME:2, ELF:4, HOBBIT:0, SPRITE:4,
 });
 // Weapon adders (p.27), per figure. Thrown weapons carry no listed cost (0).
 const WEAPON_PV = Object.freeze({
@@ -1955,7 +1969,7 @@ const MTM_TYPES = Object.freeze([
 // Fantasy races (Appendix D) are ordinary fighters with no Fantasy Combat Table
 // row — a single one duels man-to-man (weapon × armor). They already exist as
 // mass TYPES; this is the subset surfaced in the individual picker.
-const FANTASY_RACE_IDS = ['ELF', 'ORC', 'HOBBIT', 'SPRITE', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD'];
+const FANTASY_RACE_IDS = ['ELF', 'ORC', 'GIANT_ORC', 'HOBBIT', 'SPRITE', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD'];
 const FANTASY_RACE_TYPES = FANTASY_RACE_IDS.map(id => TYPES.find(t => t.id === id)).filter(Boolean);
 
 // Figure size tiers (fantasy supp. scale table). Drives an individual's
@@ -1978,7 +1992,7 @@ const SIZE_BY_TYPE = {
   // Fantasy races (scale table)
   HOBBIT: 'tiny', SPRITE: 'tiny',
   DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
-  ELF: 'man', ORC: 'man',
+  ELF: 'man', ORC: 'man', GIANT_ORC: 'man',
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -2098,10 +2112,10 @@ function applyDieBonus(kills, bonus) {
   for (let v = min - bonus; v < min; v++) if (v >= 1 && v <= 6) out.add(v);
   return [...out].sort((a, b) => a - b);
 }
-function rollKills(numDice, kills, rng) {
+function rollKills(numDice, kills, rng, diePenalty = 0) {
   const dice = []; let n = 0;
   for (let i = 0; i < numDice; i++) {
-    const r = d6(rng); dice.push(r);
+    const r = Math.max(0, d6(rng) - diePenalty); dice.push(r);
     if (kills.includes(r)) n++;
   }
   return { dice, kills: n };
@@ -2122,11 +2136,12 @@ function resolveMassMelee({ attacker, defender, rng }) {
   if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
   const aTotal = Math.floor((attacker.activeCount ?? attacker.count) * aDPM) + (attacker.bonusDice || 0);
   const aKills = applyDieBonus(aRow.kills, aBonus ? 1 : 0);
-  const aRoll = rollKills(aTotal, aKills, rng);
+  const aDiePenalty = attacker.diePenalty || 0;
+  const aRoll = rollKills(aTotal, aKills, rng, aDiePenalty);
   result.attacker = {
     type:aT.id, startCount:attacker.count, effectiveClass:aEff, dicePerMan:aDPM, totalDice:aTotal,
     polearmApplied:aPolearm, impetusApplied:IMPETUS_CLASSES.has(aT.cls) && attacker.impetus,
-    flankBumpToBonus:aBonus, fatigueApplied: !!attacker.fatigued,
+    flankBumpToBonus:aBonus, fatigueApplied: !!attacker.fatigued, diePenalty:aDiePenalty,
     killScores:aKills, dice:aRoll.dice, killsDealt:aRoll.kills,
   };
 
@@ -2142,12 +2157,13 @@ function resolveMassMelee({ attacker, defender, rng }) {
     if (dPolearm) dDPM += 1;
     if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
     const dTotal = Math.floor((defender.activeCount ?? defender.count) * dDPM) + (defender.bonusDice || 0);
-    const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng) : { dice:[], kills:0 };
+    const dDiePenalty = defender.diePenalty || 0;
+    const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng, dDiePenalty) : { dice:[], kills:0 };
     result.defender = {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
       dicePerMan:dDPM, totalDice:dTotal, polearmApplied:dPolearm,
       impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
-      standingHorseApplied: dRetCls !== dT.cls, fatigueApplied: !!defender.fatigued,
+      standingHorseApplied: dRetCls !== dT.cls, fatigueApplied: !!defender.fatigued, diePenalty:dDiePenalty,
       killScores:dRow ? dRow.kills : [],
       dice:dRoll.dice, killsDealt:dRoll.kills,
     };
@@ -2171,7 +2187,9 @@ function resolvePostMelee({ a, b, rng }) {
     casDie = d6(rng);
     // Fatigue rule C (p.10): -1 to dice rolls when the rolling unit is fatigued.
     const rollingFatigued = (fewerSide === 'A' && a.fatigued) || (fewerSide === 'B' && b.fatigued);
+    const casDiePenalty = fewerSide === 'A' ? (a.diePenalty || 0) : (b.diePenalty || 0);
     if (rollingFatigued) { casFatPenalty = 1; casDie = Math.max(1, casDie - 1); }
+    if (casDiePenalty) casDie = Math.max(0, casDie - casDiePenalty);
     casBonus = casDiff * casDie;
   }
   let moreSide=null, survDiff=0;
@@ -2190,22 +2208,30 @@ function resolvePostMelee({ a, b, rng }) {
   return {
     a:{ surviving:aSurv, ratingScore:aRating, total:aTotal },
     b:{ surviving:bSurv, ratingScore:bRating, total:bTotal },
-    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus, fatiguePenalty:casFatPenalty },
+    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus, fatiguePenalty:casFatPenalty,
+      lightPenalty: fewerSide === 'A' ? (a.diePenalty || 0) : (fewerSide === 'B' ? (b.diePenalty || 0) : 0) },
     survivorBonus:{ side:moreSide, diff:survDiff, value:survDiff },
     rawDiff: Math.abs(aTotal - bTotal), diff, doubled, loser, reaction: reactionFor(diff),
   };
 }
 
-function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued }) {
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued, diePenalty = 0 }) {
   const t = typeById(type);
   const pct = casualties / startCount;
   if (pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
   const dice = roll2d6(rng);
   const fatiguePenalty = fatigued ? 1 : 0;
-  const effectiveSum = Math.max(2, dice.sum - fatiguePenalty);
+  const lightPenaltyTotal = diePenalty * 2;   // 2d6: -1 from each die rolled
+  const effectiveSum = Math.max(0, dice.sum - fatiguePenalty - lightPenaltyTotal);
   const passed = effectiveSum >= t.loss.score;
-  return { triggered:true, pct, threshold:t.loss, dice, fatiguePenalty, effectiveSum, passed,
+  return { triggered:true, pct, threshold:t.loss, dice, fatiguePenalty, diePenalty, lightPenaltyTotal, effectiveSum, passed,
     action: passed ? 'stable' : (surrounded ? 'surrender' : 'removed') };
+}
+function lossMoraleTail(lr) {
+  const parts = [];
+  if (lr.fatiguePenalty) parts.push(`${lr.fatiguePenalty} fatigue`);
+  if (lr.lightPenaltyTotal) parts.push(`${lr.lightPenaltyTotal} bright light`);
+  return parts.length ? ` − ${parts.join(' − ')} = <b>${lr.effectiveSum}</b>` : '';
 }
 
 // Cavalry-charge morale (p.17). When a mounted unit charges, the defender
@@ -2257,7 +2283,7 @@ function rollPrisoners({ winnerType, loserType, rng }) {
   const noPrisoners = winnerType === 'SP';  // Swiss/Landsknechte take no prisoners
   return { wDie, lDie, count, formula, noPrisoners };
 }
-function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, rng }) {
+function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, diePenalty = 0, rng }) {
   if (!isMountedType(charger.type)) return null;
   // SP/Landsknechte with polearm facing the enemy auto-stand any charge (p.17)
   if (defender.type === 'SP' && defender.polearm && edge === 'front') {
@@ -2273,9 +2299,10 @@ function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, r
   if (edge === 'left' || edge === 'right') modifier -= 1;
   else if (edge === 'rear') modifier -= 2;
   const fatiguePenalty = fatigued ? 1 : 0;
-  const total = dice.sum + bonus + modifier - fatiguePenalty;
+  const lightPenaltyTotal = diePenalty * 2;
+  const total = dice.sum + bonus + modifier - fatiguePenalty - lightPenaltyTotal;
   const passed = total >= target;
-  return { autoStand:false, target, dice, bonus, modifier, fatiguePenalty, total, passed,
+  return { autoStand:false, target, dice, bonus, modifier, fatiguePenalty, diePenalty, lightPenaltyTotal, total, passed,
     chargerType: charger.type, defenderType: defender.type, chargerClass: cls, edge };
 }
 
@@ -2453,7 +2480,7 @@ function rangeBand(distance, range) {
   if (distance <= 2 * t) return 'medium';
   return 'max';
 }
-function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, bonus = 0, indirect = false, rng }) {
+function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, bonus = 0, diePenalty = 0, indirect = false, rng }) {
   let effRange = weapon.range;
   let effArmor = armorIdx;
   let arrowProof = false;
@@ -2470,9 +2497,9 @@ function resolveIndividualMissile({ weapon, distance, armorIdx, cover = 0, bonus
   const target = row[BAND_INDEX[band]];
   if (target === null) return { ok:true, band, target:null, kill:false, reason:'no kill possible at this range/armor' };
   const dice = roll2d6(rng);
-  const total = dice.sum - cover + bonus;
+  const total = dice.sum - cover + bonus - diePenalty * 2;
   return {
-    ok:true, band, target, dice, cover, bonus, total,
+    ok:true, band, target, dice, cover, bonus, diePenalty, total,
     kill: total >= target, effRange, effArmor, indirect,
   };
 }
@@ -2484,6 +2511,7 @@ const MASS_TO_INDIV_ARMOR_IDX = {
   PE: 0, LV: 1, LF: 1,
   HF: 4, EHF: 4, SP: 4, AF: 6,
   LH: 1, MH: 4, HH: 6, MK: 6,
+  GIANT_ORC: 6,
 };
 // Fantasy-type fallback when an individual without u.armor set is hit. Real
 // rules use special defense for monsters; this is a usable approximation.
@@ -2491,6 +2519,7 @@ const FANTASY_TO_INDIV_ARMOR_IDX = {
   HERO: 4, SUPER_HERO: 5, WIZARD: 0,
   TROLL: 1, WIGHT: 0, WRAITH: 0, LYCAN: 1,
   GIANT: 1, ENT: 4, ROC: 4, DRAGON: 6, BALROG: 6, ELEMENTAL: 0,
+  GIANT_ORC: 6,
 };
 function targetArmorIdx(target) {
   if (target.kind === 'individual') {
@@ -2590,7 +2619,7 @@ function findFiringBand(count, bands) {
   for (const b of bands) if (count >= b.range[0] && count <= b.range[1]) return b;
   return bands[bands.length - 1];
 }
-function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=false, dieBonus=0, rng }) {
+function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=false, dieBonus=0, diePenalty=0, rng }) {
   let group = armorGroup, bumped = false;
   if (indirect) {
     const next = INDIRECT_BUMP[group];
@@ -2602,12 +2631,13 @@ function resolveMassMissile({ firingCount, armorGroup, cover=false, indirect=fal
   const results = []; let total = 0;
   for (const s of subs) {
     const die = d6(rng);
-    const adjDie = die + dieBonus;   // heavy crossbow +1 to the fire die (p.12)
+    const adjDie = die + dieBonus - diePenalty;   // heavy crossbow +1; bright-light Orc penalty -1
     const band = findFiringBand(s, tab.firingBands);
     if (!band) { results.push({ count:s, die, kills:0, reason:'below minimum band' }); continue; }
-    const isLow = adjDie >= tab.dieBands[0][0] && adjDie <= tab.dieBands[0][1];
-    const kills = isLow ? band.low : band.high;
-    results.push({ count:s, die, dieBonus, isLow, band, kills });
+    const belowBand = adjDie < tab.dieBands[0][0];
+    const isLow = !belowBand && adjDie >= tab.dieBands[0][0] && adjDie <= tab.dieBands[0][1];
+    const kills = belowBand ? 0 : (isLow ? band.low : band.high);
+    results.push({ count:s, die, adjustedDie:adjDie, dieBonus, diePenalty, belowBand, isLow, band, kills });
     total += kills;
   }
   return { armorGroup:group, indirectApplied:bumped, groups:results,
@@ -2755,10 +2785,10 @@ function arquebusHitOn(rangeIn) {
   return b ? b.hitOn : null;
 }
 // cover: 'none' | 'half' (-1) | 'over' (-2). support: weapon rested = +1.
-function resolveArquebus({ rangeIn, shooters, cover = 'none', support = false, rng }) {
+function resolveArquebus({ rangeIn, shooters, cover = 'none', support = false, diePenalty = 0, rng }) {
   const hitOn = arquebusHitOn(rangeIn);
   if (hitOn == null) return { inRange: false, kills: 0, rolls: [] };
-  const mod = (support ? 1 : 0) - (cover === 'half' ? 1 : cover === 'over' ? 2 : 0);
+  const mod = (support ? 1 : 0) - (cover === 'half' ? 1 : cover === 'over' ? 2 : 0) - diePenalty;
   const rolls = []; let kills = 0;
   for (let i = 0; i < shooters; i++) {
     const die = d6(rng);
@@ -2766,7 +2796,7 @@ function resolveArquebus({ rangeIn, shooters, cover = 'none', support = false, r
     if (hit) kills++;
     rolls.push({ die, score: die + mod, hit });
   }
-  return { inRange: true, hitOn, mod, kills, rolls };
+  return { inRange: true, hitOn, mod, diePenalty, kills, rolls };
 }
 // Cannon (p.14): dowel sections muzzle->target, alternating White/Black, lengths sum to range.
 // Firer names a colour; every figure that colour touches is eliminated. Bombard may fire indirect.
@@ -5691,10 +5721,10 @@ function resolveRockDrop() {
     } else {
       html += `<div class="verdict v-killed">${killed} climber${killed === 1 ? '' : 's'} killed → ${d.count}/${d.startCount}</div>`;
       const cas = d.startCount - d.count;
-      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue });
+      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
-        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        const fatTail = lossMoraleTail(lr);
         html += `<div class="step">${d.side} · ${dName} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
         html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
         if (!lr.passed) d.destroyed = true;
@@ -7394,7 +7424,7 @@ function onResolveMelee() {
   if (round === 1 && state.settings.applyCavalryChargeMorale && a.charged && isMountedType(a.type)) {
     const mutual = !!d.charged;
     const dFat = !!d.fatigued && state.settings.applyFatigue;
-    const cc = cavalryChargeCheck({ charger: a, defender: d, edge, mutualCharge: mutual, fatigued: dFat, rng: state.rng });
+    const cc = cavalryChargeCheck({ charger: a, defender: d, edge, mutualCharge: mutual, fatigued: dFat, diePenalty: lightDiePenalty(d), rng: state.rng });
     if (cc) {
       const aTpre = typeById(a.type), dTpre = typeById(d.type);
       if (cc.autoStand) {
@@ -7405,6 +7435,7 @@ function onResolveMelee() {
         if (cc.bonus) mods.push(`+${cc.bonus} mutual charge`);
         if (cc.modifier) mods.push(`${cc.modifier} ${cc.edge}`);
         if (cc.fatiguePenalty) mods.push(`-${cc.fatiguePenalty} fatigue`);
+        if (cc.lightPenaltyTotal) mods.push(`-${cc.lightPenaltyTotal} bright light`);
         const modStr = mods.length ? ` · ${mods.join(' · ')}` : '';
         chargeMoraleHtml += `<div class="step"><b style="color:var(--side-b-d)">B · ${dTpre.name}</b> ` +
           `charge morale vs ${aTpre.name} (${cc.chargerClass}) — needs ${cc.target}+, ` +
@@ -7441,6 +7472,7 @@ function onResolveMelee() {
     flank: edge === 'left' || edge === 'right',
     rear: edge === 'rear',
     fatigued: !!a.fatigued && state.settings.applyFatigue,
+    diePenalty: lightDiePenalty(a),
   };
   const defenderParams = {
     type: d.type, count: d.count, activeCount: activeFigures(d),
@@ -7449,6 +7481,7 @@ function onResolveMelee() {
     impetus: !!d.charged,
     standingHorseFirstRound: false,
     fatigued: !!d.fatigued && state.settings.applyFatigue,
+    diePenalty: lightDiePenalty(d),
   };
   // Magic-armed Elves add dice keyed to the opponent (elf entry, p.29). A
   // swordless Elf (u.magicWeapon falsy) gets nothing — the bonus is the sword's.
@@ -7462,6 +7495,7 @@ function onResolveMelee() {
   let html = chargeMoraleHtml;
   const aMods = [];
   if (melee.attacker.fatigueApplied)   aMods.push('fatigued (one class down)');
+  if (melee.attacker.diePenalty)      aMods.push('bright light −1/die');
   if (melee.attacker.polearmApplied)  aMods.push('pike/halberd +1/man');
   if (melee.attacker.impetusApplied)  aMods.push('impetus +1/man');
   if (melee.attacker.flankBumpToBonus) aMods.push('flank/rear → +1/die');
@@ -7471,6 +7505,7 @@ function onResolveMelee() {
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
   if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
+  if (melee.defender.diePenalty)    dMods.push('bright light −1/die');
   if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
   if (dElfBonus) dMods.push(`magic weapons +${dElfBonus} dice vs ${aT.name}`);
 
@@ -7525,18 +7560,21 @@ function onResolveMelee() {
   // Post-melee morale (fatigued unit drops -1 morale rating and -1 on its d6, p.10)
   const aFatigued = !!a.fatigued && state.settings.applyFatigue;
   const dFatigued = !!d.fatigued && state.settings.applyFatigue;
-  const aMorale = aFatigued ? Math.max(1, aT.morale - 1) : aT.morale;
-  const dMorale = dFatigued ? Math.max(1, dT.morale - 1) : dT.morale;
+  const aMorale = lightMoraleRating(a, aFatigued ? Math.max(1, aT.morale - 1) : aT.morale);
+  const dMorale = lightMoraleRating(d, dFatigued ? Math.max(1, dT.morale - 1) : dT.morale);
   const pm = resolvePostMelee({
-    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale, fatigued: aFatigued },
-    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale, fatigued: dFatigued },
+    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale, fatigued: aFatigued, diePenalty: lightDiePenalty(a) },
+    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale, fatigued: dFatigued, diePenalty: lightDiePenalty(d) },
     rng: state.rng,
   });
   const fatNote = pm.casualtyBonus.fatiguePenalty
     ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${pm.casualtyBonus.side} d6 -1 fatigue</small>`
     : '';
+  const lightNote = pm.casualtyBonus.lightPenalty
+    ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${pm.casualtyBonus.side} d6 -1 bright light</small>`
+    : '';
   html += `<div class="step">post-melee — A total ${pm.a.total} vs B total ${pm.b.total} · ` +
-          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}${fatNote}</div>`;
+          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}${fatNote}${lightNote}</div>`;
   const tag = pm.reaction.tag;
   const loserName = pm.loser ? (pm.loser === 'A' ? aT.name : dT.name) : null;
   // Annihilation override: if the loser hits 0 figures from this melee's casualties,
@@ -7609,7 +7647,7 @@ function onResolveMelee() {
     if (unit.destroyed || unit.status === 'surrendered') continue;
     const cas = unit.startCount - unit.count;
     const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng,
-      fatigued: !!unit.fatigued && state.settings.applyFatigue });
+      fatigued: !!unit.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(unit) });
     if (!lr.triggered) continue;
     const pct = (lr.pct*100).toFixed(1);
     const thr = (lr.threshold.pct*100).toFixed(1);
@@ -7904,10 +7942,10 @@ function onResolveMixed(a, d) {
     if (massCas > 0) {
       const cas = mass.startCount - mass.count;
       const lr = resolveLossMorale({ type: mass.type, startCount: mass.startCount, casualties: cas, surrounded: false,
-        rng: state.rng, fatigued: !!mass.fatigued && state.settings.applyFatigue });
+        rng: state.rng, fatigued: !!mass.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(mass) });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
-        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        const fatTail = lossMoraleTail(lr);
         html += `<div class="step">${massSide} · ${massT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
                 `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
         html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${massSide} ${lr.passed?'holds':lr.action}</div>`;
@@ -8028,10 +8066,10 @@ function resolveMissilePhase() {
       if (!d.destroyed) {
         const cas = d.startCount - d.count;
         const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
-          fatigued: !!d.fatigued && state.settings.applyFatigue });
+          fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
         if (lr.triggered) {
           const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
-          const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+          const fatTail = lossMoraleTail(lr);
           html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, ` +
                   `rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
           html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
@@ -8118,7 +8156,7 @@ function onResolveMissile() {
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
   if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
-  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), diePenalty: lightDiePenalty(a), rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
   const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
@@ -8141,8 +8179,9 @@ function onResolveMissile() {
     if (g.reason) {
       html += `<div class="step">group ${i+1} · ${g.count} firing · d6=${g.die} → ${g.reason} → <b>0</b></div>`;
     } else {
+      const dieAdj = (g.dieBonus || g.diePenalty) ? ` → ${g.adjustedDie}` : '';
       html += `<div class="step">group ${i+1} · ${g.count} firing · ` +
-              `d6=${g.die} (${g.isLow?'low':'high'}) → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
+              `d6=${g.die}${dieAdj} (${g.belowBand ? 'below' : (g.isLow ? 'low' : 'high')}) → <b>${g.kills}</b> kill${g.kills===1?'':'s'}</div>`;
     }
   });
   if (cover && res.totalRaw !== res.totalKills) {
@@ -8165,7 +8204,7 @@ function onResolveMissile() {
   if (!d.destroyed) {
     const cas = d.startCount - d.count;
     const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng,
-      fatigued: !!d.fatigued && state.settings.applyFatigue });
+      fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
     if (lr.triggered) {
       const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
       const fatTail = lr.fatiguePenalty
@@ -8213,7 +8252,7 @@ function onIndivMissile(a, d) {
   const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const coverPenalty = indirect ? 0 : coverDiceMinus(dCover);
   const r = resolveIndividualMissile({
-    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, bonus: missileDieBonus(a), indirect, rng: state.rng,
+    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, bonus: missileDieBonus(a), diePenalty: lightDiePenalty(a), indirect, rng: state.rng,
   });
 
   const tags = [];
@@ -8238,8 +8277,10 @@ function onIndivMissile(a, d) {
     html += `<div class="verdict v-noeffect">no effect</div>`;
   } else {
     const coverStr = r.cover ? ` − ${r.cover} cover` : '';
+    const lightStr = r.diePenalty ? ` − ${r.diePenalty * 2} bright light` : '';
+    const adjStr = (r.cover || r.diePenalty) ? ` = <b>${r.total}</b>` : '';
     html += `<div class="step">band ${r.band} · TN ${r.target}+ · 2d6 = ${r.dice.a}+${r.dice.b} = ` +
-            `<b>${r.dice.sum}</b>${coverStr}${r.cover?` = <b>${r.total}</b>`:''} → ` +
+            `<b>${r.dice.sum}</b>${coverStr}${lightStr}${adjStr} → ` +
             (r.kill ? `<b style="color:#a3322a">HIT</b>` : 'miss') + `</div>`;
     if (r.kill) {
       if (simMissilePhase()) {
@@ -8262,7 +8303,7 @@ function onIndivMissile(a, d) {
         if (!d.destroyed) {
           const cas = d.startCount - d.count;
           const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
-            fatigued: !!d.fatigued && state.settings.applyFatigue });
+            fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
           if (lr.triggered) {
             const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
             const fatTail = lr.fatiguePenalty
@@ -8328,7 +8369,7 @@ function onMassMissileAtIndiv(a, d) {
   const firingFront = firingCount;
   // Hobbit slingers count three for every two firing (Appendix D accuracy).
   if (a.type === 'HOBBIT') firingCount = Math.floor(firingCount * 1.5);
-  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), rng: state.rng });
+  const res = resolveMassMissile({ firingCount, armorGroup: baseGroup, cover, indirect, dieBonus: missileDieBonus(a), diePenalty: lightDiePenalty(a), rng: state.rng });
 
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${firingFront} firing (front 2 ranks of ${a.count})</small>` : '';
   const hobbitNote = a.type === 'HOBBIT' ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· hobbit slings: every 2 count 3 → ${firingCount} on the table</small>` : '';
@@ -8411,13 +8452,14 @@ function onArquebusFire(a, d) {
   const shooters = a.kind === 'individual' ? 1 : Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = a.kind !== 'individual' && shooters < a.count;
   const cov = arquebusCover(effectiveCoverVs(d, a));
-  const res = resolveArquebus({ rangeIn: reach.distanceIn, shooters, cover: cov, support: false, rng: state.rng });
+  const res = resolveArquebus({ rangeIn: reach.distanceIn, shooters, cover: cov, support: false, diePenalty: lightDiePenalty(a), rng: state.rng });
   if (!res.inRange) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">out of arquebus range (${reach.distanceIn.toFixed(1)}″ > 18″)</div>`); return; }
   const n = res.kills;
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${shooters} firing (front 2 ranks of ${a.count})</small>` : '';
   const covNote = cov === 'none' ? '' : ` · ${cov === 'over' ? 'over-½ hard cover (−2)' : 'hard cover (−1)'}`;
+  const lightNote = res.diePenalty ? ' · bright light −1/die' : '';
   const who = a.kind === 'individual' ? aT.name : `${aT.name} × ${a.count}`;
-  let html = `<div class="step">${a.side} · ${who} fires arquebus at ${d.side} · ${dT.name} · distance ${reach.distanceIn.toFixed(1)}″ · ignores armour (p.13)${covNote}${rankNote} · ${shooters} firing · need ${res.hitOn}+ → <b>${n}</b> hit${n===1?'':'s'}</div>`;
+  let html = `<div class="step">${a.side} · ${who} fires arquebus at ${d.side} · ${dT.name} · distance ${reach.distanceIn.toFixed(1)}″ · ignores armour (p.13)${covNote}${lightNote}${rankNote} · ${shooters} firing · need ${res.hitOn}+ → <b>${n}</b> hit${n===1?'':'s'}</div>`;
   if (simMissilePhase()) {
     d.pendingHits = (d.pendingHits || 0) + n;
     html += `<div class="step" style="color:var(--ink-soft)">simultaneous fire — ${n} hit${n===1?'':'s'} pending; applied when the missile phase ends (p.9)</div>`;
@@ -8443,10 +8485,10 @@ function onArquebusFire(a, d) {
     } else {
       html += `<div class="verdict v-${n>0?'killed':'noeffect'}">${n} kill${n===1?'':'s'}${n>0?` → ${d.count}/${d.startCount}`:''}</div>`;
       const cas = d.startCount - d.count;
-      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue });
+      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
-        const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+        const fatTail = lossMoraleTail(lr);
         html += `<div class="step">${d.side} · ${dT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
         html += `<div class="verdict v-${lr.passed?'stable':lr.action}">${d.side} ${lr.passed?'holds':lr.action}</div>`;
         if (!lr.passed) d.destroyed = true;
@@ -8533,10 +8575,10 @@ function onResolveDragonBreath(dragon) {
       if (!u.destroyed) {
         const cas = u.startCount - u.count;
         const lr = resolveLossMorale({ type:u.type, startCount:u.startCount, casualties:cas, surrounded:false, rng:state.rng,
-          fatigued: !!u.fatigued && state.settings.applyFatigue });
+          fatigued: !!u.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(u) });
         if (lr.triggered) {
           const pct = (lr.pct * 100).toFixed(1), thr = (lr.threshold.pct * 100).toFixed(1);
-          const fatTail = lr.fatiguePenalty ? ` − ${lr.fatiguePenalty} fatigue = <b>${lr.effectiveSum}</b>` : '';
+          const fatTail = lossMoraleTail(lr);
           html += `<div class="step">${u.side} · ${uT.name} loss check — ${pct}% ≥ ${thr}%, needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${fatTail}</div>`;
           html += `<div class="verdict v-${lr.passed ? 'stable' : lr.action}">${u.side} ${lr.passed ? 'holds' : lr.action}</div>`;
           if (!lr.passed) { u.destroyed = true; cleanupEngagementsForUnit(u.id); if (u.id === state.targetId) state.targetId = null; }
@@ -9626,6 +9668,17 @@ renderBoard();
   console.assert(lmFat.fatiguePenalty === 1 && lmFat.effectiveSum === 6 && lmFat.passed === false, 'fatigue −1: 7 → 6 fails HF 7+');
   const lmNone = resolveLossMorale({ type:'HF', startCount:30, casualties:5, surrounded:false, rng: always(6), fatigued:false });
   console.assert(lmNone.triggered === false, 'HF 16.7% below threshold → no check');
+  const lmLight = resolveLossMorale({ type:'ORC', startCount:30, casualties:11, surrounded:false, rng: always(4), fatigued:false, diePenalty:1 });
+  console.assert(lmLight.effectiveSum === 6 && lmLight.passed === false, 'orc bright light: loss morale subtracts 1 from each d6');
+  const orcChargeLight = cavalryChargeCheck({ charger:{ type:'LH' }, defender:{ type:'ORC' }, edge:'front', mutualCharge:false, fatigued:false, diePenalty:1, rng: always(4) });
+  console.assert(orcChargeLight.total === 6 && orcChargeLight.passed === false, 'orc bright light: charge morale subtracts 1 from each d6');
+  const orcMeleeLight = resolveMassMelee({ attacker:{ type:'ORC', count:6, diePenalty:1 }, defender:{ type:'HF', count:6 }, rng: always(6) });
+  console.assert(orcMeleeLight.attacker.killsDealt === 0, 'orc bright light: melee dice are each reduced by 1');
+  const orcMissileLight = resolveMassMissile({ firingCount:10, armorGroup:'unarmored', diePenalty:1, rng: always(1) });
+  console.assert(orcMissileLight.totalKills === 0 && orcMissileLight.groups[0].belowBand, 'orc bright light: missile d6 can fall below low band');
+  const orcArquebusLight = resolveArquebus({ rangeIn:6, shooters:1, diePenalty:1, rng: always(2) });
+  const orcArquebusDark = resolveArquebus({ rangeIn:6, shooters:1, diePenalty:0, rng: always(2) });
+  console.assert(orcArquebusDark.kills === 1 && orcArquebusLight.kills === 0, 'orc bright light: arquebus die is reduced by 1');
 
   // Fantasy combat — HERO vs TROLL base target 9. 12 kills, 9 falls back, 2 no effect.
   const fcKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(6) });
@@ -10066,11 +10119,11 @@ renderBoard();
   console.assert(figuresWithinFootprint(balrog, { ...immMass, x:1000, y:1000 }) === 0, 'immolation: distant mass burns nothing');
 
   // Fantasy races core roster (Slice 7D).
-  console.assert(typeById('ORC').cls === 'HF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, hobbit as LF');
+  console.assert(typeById('ORC').cls === 'HF' && typeById('GIANT_ORC').cls === 'AF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, giant orc AF, hobbit as LF');
   console.assert(defendTypeForMass('GOBLIN') === 'LF' && defendTypeForMass('DWARF') === 'LF', 'goblins/dwarves defend as LF');
   console.assert(defendTypeForMass('ORC') === undefined && defendTypeForMass('ELF') === undefined, 'orcs/elves symmetric (no defend override)');
-  console.assert(sizeOf('HOBBIT') === 'tiny' && sizeOf('GOBLIN') === 'small' && sizeOf('ORC') === 'man', 'race size tiers');
-  console.assert(MOVE_ALLOWANCE.ELF === 12 && MOVE_ALLOWANCE.DWARF === 6 && MOVE_ALLOWANCE.SPRITE === 9, 'race move allowances');
+  console.assert(sizeOf('HOBBIT') === 'tiny' && sizeOf('GOBLIN') === 'small' && sizeOf('ORC') === 'man' && sizeOf('GIANT_ORC') === 'man', 'race size tiers');
+  console.assert(MOVE_ALLOWANCE.ELF === 12 && MOVE_ALLOWANCE.DWARF === 6 && MOVE_ALLOWANCE.SPRITE === 9 && MOVE_ALLOWANCE.GIANT_ORC === 9, 'race move allowances');
   // Goblin defends as LF: HF attacker rolling all-5 kills it (HF-vs-LF kills 5-6),
   // whereas vs an HF defender 5s would miss — confirms the defend class applies.
   const hfVsGoblinLF = resolveMassMelee({ attacker:{ type:'HF', count:10 }, defender:{ type:'GOBLIN', count:20, defendType: defendTypeForMass('GOBLIN') }, rng: always(5) });
@@ -10405,8 +10458,8 @@ renderBoard();
 
   // Man-to-man character creation (p.25-26) + Leader / Berserker modifiers
   console.assert(typeById('MAN').name === 'Man-at-arms' && typeById('BERSERKER').attackMod === -2, 'mtm: MAN + BERSERKER base types resolve via typeById');
-  console.assert(['MAN', 'BERSERKER', 'ELF', 'ORC', 'HOBBIT', 'SPRITE', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD'].every(t => MORTAL_TYPES.has(t)), 'mtm: man + races are mortal → resolve on the Melee Table');
-  console.assert(FANTASY_RACE_TYPES.length === 8 && FANTASY_RACE_TYPES.every(t => t && TYPES.includes(t)), 'mtm: 8 fantasy-race individual types, all drawn from mass TYPES');
+  console.assert(['MAN', 'BERSERKER', 'ELF', 'ORC', 'GIANT_ORC', 'HOBBIT', 'SPRITE', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD'].every(t => MORTAL_TYPES.has(t)), 'mtm: man + races are mortal → resolve on the Melee Table');
+  console.assert(FANTASY_RACE_TYPES.length === 9 && FANTASY_RACE_TYPES.every(t => t && TYPES.includes(t)), 'mtm: 9 fantasy-race individual types, all drawn from mass TYPES');
   { const base = { strikerRole: 'attacker', target: {}, defenderAttackedFrom: 'front', round: 2 };
     console.assert(mtmBlowModifier({ ...base, striker: { leader: true } }) === 1, 'mtm: a leader adds +1 to his dice (p.26)');
     console.assert(mtmBlowModifier({ ...base, striker: { attackMod: -2 } }) === -2, 'mtm: a berserker takes −2 on attack (p.26)');
@@ -10626,6 +10679,7 @@ renderBoard();
   console.assert(unitPointValue({ kind:'works', worksType:'catLight' }) === 15 && unitPointValue({ kind:'works', worksType:'bombard' }) === 30, 'PV: light catapult 15, bombard 30');
   console.assert(unitPointValue({ kind:'individual', type:'DRAGON' }) === 100 && unitPointValue({ kind:'individual', type:'HERO' }) === 20, 'PV: Dragon 100, Hero 20');
   console.assert(unitPointValue({ kind:'mass', type:'HF', count:20 }, 10) === 20, 'PV: countOverride scales mass (10 HF = 20)');
+  console.assert(unitPointValue({ kind:'mass', type:'GIANT_ORC', count:10 }) === 25, 'PV: 10 Giant Orcs = 25');
   (() => { const sv = state.settings.figureScale;
     const u = { kind:'mass', type:'HF', count:20, cols:5, rows:4, spacing:'close' };
     state.settings.figureScale = 1;   const wFull = unitBounds(u).w;
@@ -10651,7 +10705,7 @@ renderBoard();
   console.assert(counterMagicTarget(4,0).target === 11 && counterMagicTarget(4,0).role === 'weaker', 'counter: Seer vs Wizard 11+');
   console.assert(counterMagicTarget(2,1).target === 8 && counterMagicTarget(1,1).target === 7 && counterMagicTarget(1,1).role === 'equal', 'counter: gap 1 -> 8, equal -> 7');
   console.assert(SPELLS.length === 16 && SPELL_BY_KEY.darkness.complexity === 1 && SPELL_BY_KEY.wizardLight.complexity === 1, 'spells: catalog of 16, darkness/light are C1');
-  console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins & wizards see in dark, heavy foot do not');
+  console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ type:'GIANT_ORC' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins/giant orcs & wizards see in dark, heavy foot do not');
   console.assert(SPELL_BY_KEY.haste.done && SPELL_BY_KEY.slowness.done && SPELL_BY_KEY.haste.complexity === 3, 'spells: haste/slowness implemented at C3');
   console.assert(moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn } }) === 1.5 && moveSpellFactor({ moveSpell:{ kind:'slow', untilTurn: state.turn } }) === 0.5 && moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn - 1 } }) === 1 && moveSpellFactor({}) === 1, 'spells: haste 1.5 / slow 0.5 / expired & none 1');
   (() => { const sv = state.darkness, su = state.units, st = state.turn;
@@ -10660,7 +10714,14 @@ renderBoard();
     const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
     console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
-  console.assert(defaultAlignment('ORC') === 'chaos' && defaultAlignment('DRAGON') === 'chaos' && defaultAlignment('WRAITH') === 'chaos', 'align: orc/dragon/wraith default Chaos');
+  (() => { const sw = state.wizardLight, su = state.units;
+    state.units = [{ id: -3, type:'WIZARD', x:300, y:240, destroyed:false }];
+    state.wizardLight = { casterId: -3, side:'A' };
+    const litOrc = { type:'ORC', x:300, y:240 }, darkOrc = { type:'ORC', x:900, y:240 }, man = { type:'HF', x:300, y:240 };
+    console.assert(lightDiePenalty(litOrc) === 1 && lightMoraleRating(litOrc, 5) === 4, 'orc bright light: -1 die and -1 morale');
+    console.assert(lightDiePenalty(darkOrc) === 0 && lightDiePenalty(man) === 0, 'orc bright light: outside light and non-orc no penalty');
+    state.wizardLight = sw; state.units = su; })();
+  console.assert(defaultAlignment('ORC') === 'chaos' && defaultAlignment('GIANT_ORC') === 'chaos' && defaultAlignment('DRAGON') === 'chaos' && defaultAlignment('WRAITH') === 'chaos', 'align: orc/giant orc/dragon/wraith default Chaos');
   console.assert(defaultAlignment('HERO') === 'law' && defaultAlignment('ELF') === 'law' && defaultAlignment('DWARF') === 'law', 'align: hero/elf/dwarf default Law');
   console.assert(defaultAlignment('WIZARD') === 'neutral' && defaultAlignment('GIANT') === 'neutral' && defaultAlignment('LYCAN') === 'neutral' && defaultAlignment('HF') === 'neutral', 'align: two-list figures + men default Neutral');
   console.assert(isChaos({ type:'HERO', alignment:'chaos' }) && !isChaos({ type:'ORC', alignment:'law' }) && isChaos({ type:'ORC', alignment:'evil' }), 'align: per-unit override + legacy evil→chaos');
