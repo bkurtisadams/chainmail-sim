@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.129 · Expand fantasy light/dark handling: Goblins/Kobolds join Orc bright-light morale/die penalties, Wights take full-light die penalties, and darkness-capable creatures can act in full Darkness. Built on v0.11.128. -->
+<!-- chainmail-board.html · v0.11.130 · Add battlefield day/dim/night light state so fantasy light penalties and darkness-capable creatures apply beyond spell effects. Built on v0.11.129. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.129</title>
+<title>Chainmail — Battlefield · v0.11.130</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -60,6 +60,8 @@
     border: 1px solid rgba(216,178,90,0.5); font-weight: 700; }
   .toolbar .hint { display: none; }
   .toolbar .tb-sep { width: 1px; height: 20px; align-self: center; background: var(--rule); opacity: 0.6; margin: 0 3px; }
+  .toolbar .tb-light { display:inline-flex; align-items:center; gap:4px; font-family:var(--sans); font-size:10.5px; letter-spacing:1.2px; text-transform:uppercase; color:var(--ink-soft); }
+  .toolbar .tb-light select { height:26px; padding:2px 6px; font:inherit; letter-spacing:0.6px; text-transform:none; background:#fff8e7; border:1px solid var(--rule); border-radius:3px; color:var(--ink); }
   button { font-family: var(--sans); font-size: 11.5px; letter-spacing: 1.8px; text-transform: uppercase;
     font-weight: 700; background: var(--ink); color: #f3ead4; border: 0; padding: 8px 12px;
     border-radius: 3px; cursor: pointer; }
@@ -317,10 +319,11 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.129</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.130</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
+      <label class="tb-light" title="Battlefield light controls fantasy bright-light penalties and night/dark fighting"><span>Light</span><select id="battlefield-light"><option value="day">Day</option><option value="dim">Dim</option><option value="night">Night</option></select></label>
       <select id="terrain-type" title="Terrain type to place" style="height:26px; padding:2px 6px; font:inherit;" hidden></select>
       <span id="terrain-hint" style="font-size:11px; color:var(--ink-soft); align-self:center;" hidden>roads/rivers: click to lay points · double-click/Enter finish · Esc cancel · right-click body/vertex to add/remove · [ ] width. areas: click place · drag move · handles resize · [ ] rotate. drag vertices · Del remove</span>
       <button id="btn-reset-view" class="secondary" title="Recenter the board (0)">Recenter</button>
@@ -713,7 +716,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.129';
+const SIM_VERSION = '0.11.130';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1288,13 +1291,20 @@ function litByWizardLight(x, y) {
 }
 // Full daylight / bright light penalties (Appendix D): Goblins/Kobolds and
 // Orcs/Giant Orcs take -1 morale and -1 from any die rolled; Wights/Ghouls take
-// only the die penalty in full light. The board has no ambient-daylight toggle yet,
-// so this fires for Wizard Light now; a future UI can set settings.fullBrightLight.
+// only the die penalty in full light. Ambient Day counts as bright light; Dim and
+// Night do not. Wizard Light creates a local bright-light pocket even at night.
+const BATTLEFIELD_LIGHTS = new Set(['day', 'dim', 'night']);
 const LIGHT_MORALE_PENALTY_TYPES = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC']);
 const LIGHT_DIE_PENALTY_TYPES = new Set([...LIGHT_MORALE_PENALTY_TYPES, 'WIGHT']);
+function battlefieldLight() {
+  return BATTLEFIELD_LIGHTS.has(state.battlefieldLight) ? state.battlefieldLight : 'day';
+}
+function ambientBrightLight() { return battlefieldLight() === 'day'; }
+function ambientDarknessLevel() { return battlefieldLight() === 'night' ? 2 : battlefieldLight() === 'dim' ? 1 : 0; }
+function effectiveDarknessLevel() { return Math.max(darknessLevel(), ambientDarknessLevel()); }
 function inBrightLight(u) {
   if (!u || u.destroyed) return false;
-  return !!(state.settings && state.settings.fullBrightLight) || litByWizardLight(u.x, u.y);
+  return ambientBrightLight() || litByWizardLight(u.x, u.y);
 }
 function lightDiePenaltyApplies(u) { return !!u && LIGHT_DIE_PENALTY_TYPES.has(u.type) && inBrightLight(u); }
 function lightMoralePenaltyApplies(u) { return !!u && LIGHT_MORALE_PENALTY_TYPES.has(u.type) && inBrightLight(u); }
@@ -1324,7 +1334,7 @@ function spellTargetOk(spell, a, d) {
 // Combat gate for full darkness (p.31): at level 2, only darkness-capable units
 // or figures standing in a Wizard Light can attack/defend. Levels 0-1 don't restrict combat.
 function canActInDark(u) {
-  if (!u || darknessLevel() < 2) return true;
+  if (!u || effectiveDarknessLevel() < 2) return true;
   return seesInDark(u) || litByWizardLight(u.x, u.y);
 }
 // Protection from Evil (p.31): a 12" diameter (6" radius) ward centred on the caster
@@ -3108,6 +3118,7 @@ const state = {
   firstMover: 'A',      // side that moves first this turn (initiative winner unless they elect to go last)
   initiativeRoll: null, // { a, b, winner } for display
   setup: true,          // deployment mode: free placement before turn 1; Begin battle starts the sequence
+  battlefieldLight: 'day', // ambient battlefield light: day | dim | night; weather remains a later optional-rule layer
   darkness: null,       // active Darkness spell { casterId, side, castTurn } — global gloom (p.31)
   wizardLight: null,    // active Wizard Light { casterId, side } — 24" dispel radius (p.31)
   protection: null,     // active Protection from Evil { casterId, side } — 6" ward (p.31)
@@ -5065,11 +5076,12 @@ function renderWizardMissile() {
 }
 
 function renderDarkness() {
-  const lvl = darknessLevel();
+  const spellLvl = darknessLevel();
+  const lvl = effectiveDarknessLevel();
   const wl = state.wizardLight ? state.units.find(u => u.id === state.wizardLight.casterId) : null;
   let out = '';
   if (lvl > 0) {
-    const op = lvl === 1 ? 0.22 : 0.44;
+    const op = spellLvl >= 2 ? 0.44 : lvl === 2 ? 0.34 : 0.18;
     const r = inchesToPx(WIZARD_LIGHT_RANGE_IN);
     const cut = wl ? `<circle cx="${wl.x}" cy="${wl.y}" r="${r}" fill="black"/>` : '';
     out += `<defs><mask id="darkmask"><rect x="0" y="0" width="${BOARD_W}" height="${BOARD_H}" fill="white"/>${cut}</mask></defs>`
@@ -6715,6 +6727,7 @@ function captureSnapshot() {
     hazards: structuredClone(state.hazards),
     selectedId: state.selectedId, targetId: state.targetId, ctxUnitId: state.ctxUnitId,
     nextId: state.nextId, turn: state.turn, setup: state.setup,
+    battlefieldLight: state.battlefieldLight,
     phaseIdx: state.phaseIdx, firstMover: state.firstMover,
     initiativeRoll: state.initiativeRoll ? { ...state.initiativeRoll } : null,
     rngSeed: state.rngSeed,
@@ -6728,6 +6741,7 @@ function applySnapshot(s) {
   state.hazards = structuredClone(s.hazards || []);
   state.selectedId = s.selectedId; state.targetId = s.targetId; state.ctxUnitId = s.ctxUnitId;
   state.nextId = s.nextId; state.turn = s.turn; state.setup = !!s.setup;
+  state.battlefieldLight = ['day','dim','night'].includes(s.battlefieldLight) ? s.battlefieldLight : 'day';
   state.phaseIdx = s.phaseIdx; state.firstMover = s.firstMover;
   state.initiativeRoll = s.initiativeRoll ? { ...s.initiativeRoll } : null;
   state.rngSeed = s.rngSeed;
@@ -6805,6 +6819,7 @@ function loadScenario(data) {
   const snap = data.state;
   snap.units = snap.units.map(hydrateUnit);
   applySnapshot(snap);
+  syncLightSelect();
   state.editUnitId = null; syncEditMode();                                  // load = fresh context (mirror resetBoard hygiene)
   state.measure.active = false; state.measure.a = state.measure.b = state.measure.live = null; syncMeasureButton();
   state.terrainMode = false; state.terrainDraw = null; state.terrainVertex = null; state.terrainSelId = null; syncTerrainButton();
@@ -6869,7 +6884,7 @@ function _makePreset(units, terrain, wIn, hIn) {
     state: {
       units, engagements: [], terrain,
       selectedId: null, targetId: null, ctxUnitId: null,
-      nextId: n, turn: 1, setup: true, phaseIdx: 0, firstMover: 'A',
+      nextId: n, turn: 1, setup: true, battlefieldLight: 'day', phaseIdx: 0, firstMover: 'A',
       initiativeRoll: null, rngSeed: (Date.now() >>> 0) || 1, logHtml: '',
     },
   };
@@ -9076,6 +9091,20 @@ function resetMoveActions(u) {
   clearActed(u);
 }
 
+
+function syncLightSelect() {
+  const sel = $('#battlefield-light');
+  if (sel) sel.value = battlefieldLight();
+}
+function setBattlefieldLight(value, { log = true } = {}) {
+  if (!BATTLEFIELD_LIGHTS.has(value)) value = 'day';
+  if (state.battlefieldLight === value) return;
+  pushUndo('light');
+  state.battlefieldLight = value;
+  syncLightSelect();
+  renderBoard(); renderTurnUI(); renderSelected();
+  if (log) appendTurn('Battlefield light', `Ambient light set to ${value === 'day' ? 'Day / bright' : value === 'dim' ? 'Dim / twilight' : 'Night / dark'}.`);
+}
 function syncSettingsCheckboxes() {
   document.querySelectorAll('[data-setting]').forEach(el => {
     el.checked = !!state.settings[el.dataset.setting];
@@ -9508,6 +9537,9 @@ $('#roster-list').addEventListener('click', (e) => {
   }
   renderBoard();
 });
+const lightSelEl = $('#battlefield-light');
+if (lightSelEl) lightSelEl.addEventListener('change', e => setBattlefieldLight(e.target.value));
+syncLightSelect();
 $('#settings-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeSettings(); });
 $('#help-modal').addEventListener('click', e => { if (e.target.dataset.act === 'close') closeHelp(); });
 document.querySelectorAll('[data-setting]').forEach(el => el.addEventListener('change', onSettingChange));
