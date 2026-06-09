@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.127 · Add Orc bright-light penalties and Giant Orc support Add Builds on v0.11.125. -->
+<!-- chainmail-board.html · v0.11.129 · Expand fantasy light/dark handling: Goblins/Kobolds join Orc bright-light morale/die penalties, Wights take full-light die penalties, and darkness-capable creatures can act in full Darkness. Built on v0.11.128. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.127</title>
+<title>Chainmail — Battlefield · v0.11.129</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -317,7 +317,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.127</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.129</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -713,7 +713,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.126';
+const SIM_VERSION = '0.11.129';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -1120,7 +1120,7 @@ const SPELL_BY_KEY = Object.freeze(Object.fromEntries(SPELLS.map(sp => [sp.key, 
 // is the single source of truth for the "in sim" marker, so this never drifts.
 const SPELL_DESC = Object.freeze({
   phantasmal:  'Conjures an apparition of a unit or creature; here, a real unit you control for up to 4 turns while the Wizard holds it.',
-  darkness:    'Growing gloom blankets the field until the caster is disturbed; only darkvision fights in full dark.',
+  darkness:    'Growing gloom blankets the field until the caster is disturbed; only darkness-capable creatures or troops in Wizard Light fight in full dark.',
   wizardLight: 'Dispels darkness in a 24″ radius around the caster.',
   detection:   'Reveals hidden enemies or enemy magic (but not against a stronger Wizard).',
   concealment: 'Hides one unit or creature from all but those able to detect the hidden.',
@@ -1145,9 +1145,14 @@ const POLYMORPH_FORMS = Object.freeze([
   'MAN', 'HOBBIT', 'SPRITE', 'GNOME', 'DWARF', 'KOBOLD', 'GOBLIN', 'ORC', 'GIANT_ORC', 'ELF',
   'HERO', 'SUPER_HERO', 'TROLL', 'GIANT',
 ]);
-// Creatures that can see in darkness (p.30): Wizards, plus the light-shunning races
-// (Goblins, Kobolds, Orcs). Used by the Darkness combat gate.
-const SEES_IN_DARK = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC']);
+// Creatures that can fight through darkness. Wizards and the listed monsters can
+// see in darkness; Dwarves/Gnomes are included because their rules say they operate
+// equally well day or night. Used by the Darkness combat gate.
+const SEES_IN_DARK = new Set([
+  'GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC',
+  'DWARF', 'GNOME',
+  'WRAITH', 'LYCAN', 'TROLL', 'BALROG', 'DRAGON', 'WIGHT',
+]);
 function seesInDark(u) { return !!u && (isMagicUser(u) || SEES_IN_DARK.has(u.type)); }
 // --- Concealment & Detection (p.31-32) -----------------------------------
 // A unit may be hidden via the Concealment spell or innate invisibility; the flag
@@ -1281,18 +1286,22 @@ function litByWizardLight(x, y) {
   const c = state.units.find(u => u.id === wl.casterId); if (!c) return false;
   return Math.hypot(x - c.x, y - c.y) <= inchesToPx(WIZARD_LIGHT_RANGE_IN);
 }
-// Orcs react to full daylight / bright light as Goblins do (p.29): -1 morale
-// and -1 from each die they roll. The board has no ambient-daylight toggle yet,
+// Full daylight / bright light penalties (Appendix D): Goblins/Kobolds and
+// Orcs/Giant Orcs take -1 morale and -1 from any die rolled; Wights/Ghouls take
+// only the die penalty in full light. The board has no ambient-daylight toggle yet,
 // so this fires for Wizard Light now; a future UI can set settings.fullBrightLight.
-const LIGHT_SENSITIVE_TYPES = new Set(['ORC', 'GIANT_ORC']);
+const LIGHT_MORALE_PENALTY_TYPES = new Set(['GOBLIN', 'KOBOLD', 'ORC', 'GIANT_ORC']);
+const LIGHT_DIE_PENALTY_TYPES = new Set([...LIGHT_MORALE_PENALTY_TYPES, 'WIGHT']);
 function inBrightLight(u) {
   if (!u || u.destroyed) return false;
   return !!(state.settings && state.settings.fullBrightLight) || litByWizardLight(u.x, u.y);
 }
-function lightPenaltyApplies(u) { return !!u && LIGHT_SENSITIVE_TYPES.has(u.type) && inBrightLight(u); }
-function lightDiePenalty(u) { return lightPenaltyApplies(u) ? 1 : 0; }
+function lightDiePenaltyApplies(u) { return !!u && LIGHT_DIE_PENALTY_TYPES.has(u.type) && inBrightLight(u); }
+function lightMoralePenaltyApplies(u) { return !!u && LIGHT_MORALE_PENALTY_TYPES.has(u.type) && inBrightLight(u); }
+function lightPenaltyApplies(u) { return lightDiePenaltyApplies(u); } // compatibility alias for tests/helpers
+function lightDiePenalty(u) { return lightDiePenaltyApplies(u) ? 1 : 0; }
 function lightMoraleRating(u, base) {
-  return lightPenaltyApplies(u) && typeof base === 'number' ? Math.max(1, base - 1) : base;
+  return lightMoralePenaltyApplies(u) && typeof base === 'number' ? Math.max(1, base - 1) : base;
 }
 // Haste/Slowness (p.32): a timed move-rate change on one unit — u.moveSpell =
 // { kind:'haste'|'slow', untilTurn }. Haste ×1.5 (3 turns), Slowness ×0.5 (2 turns).
@@ -1312,8 +1321,8 @@ function spellTargetOk(spell, a, d) {
   if (need === 'enemy' && d.side === a.side) return false;
   return (d.count || 1) <= 20;   // "up to 20 figures" (p.32)
 }
-// Combat gate for full darkness (p.31): at level 2, only units with darkvision or
-// standing in a Wizard Light can attack/defend. Levels 0-1 don't restrict combat.
+// Combat gate for full darkness (p.31): at level 2, only darkness-capable units
+// or figures standing in a Wizard Light can attack/defend. Levels 0-1 don't restrict combat.
 function canActInDark(u) {
   if (!u || darknessLevel() < 2) return true;
   return seesInDark(u) || litByWizardLight(u.x, u.y);
@@ -5817,14 +5826,14 @@ function updateButtons() {
   const passThroughCase = !!(a && d && canPassThroughFire(a, d));
   const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
   $('#btn-melee').disabled = !(canAct && meleeOk && canMeleeThisTurn(a) && inMeleeContact(a, d) && !a.reform && canActInDark(a) && canPerceive(a, d));
-  $('#btn-melee').title = (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fight (p.31)'
+  $('#btn-melee').title = (a && !canActInDark(a)) ? 'Blind in full darkness — only darkness-capable creatures or a Wizard Light can fight (p.31)'
     : (a && d && !canPerceive(a, d)) ? 'The target is concealed — you cannot see it to fight it (p.32)' : '';
   const missileEnabled = canAct && missileOk && a.weapon && missileShotsRemaining(a) > 0 && inMissileRange(a, d).ok && inFiringArc(a, d) && canActInDark(a) && canPerceive(a, d);
   const gb = giantBoulderState(a, d);
   const boulderReady = !!(gb && gb.ok && (!a.acted || !a.acted.fired) && (!state.settings.enforcePhases || phaseId === 'missile') && canActInDark(a));
   $('#btn-missile').disabled = !(missileEnabled || boulderReady);
   $('#btn-missile').title =
-    (a && !canActInDark(a)) ? 'Blind in full darkness — only darkvision or a Wizard Light can fire (p.31)' :
+    (a && !canActInDark(a)) ? 'Blind in full darkness — only darkness-capable creatures or a Wizard Light can fire (p.31)' :
     (a && d && !canPerceive(a, d)) ? 'The target is concealed — you cannot see it to fire on it (p.32)' :
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
     (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' :
@@ -10725,20 +10734,23 @@ renderBoard();
   console.assert(counterMagicTarget(2,1).target === 8 && counterMagicTarget(1,1).target === 7 && counterMagicTarget(1,1).role === 'equal', 'counter: gap 1 -> 8, equal -> 7');
   console.assert(SPELLS.length === 16 && SPELL_BY_KEY.darkness.complexity === 1 && SPELL_BY_KEY.wizardLight.complexity === 1, 'spells: catalog of 16, darkness/light are C1');
   console.assert(seesInDark({ type:'GOBLIN' }) && seesInDark({ type:'GIANT_ORC' }) && seesInDark({ kind:'individual', type:'WIZARD' }) && !seesInDark({ type:'HF' }), 'darkness: goblins/giant orcs & wizards see in dark, heavy foot do not');
+  console.assert(['DWARF','GNOME','WRAITH','LYCAN','TROLL','BALROG','DRAGON','WIGHT'].every(type => seesInDark({ type })), 'darkness: dwarf/gnome and listed fantastic creatures operate in dark');
   console.assert(SPELL_BY_KEY.haste.done && SPELL_BY_KEY.slowness.done && SPELL_BY_KEY.haste.complexity === 3, 'spells: haste/slowness implemented at C3');
   console.assert(moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn } }) === 1.5 && moveSpellFactor({ moveSpell:{ kind:'slow', untilTurn: state.turn } }) === 0.5 && moveSpellFactor({ moveSpell:{ kind:'haste', untilTurn: state.turn - 1 } }) === 1 && moveSpellFactor({}) === 1, 'spells: haste 1.5 / slow 0.5 / expired & none 1');
   (() => { const sv = state.darkness, su = state.units, st = state.turn;
     state.units = [{ id: -1, type:'WIZARD', x:300, y:240, destroyed:false, movedThisTurn:0 }];
     state.darkness = { casterId: -1, side:'A', castTurn: 1 }; state.turn = 3;   // level 2
-    const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
+    const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), trollOk = canActInDark({ type:'TROLL', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
-    console.assert(ok === true && blind === false, 'darkness gate: darkvision acts, HF blinded at full dark'); })();
+    console.assert(ok === true && trollOk === true && blind === false, 'darkness gate: dark-capable creatures act, HF blinded at full dark'); })();
   (() => { const sw = state.wizardLight, su = state.units;
     state.units = [{ id: -3, type:'WIZARD', x:300, y:240, destroyed:false }];
     state.wizardLight = { casterId: -3, side:'A' };
-    const litOrc = { type:'ORC', x:300, y:240 }, darkOrc = { type:'ORC', x:900, y:240 }, man = { type:'HF', x:300, y:240 };
+    const litOrc = { type:'ORC', x:300, y:240 }, litGoblin = { type:'GOBLIN', x:300, y:240 }, litKobold = { type:'KOBOLD', x:300, y:240 }, litWight = { type:'WIGHT', x:300, y:240 }, darkOrc = { type:'ORC', x:900, y:240 }, man = { type:'HF', x:300, y:240 };
     console.assert(lightDiePenalty(litOrc) === 1 && lightMoraleRating(litOrc, 5) === 4, 'orc bright light: -1 die and -1 morale');
-    console.assert(lightDiePenalty(darkOrc) === 0 && lightDiePenalty(man) === 0, 'orc bright light: outside light and non-orc no penalty');
+    console.assert(lightDiePenalty(litGoblin) === 1 && lightMoraleRating(litGoblin, 5) === 4 && lightDiePenalty(litKobold) === 1 && lightMoraleRating(litKobold, 5) === 4, 'goblin/kobold bright light: -1 die and -1 morale');
+    console.assert(lightDiePenalty(litWight) === 1 && lightMoraleRating(litWight, 10) === 10, 'wight full light: -1 die only, morale unchanged');
+    console.assert(lightDiePenalty(darkOrc) === 0 && lightDiePenalty(man) === 0, 'bright light: outside light and non-sensitive troops no penalty');
     state.wizardLight = sw; state.units = su; })();
   console.assert(defaultAlignment('ORC') === 'chaos' && defaultAlignment('GIANT_ORC') === 'chaos' && defaultAlignment('DRAGON') === 'chaos' && defaultAlignment('WRAITH') === 'chaos', 'align: orc/giant orc/dragon/wraith default Chaos');
   console.assert(defaultAlignment('HERO') === 'law' && defaultAlignment('ELF') === 'law' && defaultAlignment('DWARF') === 'law', 'align: hero/elf/dwarf default Law');
