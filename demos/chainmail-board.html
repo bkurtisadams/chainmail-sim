@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.124 · Wire up the last two Fantasy spells — CONCEALMENT (C3) and DETECTION (C2) — closing the 16-spell list, plus a new concealment STATE the engine lacked. u.concealed={source:’spell’|’innate’,by,penalty}: a hidden unit is physically present but can’t be targeted/fired-at/charged/meleed by an enemy that can’t perceive it (canPerceive gate on melee/missile/pass-through/wizard-missile, with tooltips). Perceivers: own side; innate DETECTORS (SUPER_HERO/WRAITH/DRAGON 15″/ROC 48″ — Roc’s hidden-vs-invisible split stubbed, treated as full detector); or a side under Detection. Reveal-on-attack clears it (hooked at melee + normal-missile + wizard-missile resolution). Concealment (target friend) hides a unit independent of the caster, ending on attack/dispel. Detection (no target) arms state.detection[side], piercing all hidden enemies SAVE a stronger enemy Wizard’s work (penalty compare); lapses if the caster moves or is attacked (maintainSpells). Innate invisibility activated via a Vanish/Reveal toggle for WIZARD/ELF/SPRITE/HOBBIT (Hobbit only in cover). Concealed units render ghosted + HIDDEN badge + Selected-pane row. Tests: perception, Dragon range, stronger-Wizard caveat, both casts, vanish eligibility. node --check clean. Builds on v0.11.123. -->
+<!-- chainmail-board.html · v0.11.125 · Enforce CATAPULT FIRE VS. FANTASTIC FIGURES (p.39): only the lesser fantastic creatures may be crushed by a catapult’s hit area. New CATAPULT_IMMUNE set + catapultImmune() predicate gate resolveCatapultAntipersonnel — a piece under the area whose type is SUPER_HERO/WIZARD/BALROG/DRAGON/ELEMENTAL/GIANT/WRAITH/TROLL is logged “not subject to catapult fire (p.39)” and takes no damage, while Heroes, Wights/Ghouls, Lycanthropes, Ents, Rocs, men-at-arms and every fantasy race stay vulnerable. Trailing verdict now distinguishes immunity from overhead cover (anyImmune flag). RULING: the sim folds Troll & Ogre into one TROLL type — RAW the Ogre is subject, the Troll is not; defaulted to immune (drop TROLL from the set to flip). Giant thrown rock already targets structures only, so no antipersonnel gate needed there. Tests: immune set, vulnerable fantastic types, mass races, null/typeless guard. node --check clean. Builds on v0.11.124. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.124</title>
+<title>Chainmail — Battlefield · v0.11.125</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -298,7 +298,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.124</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.125</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -688,7 +688,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.124';
+const SIM_VERSION = '0.11.125';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2706,6 +2706,18 @@ function catapultScatter(overDie, underDie) {
   if (overDie === underDie) return { dir: 'on', miss: 0 };
   return overDie > underDie ? { dir: 'over', miss: overDie } : { dir: 'under', miss: underDie };
 }
+// CATAPULT FIRE VS. FANTASTIC FIGURES (p.39): only the lesser fantastic creatures
+// — the demi-human races, Heroes/Anti-heroes, Wights/Ghouls, Lycanthropes, Ents and
+// Rocs — can be crushed by a catapult's hit area (this also gates a Giant's thrown
+// rock, though here a Giant only ever targets structures). Everything non-fantastic
+// (men-at-arms, the fantasy races) is always vulnerable, so we gate only on the
+// fantastic-individual types the rule OMITS. Super-Heroes are immune (the list names
+// Heroes and Anti-heroes, not Super-Heroes). RULING: the sim folds Troll & Ogre into
+// one TROLL type; RAW the Ogre IS subject and the Troll is NOT — defaulted to immune
+// (the Troll reading, matching this type's stat block). Drop TROLL from the set to
+// make the merged Troll/Ogre catapult-vulnerable instead.
+const CATAPULT_IMMUNE = new Set(['SUPER_HERO', 'WIZARD', 'BALROG', 'DRAGON', 'ELEMENTAL', 'GIANT', 'WRAITH', 'TROLL']);
+const catapultImmune = (u) => !!u && CATAPULT_IMMUNE.has(u.type);
 // Arquebusiers (p.13): per-man d6 vs a range band (score-or-better); a hit kills any armour.
 const ARQUEBUS_BANDS = [
   { maxRange: 6,  hitOn: 2 },
@@ -5256,12 +5268,17 @@ function resolveCatapultAntipersonnel(a, d, es) {
   const scatterTxt = sc.dir === 'on' ? 'on target' : `${sc.dir}shoot ${sc.miss}″`;
   const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
   let html = `<div class="step">${a.side} ${es.wt.name} calls ${es.r.toFixed(1)}″ at ${d.side} ${nm(d)} · scatter ${o}/${un} → ${scatterTxt} · ${CATAPULTS[es.f.key].hitArea}″ hit area</div>`;
-  let struck = false, anyUnder = false;
+  let struck = false, anyUnder = false, anyImmune = false;
   for (const t of state.units.slice()) {
     if (t.destroyed || t.kind === 'works') continue;
     const n = figuresUnderCircle(t, impact.x, impact.y, radiusPx);
     if (n <= 0) continue;
     anyUnder = true;
+    if (catapultImmune(t)) {
+      anyImmune = true;
+      html += `<div class="step" style="color:var(--ink-soft)">${t.side} ${nm(t)}: not subject to catapult fire (p.39)</div>`;
+      continue;
+    }
     if (effectiveCover(t) !== 'none') {
       html += `<div class="step" style="color:var(--ink-soft)">${t.side} ${nm(t)}: ${n} under the area, spared by overhead cover</div>`;
       continue;
@@ -5288,7 +5305,9 @@ function resolveCatapultAntipersonnel(a, d, es) {
     }
   }
   if (!struck && !anyUnder) html += `<div class="verdict v-noeffect">the rock lands clear — no figures under the hit area</div>`;
-  else if (!struck) html += `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
+  else if (!struck) html += anyImmune
+    ? `<div class="verdict v-noeffect">no effect — nothing under the area could be harmed</div>`
+    : `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
   appendTurn(`${es.wt.name} fires`, html);
 }
 // Cannon dowel fire vs troops (p.13-14): a straight line from the muzzle, with a
@@ -10483,6 +10502,11 @@ renderBoard();
     console.assert(r.remaining === 36 && !r.inflamed && !stone.burning, 'fantastic siege: a Balrog cannot ignite a stone wall'); }
   console.assert(applyCreatureBatter('HERO', { defenseMax:30, defenseLeft:30 }, FANTASTIC_BATTER.HERO) === null, 'fantastic siege: a non-siege creature (no points) cannot batter');
   console.assert(SIEGE_WEAPONS.smallCatapult.points === 2, 'fantastic siege: a Giant out of contact hurls a rock as a small catapult (−2)');
+  // Catapult fire vs fantastic figures (p.39): only the lesser fantastic creatures can be crushed.
+  console.assert(['SUPER_HERO','WIZARD','BALROG','DRAGON','ELEMENTAL','GIANT','WRAITH','TROLL'].every(t => catapultImmune({ type:t })), 'catapult: the mighty fantastic individuals shrug off a catapult hit');
+  console.assert(['HERO','WIGHT','LYCAN','ENT','ROC'].every(t => !catapultImmune({ type:t })), 'catapult: Heroes, Wights/Ghouls, Lycanthropes, Ents and Rocs are subject to catapult fire');
+  console.assert(['MAN','HF','MK','ELF','ORC','HOBBIT','SPRITE','DWARF','GNOME','GOBLIN','KOBOLD'].every(t => !catapultImmune({ type:t })), 'catapult: men-at-arms and every fantasy race are always vulnerable');
+  console.assert(catapultImmune(null) === false && catapultImmune({}) === false, 'catapult: a missing or typeless piece is not flagged immune');
   // Batter (creature) is contact-only; the Giant's ranged rock is a thrown boulder.
   { const wall = (x) => ({ kind:'works', worksType:'curtain', side:'B', x, y:240, defenseMax:33, defenseLeft:33, lengthFt:90, thickFt:10 });
     const giant = (x, facing=0) => ({ kind:'individual', type:'GIANT', side:'A', x, y:240, facing });
