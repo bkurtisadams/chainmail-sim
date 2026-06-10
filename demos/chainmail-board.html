@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.138 · Fix a panel crash: updateButtons read a.side without guarding the selected unit, so deleting a selected unit (or losing it in combat) while a target was set threw and broke the sidebar. Guard `a` in the counter-magic vsWiz check. Built on v0.11.137. -->
+<!-- chainmail-board.html · v0.11.139 · Unit-attach model: a Hero/Super-Hero can Join a friendly mass unit (context menu) and lead it, lending +1 to the score of each die the unit rolls in melee (p.30), via the existing applyDieBonus path; Leave detaches; links auto-clear on removal; panel shows Led by / Leading. Wizard attach, the morale-roll bonuses, and the army-commander 12-inch radius are a follow-on. Built on v0.11.138. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.138</title>
+<title>Chainmail — Battlefield · v0.11.139</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.138</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.139</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -568,6 +568,8 @@
   <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
   <button data-act="immolate">Immolate (burn figures in footprint)</button>
   <button data-act="cause-morale-check">Strike fear (enemy in range check morale)</button>
+  <button data-act="join-unit">Join unit (lead the targeted friendly unit)</button>
+  <button data-act="leave-unit">Leave unit</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -723,7 +725,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.138';
+const SIM_VERSION = '0.11.139';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2185,7 +2187,7 @@ function resolveMassMelee({ attacker, defender, rng }) {
   if (aPolearm) aDPM += 1;
   if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
   const aTotal = Math.floor((attacker.activeCount ?? attacker.count) * aDPM) + (attacker.bonusDice || 0);
-  const aKills = applyDieBonus(aRow.kills, aBonus ? 1 : 0);
+  const aKills = applyDieBonus(aRow.kills, (aBonus ? 1 : 0) + (attacker.dieScoreBonus || 0));
   const aDiePenalty = attacker.diePenalty || 0;
   const aRoll = rollKills(aTotal, aKills, rng, aDiePenalty);
   result.attacker = {
@@ -2208,13 +2210,14 @@ function resolveMassMelee({ attacker, defender, rng }) {
     if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
     const dTotal = Math.floor((defender.activeCount ?? defender.count) * dDPM) + (defender.bonusDice || 0);
     const dDiePenalty = defender.diePenalty || 0;
-    const dRoll  = dRow ? rollKills(dTotal, dRow.kills, rng, dDiePenalty) : { dice:[], kills:0 };
+    const dKills = dRow ? applyDieBonus(dRow.kills, defender.dieScoreBonus || 0) : [];
+    const dRoll  = dRow ? rollKills(dTotal, dKills, rng, dDiePenalty) : { dice:[], kills:0 };
     result.defender = {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
       dicePerMan:dDPM, totalDice:dTotal, polearmApplied:dPolearm,
       impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
       standingHorseApplied: dRetCls !== dT.cls, fatigueApplied: !!defender.fatigued, diePenalty:dDiePenalty,
-      killScores:dRow ? dRow.kills : [],
+      killScores:dKills,
       dice:dRoll.dice, killsDealt:dRoll.kills,
     };
   }
@@ -2388,6 +2391,36 @@ function moraleAuraTargets(source, units) {
     t && !t.destroyed && t.side !== source.side && t.kind !== 'works' &&
     typeById(t.type)?.loss && engineRangeToTarget(source, t) <= reach);
 }
+
+// ── Unit attachment: a Hero / Super-Hero "with a unit" (p.30) ─────────────────
+// A capable individual can JOIN a friendly mass unit; while attached it lends the
+// unit +1 to the score of each die the unit rolls — "they add 1 to the die or dice
+// of their unit (or whatever unit they are with)" (Hero, p.30; the Army Commander,
+// p.21, states the same). The attachment is a logical link (indiv.attachedTo =
+// unitId); the player keeps the figures together. This slice wires the COMBAT die
+// bonus (the unit's melee rolls). The Wizard's leadership, the morale-roll bonuses
+// (charge / post-melee / Loss Table), and the army-commander 12″ radius are a
+// separate follow-on.
+const ATTACH_CAPABLE = new Set(['HERO', 'SUPER_HERO']);
+const canJoinUnit = (hero, unit) =>
+  !!hero && hero.kind === 'individual' && ATTACH_CAPABLE.has(hero.type) && !hero.destroyed &&
+  !!unit && unit.kind === 'mass' && !unit.destroyed && unit.side === hero.side && unit.id !== hero.id;
+// The capable individual currently attached to this mass unit (or null).
+function attachedHeroOf(unit) {
+  if (!unit || unit.kind !== 'mass') return null;
+  return state.units.find(u => u && !u.destroyed && u.attachedTo === unit.id
+    && ATTACH_CAPABLE.has(u.type) && u.side === unit.side) || null;
+}
+// The mass unit a hero is currently riding with (or null).
+function attachedUnitOf(hero) {
+  if (!hero || hero.attachedTo == null) return null;
+  return state.units.find(x => x.id === hero.attachedTo && !x.destroyed && x.kind === 'mass') || null;
+}
+// +1 to the unit's melee dice while a Hero/Super-Hero is attached (p.30).
+const unitCombatDieBonus = (unit) => attachedHeroOf(unit) ? 1 : 0;
+// Attach / detach. Joining moves the hero off any prior unit first.
+function joinUnit(hero, unit) { if (canJoinUnit(hero, unit)) { hero.attachedTo = unit.id; return true; } return false; }
+function leaveUnit(hero) { if (hero) hero.attachedTo = null; }
 
 /* === D. MAN-TO-MAN ENGINE (Appendix B + p.25-26) ======================= */
 // Melee weapons table. row[i] = 2d6 threshold vs armor index i (0..9).
@@ -5413,6 +5446,8 @@ function updateSidebar() {
       (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>`
         : isConfusionPending(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#8a6d3b">moves reverse next turn</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
+      (attachedHeroOf(u) ? `<div class="stat"><span class="k">Led by</span><span class="v" style="color:var(--front)">${attachedHeroOf(u).label || typeById(attachedHeroOf(u).type).name} · +1/die (p.30)</span></div>` : '') +
+      (attachedUnitOf(u) ? `<div class="stat"><span class="k">Leading</span><span class="v" style="color:var(--front)">${attachedUnitOf(u).label || typeById(attachedUnitOf(u).type).name} × ${attachedUnitOf(u).count}</span></div>` : '') +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
       `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : (roadBonusBlockedByFacing(u) ? ` <small style="color:var(--ink-soft)">(on road · face along it for +${roadBonusBlockedByFacing(u)})</small>` : '')} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
@@ -7383,6 +7418,9 @@ function endEngagement(id1, id2) {
 }
 function cleanupEngagementsForUnit(id) {
   state.engagements = state.engagements.filter(e => e.aId !== id && e.dId !== id);
+  // Drop attachment links touching the removed unit: a hero that was leading it
+  // (its unit is gone), or — when a hero is removed — its own dangling link.
+  for (const u of state.units) if (u.attachedTo === id) u.attachedTo = null;
 }
 // Frontage overhang: how many figures wider attacker is than defender in cols.
 function frontageOverhang(a, d) {
@@ -7648,6 +7686,10 @@ function onResolveMelee() {
   const dElfBonus = (d.type === 'ELF' && d.magicWeapon) ? elfMagicBonus(a.type) : 0;
   if (aElfBonus) attackerParams.bonusDice = (attackerParams.bonusDice || 0) + aElfBonus;
   if (dElfBonus) defenderParams.bonusDice = (defenderParams.bonusDice || 0) + dElfBonus;
+  // A Hero/Super-Hero attached to a side lends it +1 to each melee die (p.30).
+  const aLed = unitCombatDieBonus(a), dLed = unitCombatDieBonus(d);
+  if (aLed) attackerParams.dieScoreBonus = (attackerParams.dieScoreBonus || 0) + aLed;
+  if (dLed) defenderParams.dieScoreBonus = (defenderParams.dieScoreBonus || 0) + dLed;
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   const aT = typeById(a.type), dT = typeById(d.type);
@@ -7661,12 +7703,14 @@ function onResolveMelee() {
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
   if (d.reform) aMods.push('target reforming → flanked (p.10)');
   if (aElfBonus) aMods.push(`magic weapons +${aElfBonus} dice vs ${dT.name}`);
+  if (aLed) aMods.push(`led by ${attachedHeroOf(a)?.label || typeById(attachedHeroOf(a)?.type)?.name || 'a hero'} → +1/die (p.30)`);
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
   if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
   if (melee.defender.diePenalty)    dMods.push('bright light −1/die');
   if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
   if (dElfBonus) dMods.push(`magic weapons +${dElfBonus} dice vs ${aT.name}`);
+  if (dLed) dMods.push(`led by ${attachedHeroOf(d)?.label || typeById(attachedHeroOf(d)?.type)?.name || 'a hero'} → +1/die (p.30)`);
 
   html += `<div class="step"><b style="color:var(--side-a-d)">A · ${aT.name} × ${a.count}</b> attacks ${edge.toUpperCase()} → ` +
           `${melee.attacker.totalDice} dice (${melee.attacker.dicePerMan.toFixed(2)}/man), kills on ${melee.attacker.killScores.join(',')} → ` +
@@ -8026,6 +8070,10 @@ function onResolveMixed(a, d) {
   // The mass side carries its own asymmetric defend class (e.g. a goblin unit).
   const massParams = aIsIndiv ? defenderParams : attackerParams;
   if (defendTypeForMass(mass.type)) massParams.defendType = defendTypeForMass(mass.type);
+  // A Hero/Super-Hero leading the mass lends it +1/die here too (p.30); the
+  // creature side is an individual fighting "as N men" — never a led unit.
+  const massLed = unitCombatDieBonus(mass);
+  if (massLed) massParams.dieScoreBonus = (massParams.dieScoreBonus || 0) + massLed;
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   // Casualties, with imperviousness applied: a creature immune to normal melee
@@ -9005,6 +9053,19 @@ function onUnitContextMenu(evt, unitId) {
         : `Strike fear (enemy within ${moraleAuraRangeIn(u)}″ check morale)`;
     }
   }
+  // Join / Leave unit (p.30): a Hero/Super-Hero leads a friendly mass unit, lending
+  // it +1/die. Join targets the currently-targeted friendly unit; Leave detaches.
+  const joinBtn = document.querySelector('#ctx-menu [data-act="join-unit"]');
+  const leaveBtn = document.querySelector('#ctx-menu [data-act="leave-unit"]');
+  if (joinBtn && leaveBtn) {
+    const tgt = state.units.find(x => x.id === state.targetId && !x.destroyed);
+    const led = attachedUnitOf(u);
+    const canJoin = ATTACH_CAPABLE.has(u.type) && canJoinUnit(u, tgt) && (!led || led.id !== tgt.id);
+    joinBtn.hidden = !canJoin;
+    if (canJoin) joinBtn.textContent = `Join ${tgt.label || typeById(tgt.type).name} × ${tgt.count} (lead → +1/die)`;
+    leaveBtn.hidden = !led;
+    if (led) leaveBtn.textContent = `Leave ${led.label || typeById(led.type).name} × ${led.count}`;
+  }
   // Half-move pause: offer "pause" only at/within the half-move with move left,
   // "resume" only while paused.
   document.querySelector('#ctx-menu [data-act="pause-half"]').hidden = !canPauseAtHalf(u);
@@ -9130,6 +9191,25 @@ function onContextMenuAction(evt) {
         u.acted.causedMorale = true;
         appendTurn(`Strike fear · ${typeById(u.type).name} (${u.side}) · ${targets.length} foe${targets.length>1?'s':''} within ${reach}″`, lines.join(''));
       }
+    }
+  } else if (act === 'join-unit') {
+    const tgt = state.units.find(x => x.id === state.targetId && !x.destroyed);
+    if (!canJoinUnit(u, tgt)) {
+      appendTurn(`Join unit — no valid unit`,
+        `<div class="step">Shift-click a friendly mass unit to target it, then have ${typeById(u.type).name} (${u.side}) join. Only Heroes and Super-Heroes can lead a unit.</div>`);
+    } else {
+      joinUnit(u, tgt);
+      appendTurn(`Joined unit · ${typeById(u.type).name} (${u.side}) → ${tgt.label || typeById(tgt.type).name}`,
+        `<div class="step">${typeById(u.type).name} now leads ${tgt.label || typeById(tgt.type).name} × ${tgt.count} — the unit adds 1 to the score of each die it rolls in melee (p.30). Keep the figures together.</div>`);
+    }
+  } else if (act === 'leave-unit') {
+    const led = attachedUnitOf(u);
+    if (!led) {
+      appendTurn(`Leave unit — not attached`, `<div class="step">${typeById(u.type).name} (${u.side}) isn't leading a unit.</div>`);
+    } else {
+      leaveUnit(u);
+      appendTurn(`Left unit · ${typeById(u.type).name} (${u.side})`,
+        `<div class="step">${typeById(u.type).name} leaves ${led.label || typeById(led.type).name} × ${led.count} — the +1/die bonus ends.</div>`);
     }
   } else if (act === 'free-paralysis') {
     if (canFreeParalysis(u)) {
@@ -9947,6 +10027,29 @@ renderBoard();
   // so a creature-vs-man melee routes to the mixed resolver, not the FCT.
   console.assert(['BALROG','DRAGON','HERO','SUPER_HERO','WIZARD','WRAITH','WIGHT','LYCAN','ROC','GIANT','ENT','ELEMENTAL','TROLL','OGRE','ZOMBIE'].every(hasFctEntry), 'hasFctEntry: every fantastic creature is an FCT combatant');
   console.assert(['ELF','ORC','GOBLIN','MAN','BERSERKER','DWARF','HOBBIT'].every(t => !hasFctEntry(t)), 'hasFctEntry: man-types / fantasy races are NOT FCT combatants (creature fights them as N men)');
+
+  // Unit attachment (p.30) — a Hero/Super-Hero leads a friendly mass unit for +1/die.
+  console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === true, 'attach: a Hero may lead a friendly mass unit');
+  console.assert(canJoinUnit({kind:'individual',type:'SUPER_HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === true, 'attach: a Super-Hero may lead a friendly mass unit');
+  console.assert(canJoinUnit({kind:'individual',type:'WIZARD',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === false, 'attach: a Wizard cannot lead a unit this slice (combat leaders only)');
+  console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'B',id:2}) === false, 'attach: cannot lead an enemy unit');
+  console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'individual',type:'ELF',side:'A',id:2}) === false, 'attach: cannot lead a single figure (mass only)');
+  // The combat die bonus lowers the unit's kill thresholds by one (applyDieBonus).
+  { const base = resolveMassMelee({ attacker:{type:'HF',count:10}, defender:{type:'AF',count:10}, rng: always(6) });
+    const led  = resolveMassMelee({ attacker:{type:'HF',count:10, dieScoreBonus:1}, defender:{type:'AF',count:10}, rng: always(6) });
+    console.assert(Math.min(...led.attacker.killScores) === Math.min(...base.attacker.killScores) - 1, 'attach: led attacker kills on one-lower die score (+1/die)'); }
+  { const baseDef = resolveMassMelee({ attacker:{type:'HF',count:10}, defender:{type:'HF',count:10}, rng: always(6) });
+    const ledDef  = resolveMassMelee({ attacker:{type:'HF',count:10}, defender:{type:'HF',count:10, dieScoreBonus:1}, rng: always(6) });
+    console.assert(Math.min(...ledDef.defender.killScores) === Math.min(...baseDef.defender.killScores) - 1, 'attach: a led defender returns on one-lower die score too'); }
+  // attachedHeroOf / unitCombatDieBonus / cleanup operate over state.units.
+  { const save = state.units, saveEng = state.engagements;
+    const hero = { id:901, type:'HERO', side:'A', kind:'individual', attachedTo:902, destroyed:false };
+    const unit = { id:902, type:'HF', side:'A', kind:'mass', count:10, destroyed:false };
+    state.units = [hero, unit]; state.engagements = [];
+    console.assert(attachedHeroOf(unit) === hero && unitCombatDieBonus(unit) === 1 && attachedUnitOf(hero) === unit, 'attach: lookups resolve the lead link and grant +1');
+    cleanupEngagementsForUnit(902);
+    console.assert(hero.attachedTo === null && unitCombatDieBonus(unit) === 0, 'attach: removing the led unit clears the hero link');
+    state.units = save; state.engagements = saveEng; }
 
   // Elf FCT scores (p.29) — a magic-armed Elf reads its own thresholds vs listed
   // fantastic creatures, not the Appendix-E matrix; Ogre stays 7 (no Troll alias),
