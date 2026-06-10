@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.134 · Add morale aura (ability E, p.30/33/35/36): Super Heroes, Wizards, Wraiths, Dragons and Rocs force enemy units in range to check morale as if excess casualties, via a Strike-fear creature action. Built on v0.11.133. -->
+<!-- chainmail-board.html · v0.11.136 · Fix two Selected/New-unit panel layout bugs: wrap the Magic-sword note below the (no-longer-crushed) select, and group the Selected-header action buttons (Fly/Vanish/Edit) so they wrap instead of overflowing the panel. Built on v0.11.135. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.134</title>
+<title>Chainmail — Battlefield · v0.11.136</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -191,6 +191,11 @@
   #new-unit-panel .field { margin-bottom: 2px; }
   #new-unit-panel .field > label { width: 84px; }
   #new-unit-panel .field select, #new-unit-panel .field input { padding: 2px 6px; }
+  /* Magic-sword row uniquely pairs a flex select with a long note; let the note
+     wrap to its own line (under the control: 84px label + 8px gap) so the select
+     keeps full width instead of being crushed. */
+  #f-magic-sword-row { flex-wrap: wrap; }
+  #f-magic-sword-row .field-note { flex: 1 0 100%; margin-left: 92px; }
 
   #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
@@ -301,8 +306,9 @@
   .panel.collapsed h2 .caret { transform: rotate(-90deg); }
   .panel h2.collapsible .spawn-btn { padding: 4px 10px; font-size: 11px; letter-spacing: 1.2px; border-radius: 4px; }
   .panel.collapsed h2 .spawn-btn { display: none; }
-  .panel h2.sel-head { display: flex; align-items: center; gap: 6px; }
-  .panel h2 .edit-btn { margin-left: auto; padding: 2px 10px; font-size: 10.5px; letter-spacing: 1px;
+  .panel h2.sel-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .panel h2 .sel-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .panel h2 .edit-btn { padding: 2px 10px; font-size: 10.5px; letter-spacing: 1px;
     border-radius: 4px; background: #fff8e7; border: 1px solid var(--rule); color: var(--ink); cursor: pointer; }
   .panel h2 .edit-btn:hover { background: var(--gold); }
   .nu-actions { display: flex; align-items: center; gap: 6px; }
@@ -319,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.134</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.136</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -398,7 +404,7 @@
     <svg id="board" viewBox="0 0 960 540"></svg>
     <aside class="side-panel">
       <div class="panel">
-        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-vanish" class="edit-btn" hidden title="Become invisible / reappear (hidden until it attacks; Hobbits only in cover)">Vanish</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></h2>
+        <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><span class="sel-actions"><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-vanish" class="edit-btn" hidden title="Become invisible / reappear (hidden until it attacks; Hobbits only in cover)">Vanish</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></span></h2>
         <div id="selected-pane" class="empty">none</div>
       </div>
       <div class="panel">
@@ -717,7 +723,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.134';
+const SIM_VERSION = '0.11.136';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -8853,9 +8859,14 @@ function loadUnitIntoPanel(u) {
   syncKindFields();                       // show the right field group, fill type/works selects with defaults
   $('#f-alignment').value = alignmentOf(u);
   $('#f-weapon').value = u.weapon || '';  // missile (troop kinds only; hidden for works)
-  $('#f-magic-sword').value = u.magicWeapon ? String(u.magicWeapon) : '';   // overrides the type-default seeded by syncMagicItemsRow
+  // NOTE: the Magic-sword row's visibility and value are set per-branch BELOW,
+  // after #f-type is set to the unit's real type — syncMagicItemsRow keys off
+  // #f-type, so it must run after the type is in place (not during syncKindFields,
+  // when #f-type still holds the kind's default).
   if (u.kind === 'individual') {
     $('#f-type').value = u.type;
+    syncMagicItemsRow();                                                     // re-evaluate now that the real type is set
+    $('#f-magic-sword').value = u.magicWeapon ? String(u.magicWeapon) : '';  // restore stored value over the reseeded default
     $('#f-magic-class').value = u.magicClass || 'wizard';
     $('#f-missile-type').value = u.missileType || 'fireball';
     $('#f-element').value = u.element || 'air';
@@ -8873,6 +8884,8 @@ function loadUnitIntoPanel(u) {
     if (u.thickFt != null)    $('#f-works-thick').value = u.thickFt;
   } else {
     $('#f-type').value = u.type;
+    syncMagicItemsRow();                                                     // mass Elves bear swords too — re-evaluate after the real type is set
+    $('#f-magic-sword').value = u.magicWeapon ? String(u.magicWeapon) : '';  // restore stored value over the reseeded default
     syncPikeRow();                        // show pike row (and its default) for this type…
     $('#f-count').value = u.count;
     $('#f-form').value = u.formation || 'line';
@@ -9880,7 +9893,7 @@ renderBoard();
   console.assert(lmForceHold.triggered === true && lmForceHold.passed === true, 'forced check: HF rolling 12 → holds');
   console.assert(resolveLossMorale({ type:'HERO', startCount:1, casualties:0, surrounded:false, rng: always(1), fatigued:false, force:true }).triggered === false, 'forced check: a type with no loss entry is never provoked');
   // Aura source set, ranges, and target filtering.
-  console.assert(['SUPER_HERO','WIZARD','WRAITH','DRAGON','ROC'].every(creatureCausesMoraleCheck) && !creatureCausesMoraleCheck({ type:'HERO' }) && !creatureCausesMoraleCheck({ type:'BALROG' }), 'ability E: Super Hero/Wizard/Wraith/Dragon/Roc only — not Hero/Balrog');
+  console.assert(['SUPER_HERO','WIZARD','WRAITH','DRAGON','ROC'].every(t => creatureCausesMoraleCheck({ type:t })) && !creatureCausesMoraleCheck({ type:'HERO' }) && !creatureCausesMoraleCheck({ type:'BALROG' }), 'ability E: Super Hero/Wizard/Wraith/Dragon/Roc only — not Hero/Balrog');
   console.assert(moraleAuraRangeIn({ type:'DRAGON' }) === 15 && moraleAuraRangeIn({ type:'SUPER_HERO' }) === CHARGE_ALLOWANCE.SUPER_HERO && moraleAuraRangeIn({ type:'WRAITH' }) === CHARGE_ALLOWANCE.WRAITH, 'aura range: Dragon fixed 15″, others use charge move');
   { const drag = { id:1, type:'DRAGON', side:'A', kind:'individual', x:0, y:0 };
     const near = { id:2, type:'HF', side:'B', kind:'mass', count:10, x:inchesToPx(10), y:0 };   // 10″ ≤ 15
