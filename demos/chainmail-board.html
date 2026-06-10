@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.139 · Unit-attach model: a Hero/Super-Hero can Join a friendly mass unit (context menu) and lead it, lending +1 to the score of each die the unit rolls in melee (p.30), via the existing applyDieBonus path; Leave detaches; links auto-clear on removal; panel shows Led by / Leading. Wizard attach, the morale-roll bonuses, and the army-commander 12-inch radius are a follow-on. Built on v0.11.138. -->
+<!-- chainmail-board.html · v0.11.140 · Leader morale: a led unit also adds +1 to the score of each die it rolls in morale checks — Loss Table, cavalry-charge, and post-melee reaction (p.30). Wizards may now Join a unit (morale-only leadership). resolveLossMorale/cavalryChargeCheck/resolvePostMelee take a dieBonus; loss checks routed through a unitLossMorale wrapper. Army-commander 12-inch radius still a follow-on. Built on v0.11.139. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.139</title>
+<title>Chainmail — Battlefield · v0.11.140</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.139</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.140</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -725,7 +725,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.139';
+const SIM_VERSION = '0.11.140';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2233,7 +2233,7 @@ function reactionFor(diff) { return REACTION_BANDS.find(b => diff <= b.max); }
 function resolvePostMelee({ a, b, rng }) {
   const aSurv = a.startCount - a.casualties;
   const bSurv = b.startCount - b.casualties;
-  let fewerSide=null, casDiff=0, casDie=0, casBonus=0, casFatPenalty=0;
+  let fewerSide=null, casDiff=0, casDie=0, casBonus=0, casFatPenalty=0, casLeaderBonus=0;
   if (a.casualties !== b.casualties) {
     fewerSide = a.casualties < b.casualties ? 'A' : 'B';
     casDiff = Math.abs(a.casualties - b.casualties);
@@ -2243,6 +2243,10 @@ function resolvePostMelee({ a, b, rng }) {
     const casDiePenalty = fewerSide === 'A' ? (a.diePenalty || 0) : (b.diePenalty || 0);
     if (rollingFatigued) { casFatPenalty = 1; casDie = Math.max(1, casDie - 1); }
     if (casDiePenalty) casDie = Math.max(0, casDie - casDiePenalty);
+    // A Hero/Super-Hero/Wizard leading the rolling (fewer-casualties) side adds 1
+    // to the score of that die (p.30).
+    casLeaderBonus = fewerSide === 'A' ? (a.dieBonus || 0) : (b.dieBonus || 0);
+    if (casLeaderBonus) casDie += casLeaderBonus;
     casBonus = casDiff * casDie;
   }
   let moreSide=null, survDiff=0;
@@ -2261,14 +2265,14 @@ function resolvePostMelee({ a, b, rng }) {
   return {
     a:{ surviving:aSurv, ratingScore:aRating, total:aTotal },
     b:{ surviving:bSurv, ratingScore:bRating, total:bTotal },
-    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus, fatiguePenalty:casFatPenalty,
+    casualtyBonus:{ side:fewerSide, diff:casDiff, dieRoll:casDie, value:casBonus, fatiguePenalty:casFatPenalty, leaderBonus:casLeaderBonus,
       lightPenalty: fewerSide === 'A' ? (a.diePenalty || 0) : (fewerSide === 'B' ? (b.diePenalty || 0) : 0) },
     survivorBonus:{ side:moreSide, diff:survDiff, value:survDiff },
     rawDiff: Math.abs(aTotal - bTotal), diff, doubled, loser, reaction: reactionFor(diff),
   };
 }
 
-function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued, diePenalty = 0, force = false }) {
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued, diePenalty = 0, dieBonus = 0, force = false }) {
   const t = typeById(type);
   // Only types with a Loss-Table threshold check at all (rank-and-file + fantasy
   // races). Fantastic individuals/works have no entry — and many "never check
@@ -2282,16 +2286,30 @@ function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fati
   const dice = roll2d6(rng);
   const fatiguePenalty = fatigued ? 1 : 0;
   const lightPenaltyTotal = diePenalty * 2;   // 2d6: -1 from each die rolled
-  const effectiveSum = Math.max(0, dice.sum - fatiguePenalty - lightPenaltyTotal);
+  const leaderBonusTotal = dieBonus * 2;      // 2d6: +1 to each die (led unit, p.30)
+  const effectiveSum = Math.max(0, dice.sum - fatiguePenalty - lightPenaltyTotal + leaderBonusTotal);
   const passed = effectiveSum >= t.loss.score;
-  return { triggered:true, pct, threshold:t.loss, dice, fatiguePenalty, diePenalty, lightPenaltyTotal, effectiveSum, passed,
+  return { triggered:true, pct, threshold:t.loss, dice, fatiguePenalty, diePenalty, lightPenaltyTotal, dieBonus, leaderBonusTotal, effectiveSum, passed,
     action: passed ? 'stable' : (surrounded ? 'surrender' : 'removed') };
 }
 function lossMoraleTail(lr) {
   const parts = [];
-  if (lr.fatiguePenalty) parts.push(`${lr.fatiguePenalty} fatigue`);
-  if (lr.lightPenaltyTotal) parts.push(`${lr.lightPenaltyTotal} bright light`);
-  return parts.length ? ` − ${parts.join(' − ')} = <b>${lr.effectiveSum}</b>` : '';
+  if (lr.fatiguePenalty) parts.push(`− ${lr.fatiguePenalty} fatigue`);
+  if (lr.lightPenaltyTotal) parts.push(`− ${lr.lightPenaltyTotal} bright light`);
+  if (lr.leaderBonusTotal) parts.push(`+ ${lr.leaderBonusTotal} leader`);
+  return parts.length ? ` ${parts.join(' ')} = <b>${lr.effectiveSum}</b>` : '';
+}
+// Loss-Table check for an on-board unit: pulls fatigue, the bright-light penalty,
+// and the leader morale bonus (p.30) straight off the unit, so the call sites
+// don't each re-derive them.
+function unitLossMorale(unit, { casualties, surrounded = false, force = false, rng = state.rng } = {}) {
+  return resolveLossMorale({
+    type: unit.type, startCount: unit.startCount, casualties, surrounded, rng,
+    fatigued: !!unit.fatigued && state.settings.applyFatigue,
+    diePenalty: lightDiePenalty(unit),
+    dieBonus: unitMoraleDieBonus(unit),
+    force,
+  });
 }
 
 // Cavalry-charge morale (p.17). When a mounted unit charges, the defender
@@ -2343,7 +2361,7 @@ function rollPrisoners({ winnerType, loserType, rng }) {
   const noPrisoners = winnerType === 'SP';  // Swiss/Landsknechte take no prisoners
   return { wDie, lDie, count, formula, noPrisoners };
 }
-function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, diePenalty = 0, rng }) {
+function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, diePenalty = 0, dieBonus = 0, rng }) {
   if (!isMountedType(charger.type)) return null;
   // SP/Landsknechte with polearm facing the enemy auto-stand any charge (p.17)
   if (defender.type === 'SP' && defender.polearm && edge === 'front') {
@@ -2360,9 +2378,10 @@ function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, d
   else if (edge === 'rear') modifier -= 2;
   const fatiguePenalty = fatigued ? 1 : 0;
   const lightPenaltyTotal = diePenalty * 2;
-  const total = dice.sum + bonus + modifier - fatiguePenalty - lightPenaltyTotal;
+  const leaderBonusTotal = dieBonus * 2;   // a led defender steadies: +1 to each die (p.30)
+  const total = dice.sum + bonus + modifier - fatiguePenalty - lightPenaltyTotal + leaderBonusTotal;
   const passed = total >= target;
-  return { autoStand:false, target, dice, bonus, modifier, fatiguePenalty, diePenalty, lightPenaltyTotal, total, passed,
+  return { autoStand:false, target, dice, bonus, modifier, fatiguePenalty, diePenalty, lightPenaltyTotal, dieBonus, leaderBonusTotal, total, passed,
     chargerType: charger.type, defenderType: defender.type, chargerClass: cls, edge };
 }
 
@@ -2392,16 +2411,18 @@ function moraleAuraTargets(source, units) {
     typeById(t.type)?.loss && engineRangeToTarget(source, t) <= reach);
 }
 
-// ── Unit attachment: a Hero / Super-Hero "with a unit" (p.30) ─────────────────
+// ── Unit attachment: a Hero / Super-Hero / Wizard "with a unit" (p.30) ────────
 // A capable individual can JOIN a friendly mass unit; while attached it lends the
 // unit +1 to the score of each die the unit rolls — "they add 1 to the die or dice
 // of their unit (or whatever unit they are with)" (Hero, p.30; the Army Commander,
 // p.21, states the same). The attachment is a logical link (indiv.attachedTo =
-// unitId); the player keeps the figures together. This slice wires the COMBAT die
-// bonus (the unit's melee rolls). The Wizard's leadership, the morale-roll bonuses
-// (charge / post-melee / Loss Table), and the army-commander 12″ radius are a
-// separate follow-on.
-const ATTACH_CAPABLE = new Set(['HERO', 'SUPER_HERO']);
+// unitId); the player keeps the figures together.
+//   Heroes and Super-Heroes lend the bonus to BOTH combat and morale dice. The
+// Wizard "affect[s] friendly and enemy morale as do Super Heroes" (p.30) but is
+// not a melee leader, so it lends the bonus to MORALE rolls only. The army-
+// commander 12″ radius is still a follow-on.
+const ATTACH_CAPABLE = new Set(['HERO', 'SUPER_HERO', 'WIZARD']);
+const COMBAT_LEADERS  = new Set(['HERO', 'SUPER_HERO']);   // lend +1 to the unit's melee dice
 const canJoinUnit = (hero, unit) =>
   !!hero && hero.kind === 'individual' && ATTACH_CAPABLE.has(hero.type) && !hero.destroyed &&
   !!unit && unit.kind === 'mass' && !unit.destroyed && unit.side === hero.side && unit.id !== hero.id;
@@ -2417,7 +2438,13 @@ function attachedUnitOf(hero) {
   return state.units.find(x => x.id === hero.attachedTo && !x.destroyed && x.kind === 'mass') || null;
 }
 // +1 to the unit's melee dice while a Hero/Super-Hero is attached (p.30).
-const unitCombatDieBonus = (unit) => attachedHeroOf(unit) ? 1 : 0;
+function unitCombatDieBonus(unit) {
+  const h = attachedHeroOf(unit);
+  return h && COMBAT_LEADERS.has(h.type) ? 1 : 0;
+}
+// +1 to the unit's morale dice while any capable leader (Hero/Super-Hero/Wizard)
+// is attached (ability D, p.30).
+const unitMoraleDieBonus = (unit) => attachedHeroOf(unit) ? 1 : 0;
 // Attach / detach. Joining moves the hero off any prior unit first.
 function joinUnit(hero, unit) { if (canJoinUnit(hero, unit)) { hero.attachedTo = unit.id; return true; } return false; }
 function leaveUnit(hero) { if (hero) hero.attachedTo = null; }
@@ -5446,7 +5473,7 @@ function updateSidebar() {
       (isConfusedNow(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#a8400f">moves reversed this turn</span></div>`
         : isConfusionPending(u) ? `<div class="stat"><span class="k">Confused</span><span class="v" style="color:#8a6d3b">moves reverse next turn</span></div>` : '') +
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
-      (attachedHeroOf(u) ? `<div class="stat"><span class="k">Led by</span><span class="v" style="color:var(--front)">${attachedHeroOf(u).label || typeById(attachedHeroOf(u).type).name} · +1/die (p.30)</span></div>` : '') +
+      (attachedHeroOf(u) ? `<div class="stat"><span class="k">Led by</span><span class="v" style="color:var(--front)">${attachedHeroOf(u).label || typeById(attachedHeroOf(u).type).name} · ${COMBAT_LEADERS.has(attachedHeroOf(u).type) ? '+1/die' : '+1 morale'} (p.30)</span></div>` : '') +
       (attachedUnitOf(u) ? `<div class="stat"><span class="k">Leading</span><span class="v" style="color:var(--front)">${attachedUnitOf(u).label || typeById(attachedUnitOf(u).type).name} × ${attachedUnitOf(u).count}</span></div>` : '') +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
@@ -5889,7 +5916,7 @@ function resolveRockDrop() {
     } else {
       html += `<div class="verdict v-killed">${killed} climber${killed === 1 ? '' : 's'} killed → ${d.count}/${d.startCount}</div>`;
       const cas = d.startCount - d.count;
-      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
+      const lr = unitLossMorale(d, { casualties: cas });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
         const fatTail = lossMoraleTail(lr);
@@ -7621,7 +7648,7 @@ function onResolveMelee() {
   if (round === 1 && state.settings.applyCavalryChargeMorale && a.charged && isMountedType(a.type)) {
     const mutual = !!d.charged;
     const dFat = !!d.fatigued && state.settings.applyFatigue;
-    const cc = cavalryChargeCheck({ charger: a, defender: d, edge, mutualCharge: mutual, fatigued: dFat, diePenalty: lightDiePenalty(d), rng: state.rng });
+    const cc = cavalryChargeCheck({ charger: a, defender: d, edge, mutualCharge: mutual, fatigued: dFat, diePenalty: lightDiePenalty(d), dieBonus: unitMoraleDieBonus(d), rng: state.rng });
     if (cc) {
       const aTpre = typeById(a.type), dTpre = typeById(d.type);
       if (cc.autoStand) {
@@ -7633,6 +7660,7 @@ function onResolveMelee() {
         if (cc.modifier) mods.push(`${cc.modifier} ${cc.edge}`);
         if (cc.fatiguePenalty) mods.push(`-${cc.fatiguePenalty} fatigue`);
         if (cc.lightPenaltyTotal) mods.push(`-${cc.lightPenaltyTotal} bright light`);
+        if (cc.leaderBonusTotal) mods.push(`+${cc.leaderBonusTotal} leader`);
         const modStr = mods.length ? ` · ${mods.join(' · ')}` : '';
         chargeMoraleHtml += `<div class="step"><b style="color:var(--side-b-d)">B · ${dTpre.name}</b> ` +
           `charge morale vs ${aTpre.name} (${cc.chargerClass}) — needs ${cc.target}+, ` +
@@ -7766,8 +7794,8 @@ function onResolveMelee() {
   const aMorale = lightMoraleRating(a, aFatigued ? Math.max(1, aT.morale - 1) : aT.morale);
   const dMorale = lightMoraleRating(d, dFatigued ? Math.max(1, dT.morale - 1) : dT.morale);
   const pm = resolvePostMelee({
-    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale, fatigued: aFatigued, diePenalty: lightDiePenalty(a) },
-    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale, fatigued: dFatigued, diePenalty: lightDiePenalty(d) },
+    a:{ label:'A', startCount:a.count, casualties:melee.attacker.casualties, morale:aMorale, fatigued: aFatigued, diePenalty: lightDiePenalty(a), dieBonus: unitMoraleDieBonus(a) },
+    b:{ label:'B', startCount:d.count, casualties:melee.defender.casualties, morale:dMorale, fatigued: dFatigued, diePenalty: lightDiePenalty(d), dieBonus: unitMoraleDieBonus(d) },
     rng: state.rng,
   });
   const fatNote = pm.casualtyBonus.fatiguePenalty
@@ -7776,8 +7804,11 @@ function onResolveMelee() {
   const lightNote = pm.casualtyBonus.lightPenalty
     ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${pm.casualtyBonus.side} d6 -1 bright light</small>`
     : '';
+  const leaderNote = pm.casualtyBonus.leaderBonus
+    ? ` <small style="color:var(--front); font-family:var(--sans)">· ${pm.casualtyBonus.side} d6 +${pm.casualtyBonus.leaderBonus} leader (p.30)</small>`
+    : '';
   html += `<div class="step">post-melee — A total ${pm.a.total} vs B total ${pm.b.total} · ` +
-          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}${fatNote}${lightNote}</div>`;
+          `raw diff ${pm.rawDiff}${pm.doubled ? ` → doubled <b>${pm.diff}</b>` : ''}${fatNote}${lightNote}${leaderNote}</div>`;
   const tag = pm.reaction.tag;
   const loserName = pm.loser ? (pm.loser === 'A' ? aT.name : dT.name) : null;
   // Annihilation override: if the loser hits 0 figures from this melee's casualties,
@@ -7849,8 +7880,7 @@ function onResolveMelee() {
   for (const [label, unit, T] of [['A', a, aT], ['B', d, dT]]) {
     if (unit.destroyed || unit.status === 'surrendered') continue;
     const cas = unit.startCount - unit.count;
-    const lr = resolveLossMorale({ type: T.id, startCount: unit.startCount, casualties: cas, surrounded: false, rng: state.rng,
-      fatigued: !!unit.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(unit) });
+    const lr = unitLossMorale(unit, { casualties: cas });
     if (!lr.triggered) continue;
     const pct = (lr.pct*100).toFixed(1);
     const thr = (lr.threshold.pct*100).toFixed(1);
@@ -8155,8 +8185,7 @@ function onResolveMixed(a, d) {
     const massCas = aIsIndiv ? dCas : aCas;
     if (massCas > 0) {
       const cas = mass.startCount - mass.count;
-      const lr = resolveLossMorale({ type: mass.type, startCount: mass.startCount, casualties: cas, surrounded: false,
-        rng: state.rng, fatigued: !!mass.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(mass) });
+      const lr = unitLossMorale(mass, { casualties: cas });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
         const fatTail = lossMoraleTail(lr);
@@ -8279,8 +8308,7 @@ function resolveMissilePhase() {
       html = `<div class="step">${pend} pending hit${pend===1?'':'s'} applied · ${before} → ${d.count} figure${d.count===1?'':'s'}${d.destroyed?' (destroyed)':''}</div>`;
       if (!d.destroyed) {
         const cas = d.startCount - d.count;
-        const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
-          fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
+        const lr = unitLossMorale(d, { casualties: cas });
         if (lr.triggered) {
           const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
           const fatTail = lossMoraleTail(lr);
@@ -8417,8 +8445,7 @@ function onResolveMissile() {
   // Loss-morale on defender if threshold crossed
   if (!d.destroyed) {
     const cas = d.startCount - d.count;
-    const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng,
-      fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
+    const lr = unitLossMorale(d, { casualties: cas, rng });
     if (lr.triggered) {
       const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
       const fatTail = lr.fatiguePenalty
@@ -8516,8 +8543,7 @@ function onIndivMissile(a, d) {
         html += `<div class="verdict v-${d.destroyed?'rout':'killed'}">${d.side} · ${dT.name} loses 1 figure → ${d.count} left${d.destroyed?' (destroyed)':''}</div>`;
         if (!d.destroyed) {
           const cas = d.startCount - d.count;
-          const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng:state.rng,
-            fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
+          const lr = unitLossMorale(d, { casualties: cas });
           if (lr.triggered) {
             const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
             const fatTail = lr.fatiguePenalty
@@ -8699,7 +8725,7 @@ function onArquebusFire(a, d) {
     } else {
       html += `<div class="verdict v-${n>0?'killed':'noeffect'}">${n} kill${n===1?'':'s'}${n>0?` → ${d.count}/${d.startCount}`:''}</div>`;
       const cas = d.startCount - d.count;
-      const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:cas, surrounded:false, rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d) });
+      const lr = unitLossMorale(d, { casualties: cas });
       if (lr.triggered) {
         const pct = (lr.pct*100).toFixed(1), thr = (lr.threshold.pct*100).toFixed(1);
         const fatTail = lossMoraleTail(lr);
@@ -8788,8 +8814,7 @@ function onResolveDragonBreath(dragon) {
       html += `<div class="step">${u.side} · ${uT.name}${friendTag} — ${hits} of ${before} figure${hits === 1 ? '' : 's'} under the cone → <b>${hits}</b> killed${u.destroyed ? ' (wiped out)' : ''}</div>`;
       if (!u.destroyed) {
         const cas = u.startCount - u.count;
-        const lr = resolveLossMorale({ type:u.type, startCount:u.startCount, casualties:cas, surrounded:false, rng:state.rng,
-          fatigued: !!u.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(u) });
+        const lr = unitLossMorale(u, { casualties: cas });
         if (lr.triggered) {
           const pct = (lr.pct * 100).toFixed(1), thr = (lr.threshold.pct * 100).toFixed(1);
           const fatTail = lossMoraleTail(lr);
@@ -9062,7 +9087,7 @@ function onUnitContextMenu(evt, unitId) {
     const led = attachedUnitOf(u);
     const canJoin = ATTACH_CAPABLE.has(u.type) && canJoinUnit(u, tgt) && (!led || led.id !== tgt.id);
     joinBtn.hidden = !canJoin;
-    if (canJoin) joinBtn.textContent = `Join ${tgt.label || typeById(tgt.type).name} × ${tgt.count} (lead → +1/die)`;
+    if (canJoin) joinBtn.textContent = `Join ${tgt.label || typeById(tgt.type).name} × ${tgt.count} (lead → ${COMBAT_LEADERS.has(u.type) ? '+1/die' : '+1 morale'})`;
     leaveBtn.hidden = !led;
     if (led) leaveBtn.textContent = `Leave ${led.label || typeById(led.type).name} × ${led.count}`;
   }
@@ -9173,8 +9198,7 @@ function onContextMenuAction(evt) {
         const lines = [];
         for (const d of targets) {
           const surrounded = false;   // surround detection isn't modeled; failures remove the unit
-          const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:0, surrounded,
-            rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d), force:true });
+          const lr = unitLossMorale(d, { casualties:0, surrounded, force:true });
           const dName = typeById(d.type).name;
           const tail = lossMoraleTail(lr);
           if (lr.passed) {
@@ -9200,7 +9224,7 @@ function onContextMenuAction(evt) {
     } else {
       joinUnit(u, tgt);
       appendTurn(`Joined unit · ${typeById(u.type).name} (${u.side}) → ${tgt.label || typeById(tgt.type).name}`,
-        `<div class="step">${typeById(u.type).name} now leads ${tgt.label || typeById(tgt.type).name} × ${tgt.count} — the unit adds 1 to the score of each die it rolls in melee (p.30). Keep the figures together.</div>`);
+        `<div class="step">${typeById(u.type).name} now leads ${tgt.label || typeById(tgt.type).name} × ${tgt.count} — the unit adds 1 to the score of each die it rolls ${COMBAT_LEADERS.has(u.type) ? 'in melee and morale checks' : 'in morale checks'} (p.30). Keep the figures together.</div>`);
     }
   } else if (act === 'leave-unit') {
     const led = attachedUnitOf(u);
@@ -10031,9 +10055,31 @@ renderBoard();
   // Unit attachment (p.30) — a Hero/Super-Hero leads a friendly mass unit for +1/die.
   console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === true, 'attach: a Hero may lead a friendly mass unit');
   console.assert(canJoinUnit({kind:'individual',type:'SUPER_HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === true, 'attach: a Super-Hero may lead a friendly mass unit');
-  console.assert(canJoinUnit({kind:'individual',type:'WIZARD',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === false, 'attach: a Wizard cannot lead a unit this slice (combat leaders only)');
+  console.assert(canJoinUnit({kind:'individual',type:'WIZARD',side:'A',id:1},{kind:'mass',type:'HF',side:'A',id:2}) === true, 'attach: a Wizard may lead a unit (morale only)');
   console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'mass',type:'HF',side:'B',id:2}) === false, 'attach: cannot lead an enemy unit');
   console.assert(canJoinUnit({kind:'individual',type:'HERO',side:'A',id:1},{kind:'individual',type:'ELF',side:'A',id:2}) === false, 'attach: cannot lead a single figure (mass only)');
+  // Hero/Super-Hero lend BOTH combat and morale dice; a Wizard lends morale only.
+  { const save = state.units;
+    const heroLed = { id:801, type:'HF', side:'A', kind:'mass', count:10, destroyed:false };
+    const wizLed  = { id:803, type:'HF', side:'A', kind:'mass', count:10, destroyed:false };
+    state.units = [ heroLed, wizLed,
+      { id:802, type:'HERO',   side:'A', kind:'individual', attachedTo:801, destroyed:false },
+      { id:804, type:'WIZARD', side:'A', kind:'individual', attachedTo:803, destroyed:false } ];
+    console.assert(unitCombatDieBonus(heroLed) === 1 && unitMoraleDieBonus(heroLed) === 1, 'attach: a Hero lends +1 to combat AND morale dice');
+    console.assert(unitCombatDieBonus(wizLed) === 0 && unitMoraleDieBonus(wizLed) === 1, 'attach: a Wizard lends +1 to morale dice only');
+    state.units = save; }
+  // resolveLossMorale dieBonus adds +2 to the 2d6 sum (two dice, +1 each, p.30).
+  { const lead = resolveLossMorale({ type:'HF', startCount:30, casualties:11, surrounded:false, rng: seq([forDie(3), forDie(2)]), fatigued:false, dieBonus:1 });
+    console.assert(lead.leaderBonusTotal === 2 && lead.effectiveSum === 7 && lead.passed === true, 'leader morale: 2d6=5 +2 leader = 7 ≥ HF 7 → holds');
+    const noLead = resolveLossMorale({ type:'HF', startCount:30, casualties:11, surrounded:false, rng: seq([forDie(3), forDie(2)]), fatigued:false });
+    console.assert(noLead.effectiveSum === 5 && noLead.passed === false, 'leader morale: without a leader the same roll (5) fails'); }
+  // cavalryChargeCheck dieBonus steadies the charged defender (+2 to the 2d6).
+  { const steadied = cavalryChargeCheck({ charger:{type:'LH'}, defender:{type:'HF'}, edge:'front', mutualCharge:false, fatigued:false, dieBonus:1, rng: seq([forDie(3),forDie(3)]) });
+    console.assert(steadied.leaderBonusTotal === 2 && steadied.total === steadied.dice.sum + 2, 'leader morale: a led defender adds +2 to its charge check'); }
+  // resolvePostMelee: a leader on the fewer-casualties side adds +1 to its casualty die.
+  { const led = resolvePostMelee({ a:{startCount:10,casualties:1,morale:5,fatigued:false,dieBonus:1}, b:{startCount:10,casualties:4,morale:5,fatigued:false}, rng: always(3) });
+    console.assert(led.casualtyBonus.side === 'A' && led.casualtyBonus.leaderBonus === 1 && led.casualtyBonus.dieRoll === 4, 'leader morale: post-melee casualty die 3 → 4 for the led side'); }
+
   // The combat die bonus lowers the unit's kill thresholds by one (applyDieBonus).
   { const base = resolveMassMelee({ attacker:{type:'HF',count:10}, defender:{type:'AF',count:10}, rng: always(6) });
     const led  = resolveMassMelee({ attacker:{type:'HF',count:10, dieScoreBonus:1}, defender:{type:'AF',count:10}, rng: always(6) });
