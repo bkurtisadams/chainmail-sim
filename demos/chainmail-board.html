@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.136 · Fix two Selected/New-unit panel layout bugs: wrap the Magic-sword note below the (no-longer-crushed) select, and group the Selected-header action buttons (Fly/Vanish/Edit) so they wrap instead of overflowing the panel. Built on v0.11.135. -->
+<!-- chainmail-board.html · v0.11.137 · Fix melee dispatch: a fantastic creature vs a lone man-type figure (Elf/Orc/Man) now resolves on the mixed 'creature fights as N men' path instead of erroring on the Fantasy Combat Table (no FCT column for man-types). onResolveMixed picks the creature by FIGHTING_STRENGTH so it stays the profiled side regardless of attack direction. Built on v0.11.136. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.136</title>
+<title>Chainmail — Battlefield · v0.11.137</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.136</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.137</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -723,7 +723,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.136';
+const SIM_VERSION = '0.11.137';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2734,6 +2734,13 @@ function elfUsesFantasyCombat(attacker, defender) {
   return !!attacker && attacker.type === 'ELF' && !!attacker.magicWeapon
       && !!defender && fantasyTarget('ELF', defender.type) != null;
 }
+// Types that can be resolved on the Fantasy Combat Table (a row/column, or an
+// alias of one). Used to gate the fantasy resolver: two individuals only fight on
+// the FCT if BOTH are FCT combatants. A man-type figure (MAN/Berserker or a
+// fantasy race like Elf/Orc) is NOT an FCT combatant — a creature fights it "as N
+// men" through the mixed resolver instead (Appendix D per-type text).
+const FCT_COMBATANTS = new Set([...Object.keys(FANTASY_TARGETS), 'OGRE', 'ZOMBIE']);
+const hasFctEntry = (type) => FCT_COMBATANTS.has(type);
 
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
@@ -7523,12 +7530,17 @@ function onResolveMelee() {
   if (elfUsesFantasyCombat(a, d)) return onResolveFantasy(a, d);
   // Dispatch by kind:
   //  · both mass → mass melee
-  //  · both individual: both mortal (HERO/SUPER_HERO) → mtm; else → fantasy combat
+  //  · both individual:
+  //      both mortal man-types (HERO/SUPER_HERO/Man/fantasy race) → man-to-man
+  //      both FCT combatants → Fantasy Combat Table
+  //      otherwise (a man-type figure vs a creature) → mixed: the creature fights
+  //        "as N men" and the man-type defends as its class (Appendix D)
   //  · individual+mass: any type with a FIGHTING_STRENGTH profile → mixed mass melee
   //                     · types with no melee profile → skipped
   if (a.kind === 'individual' && d.kind === 'individual') {
     if (MORTAL_TYPES.has(a.type) && MORTAL_TYPES.has(d.type)) return onResolveMtm(a, d);
-    return onResolveFantasy(a, d);
+    if (hasFctEntry(a.type) && hasFctEntry(d.type)) return onResolveFantasy(a, d);
+    return onResolveMixed(a, d);
   }
   if (a.kind === 'individual' || d.kind === 'individual') {
     const ind = a.kind === 'individual' ? a : d;
@@ -7960,9 +7972,15 @@ function onResolveFantasy(a, d) {
 // casualties on the individual side bleed into hp and may kill it at 0 hp.
 // Creatures in MELEE_IMMUNE_INDIV take no casualties back from normal troops.
 function onResolveMixed(a, d) {
-  const aIsIndiv = a.kind === 'individual';
-  const ind = aIsIndiv ? a : d;
-  const mass = aIsIndiv ? d : a;
+  // The profiled "creature" side carries a FIGHTING_STRENGTH entry; the other side
+  // is the mass (or, when a lone man-type faces a creature, a single-figure unit).
+  // Selecting by FIGHTING_STRENGTH (not by .kind) keeps the creature as `ind` even
+  // when BOTH sides are individuals, regardless of which one attacked. For the
+  // normal mass+individual case this resolves to the same side as before (the
+  // individual creature has the profile; mass troop types never do).
+  const ind  = FIGHTING_STRENGTH[a.type] ? a : d;
+  const mass = (ind === a) ? d : a;
+  const aIsIndiv = ind === a;
   const indT = typeById(ind.type), massT = typeById(mass.type);
   const edge = reformingFlankEdge(engagementEdge(a, d), d);   // p.10: reforming defender is flanked
   const fs = FIGHTING_STRENGTH[ind.type] || 1;
@@ -9925,6 +9943,10 @@ renderBoard();
   console.assert(!fcTrollDenied.ok, 'Dragon has no kill entry vs True Troll');
   const fcTrollAsGiant = resolveFantasyCombat({ attacker:{ type:'TROLL' }, defender:{ type:'HERO' }, rng: always(6) });
   console.assert(fcTrollAsGiant.target === FANTASY_TARGETS.GIANT.HERO, 'True Troll attacks on the Giant FCT row');
+  // FCT combatant gate (dispatch): creatures are FCT combatants; man-types are not,
+  // so a creature-vs-man melee routes to the mixed resolver, not the FCT.
+  console.assert(['BALROG','DRAGON','HERO','SUPER_HERO','WIZARD','WRAITH','WIGHT','LYCAN','ROC','GIANT','ENT','ELEMENTAL','TROLL','OGRE','ZOMBIE'].every(hasFctEntry), 'hasFctEntry: every fantastic creature is an FCT combatant');
+  console.assert(['ELF','ORC','GOBLIN','MAN','BERSERKER','DWARF','HOBBIT'].every(t => !hasFctEntry(t)), 'hasFctEntry: man-types / fantasy races are NOT FCT combatants (creature fights them as N men)');
 
   // Elf FCT scores (p.29) — a magic-armed Elf reads its own thresholds vs listed
   // fantastic creatures, not the Appendix-E matrix; Ogre stays 7 (no Troll alias),
