@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.140 · Leader morale: a led unit also adds +1 to the score of each die it rolls in morale checks — Loss Table, cavalry-charge, and post-melee reaction (p.30). Wizards may now Join a unit (morale-only leadership). resolveLossMorale/cavalryChargeCheck/resolvePostMelee take a dieBonus; loss checks routed through a unitLossMorale wrapper. Army-commander 12-inch radius still a follow-on. Built on v0.11.139. -->
+<!-- chainmail-board.html · v0.11.141 · Army commander (p.21): designate one figure per side (context menu); every friendly unit within 12 inches adds +1 to the score of each die it rolls in combat and morale, including the unit it is with. Proximity aura folded into unitCombatDieBonus/unitMoraleDieBonus, non-stacking with the attached-leader bonus. Shares-fate and auto-rally clauses are a follow-on. Built on v0.11.140. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.140</title>
+<title>Chainmail — Battlefield · v0.11.141</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.140</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.141</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -570,6 +570,8 @@
   <button data-act="cause-morale-check">Strike fear (enemy in range check morale)</button>
   <button data-act="join-unit">Join unit (lead the targeted friendly unit)</button>
   <button data-act="leave-unit">Leave unit</button>
+  <button data-act="make-commander">Make army commander (+1/die to friendly units within 12″)</button>
+  <button data-act="clear-commander">Remove army command</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -725,7 +727,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.140';
+const SIM_VERSION = '0.11.141';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2438,13 +2440,37 @@ function attachedUnitOf(hero) {
   return state.units.find(x => x.id === hero.attachedTo && !x.destroyed && x.kind === 'mass') || null;
 }
 // +1 to the unit's melee dice while a Hero/Super-Hero is attached (p.30).
+// ── Army commander (p.21) ─────────────────────────────────────────────────────
+// One figure per side may be the army commander (u.isCommander). Any friendly unit
+// within 12″ of it adds 1 to the score of every die it must rolls — combat AND
+// morale — including the unit the commander is itself with (distance ≈ 0). This is
+// a proximity aura, not an attachment, so it tracks the commander's position live.
+//   Non-stacking with the attached-leader bonus: a unit is either under command /
+// led (+1) or not. The commander's "suffer the same fate as its unit" and the
+// "auto-rally any unit it joins" clauses are a follow-on.
+const COMMANDER_RADIUS_IN = 12;
+function armyCommanderOf(side) {
+  return state.units.find(u => u && !u.destroyed && u.isCommander && u.side === side) || null;
+}
+function commanderInRange(unit) {
+  if (!unit) return false;
+  const cmd = armyCommanderOf(unit.side);
+  return !!cmd && cmd.id !== unit.id && engineRangeToTarget(cmd, unit) <= COMMANDER_RADIUS_IN;
+}
 function unitCombatDieBonus(unit) {
   const h = attachedHeroOf(unit);
-  return h && COMBAT_LEADERS.has(h.type) ? 1 : 0;
+  return ((h && COMBAT_LEADERS.has(h.type)) || commanderInRange(unit)) ? 1 : 0;
 }
-// +1 to the unit's morale dice while any capable leader (Hero/Super-Hero/Wizard)
-// is attached (ability D, p.30).
-const unitMoraleDieBonus = (unit) => attachedHeroOf(unit) ? 1 : 0;
+// +1 to the unit's morale dice while a capable leader (Hero/Super-Hero/Wizard) is
+// attached (ability D, p.30) or a friendly army commander is within 12″ (p.21).
+const unitMoraleDieBonus = (unit) => (attachedHeroOf(unit) || commanderInRange(unit)) ? 1 : 0;
+// Source label for the +1/die note in a melee log (attached leader vs command aura).
+function leadNoteFor(unit) {
+  const h = attachedHeroOf(unit);
+  if (h && COMBAT_LEADERS.has(h.type)) return `led by ${h.label || typeById(h.type).name} → +1/die (p.30)`;
+  if (commanderInRange(unit)) return `in command (within ${COMMANDER_RADIUS_IN}″) → +1/die (p.21)`;
+  return '';
+}
 // Attach / detach. Joining moves the hero off any prior unit first.
 function joinUnit(hero, unit) { if (canJoinUnit(hero, unit)) { hero.attachedTo = unit.id; return true; } return false; }
 function leaveUnit(hero) { if (hero) hero.attachedTo = null; }
@@ -5475,6 +5501,8 @@ function updateSidebar() {
       `<div class="stat"><span class="k">Morale</span><span class="v">${unitMorale(u)}</span></div>` +
       (attachedHeroOf(u) ? `<div class="stat"><span class="k">Led by</span><span class="v" style="color:var(--front)">${attachedHeroOf(u).label || typeById(attachedHeroOf(u).type).name} · ${COMBAT_LEADERS.has(attachedHeroOf(u).type) ? '+1/die' : '+1 morale'} (p.30)</span></div>` : '') +
       (attachedUnitOf(u) ? `<div class="stat"><span class="k">Leading</span><span class="v" style="color:var(--front)">${attachedUnitOf(u).label || typeById(attachedUnitOf(u).type).name} × ${attachedUnitOf(u).count}</span></div>` : '') +
+      (u.isCommander ? `<div class="stat"><span class="k">Command</span><span class="v" style="color:var(--front)">Army commander · +1/die within ${COMMANDER_RADIUS_IN}″ (p.21)</span></div>` : '') +
+      (u.kind === 'mass' && !attachedHeroOf(u) && commanderInRange(u) ? `<div class="stat"><span class="k">In command</span><span class="v" style="color:var(--front)">+1/die (within ${COMMANDER_RADIUS_IN}″, p.21)</span></div>` : '') +
       `<div class="stat"><span class="k">Facing</span><span class="v">${u.facing.toFixed(0)}°</span></div>` +
       `<div class="stat"><span class="k">On terrain</span><span class="v">${terrainTypesAt(u.x, u.y).map(t => t.label).join(', ') || 'open ground'}</span></div>` +
       `<div class="stat"><span class="k">Move used</span><span class="v"${overMove?' style="color:var(--rear)"':''}>${spentIn.toFixed(1)}″ / ${moveAllow}″${roadBonusOf(u) ? ` <small style="color:var(--front)">(+${roadBonusOf(u)} road)</small>` : (roadBonusBlockedByFacing(u) ? ` <small style="color:var(--ink-soft)">(on road · face along it for +${roadBonusBlockedByFacing(u)})</small>` : '')} · ½ ${halfMoveIn(u).toFixed(1)}″${overMove ? ' · OVER' : ` · ${moveLeft.toFixed(1)}″ left`}${overMove && !state.settings.enforceMovement ? ' (advisory)' : ''}</span></div>` +
@@ -7731,14 +7759,14 @@ function onResolveMelee() {
   if (attackerParams.flank || attackerParams.rear) aMods.push(`vs lookup as ${melee.attacker.effectiveClass}`);
   if (d.reform) aMods.push('target reforming → flanked (p.10)');
   if (aElfBonus) aMods.push(`magic weapons +${aElfBonus} dice vs ${dT.name}`);
-  if (aLed) aMods.push(`led by ${attachedHeroOf(a)?.label || typeById(attachedHeroOf(a)?.type)?.name || 'a hero'} → +1/die (p.30)`);
+  if (aLed) aMods.push(leadNoteFor(a));
   const dMods = [];
   if (melee.defender.noReturn) dMods.push('rear attack → no return');
   if (melee.defender.fatigueApplied) dMods.push('fatigued (one class down)');
   if (melee.defender.diePenalty)    dMods.push('bright light −1/die');
   if (melee.defender.polearmApplied) dMods.push('pike/halberd +1/man');
   if (dElfBonus) dMods.push(`magic weapons +${dElfBonus} dice vs ${aT.name}`);
-  if (dLed) dMods.push(`led by ${attachedHeroOf(d)?.label || typeById(attachedHeroOf(d)?.type)?.name || 'a hero'} → +1/die (p.30)`);
+  if (dLed) dMods.push(leadNoteFor(d));
 
   html += `<div class="step"><b style="color:var(--side-a-d)">A · ${aT.name} × ${a.count}</b> attacks ${edge.toUpperCase()} → ` +
           `${melee.attacker.totalDice} dice (${melee.attacker.dicePerMan.toFixed(2)}/man), kills on ${melee.attacker.killScores.join(',')} → ` +
@@ -9091,6 +9119,13 @@ function onUnitContextMenu(evt, unitId) {
     leaveBtn.hidden = !led;
     if (led) leaveBtn.textContent = `Leave ${led.label || typeById(led.type).name} × ${led.count}`;
   }
+  // Army commander (p.21): any single figure may be designated; one per side.
+  const mkCmdBtn = document.querySelector('#ctx-menu [data-act="make-commander"]');
+  const clrCmdBtn = document.querySelector('#ctx-menu [data-act="clear-commander"]');
+  if (mkCmdBtn && clrCmdBtn) {
+    mkCmdBtn.hidden = !(u.kind === 'individual' && !u.isCommander);
+    clrCmdBtn.hidden = !u.isCommander;
+  }
   // Half-move pause: offer "pause" only at/within the half-move with move left,
   // "resume" only while paused.
   document.querySelector('#ctx-menu [data-act="pause-half"]').hidden = !canPauseAtHalf(u);
@@ -9235,6 +9270,20 @@ function onContextMenuAction(evt) {
       appendTurn(`Left unit · ${typeById(u.type).name} (${u.side})`,
         `<div class="step">${typeById(u.type).name} leaves ${led.label || typeById(led.type).name} × ${led.count} — the +1/die bonus ends.</div>`);
     }
+  } else if (act === 'make-commander') {
+    if (u.kind !== 'individual') {
+      appendTurn(`Army commander — invalid`, `<div class="step">Only a single figure can be the army commander (p.21).</div>`);
+    } else {
+      const prev = armyCommanderOf(u.side);
+      if (prev && prev.id !== u.id) prev.isCommander = false;   // one commander per side
+      u.isCommander = true;
+      appendTurn(`Army commander · ${u.label || typeById(u.type).name} (${u.side})`,
+        `<div class="step">${u.label || typeById(u.type).name} is now the ${u.side} army commander — every friendly unit within ${COMMANDER_RADIUS_IN}″ adds 1 to the score of each die it rolls in combat and morale (p.21).${prev && prev.id !== u.id ? ` ${prev.label || typeById(prev.type).name} is no longer in command.` : ''}</div>`);
+    }
+  } else if (act === 'clear-commander') {
+    u.isCommander = false;
+    appendTurn(`Command removed · ${typeById(u.type).name} (${u.side})`,
+      `<div class="step">${u.label || typeById(u.type).name} is no longer the ${u.side} army commander.</div>`);
   } else if (act === 'free-paralysis') {
     if (canFreeParalysis(u)) {
       freeParalysis(u);
@@ -10079,6 +10128,22 @@ renderBoard();
   // resolvePostMelee: a leader on the fewer-casualties side adds +1 to its casualty die.
   { const led = resolvePostMelee({ a:{startCount:10,casualties:1,morale:5,fatigued:false,dieBonus:1}, b:{startCount:10,casualties:4,morale:5,fatigued:false}, rng: always(3) });
     console.assert(led.casualtyBonus.side === 'A' && led.casualtyBonus.leaderBonus === 1 && led.casualtyBonus.dieRoll === 4, 'leader morale: post-melee casualty die 3 → 4 for the led side'); }
+
+  // Army commander (p.21): friendly units within 12″ add +1 to combat and morale.
+  { const save = state.units;
+    const cmd  = { id:701, type:'HERO', side:'A', kind:'individual', isCommander:true, destroyed:false, x:0, y:0 };
+    const near = { id:702, type:'HF', side:'A', kind:'mass', count:10, destroyed:false, x:inchesToPx(8),  y:0 };  // 8″ ≤ 12
+    const far  = { id:703, type:'HF', side:'A', kind:'mass', count:10, destroyed:false, x:inchesToPx(16), y:0 };  // 16″ > 12
+    const foe  = { id:704, type:'HF', side:'B', kind:'mass', count:10, destroyed:false, x:inchesToPx(4),  y:0 };  // enemy, no benefit
+    state.units = [cmd, near, far, foe];
+    console.assert(armyCommanderOf('A') === cmd && armyCommanderOf('B') === null, 'commander: one per side, found by side');
+    console.assert(commanderInRange(near) === true && commanderInRange(far) === false && commanderInRange(foe) === false, 'commander: 12″ radius, friendly only');
+    console.assert(unitCombatDieBonus(near) === 1 && unitMoraleDieBonus(near) === 1, 'commander: in-range unit gets +1 to combat and morale');
+    console.assert(unitCombatDieBonus(far) === 0 && unitCombatDieBonus(foe) === 0, 'commander: out-of-range / enemy units get nothing');
+    // Non-stacking: a unit both led by a Hero and in command radius is still +1.
+    cmd.attachedTo = 702;   // the Hero commander also leads `near` — bonus stays capped at 1
+    console.assert(unitCombatDieBonus(near) === 1, 'commander: attached-leader + command radius does not stack past +1');
+    state.units = save; }
 
   // The combat die bonus lowers the unit's kill thresholds by one (applyDieBonus).
   { const base = resolveMassMelee({ attacker:{type:'HF',count:10}, defender:{type:'AF',count:10}, rng: always(6) });
