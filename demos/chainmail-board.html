@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.133 · Wire Elf Fantasy Combat Table scores (p.29) for magic-armed Elves vs listed fantastic creatures, and apply the magic sword's +1 / Excalibur +2-3 FCT bonus to any bearer's roll. Built on v0.11.132. -->
+<!-- chainmail-board.html · v0.11.134 · Add morale aura (ability E, p.30/33/35/36): Super Heroes, Wizards, Wraiths, Dragons and Rocs force enemy units in range to check morale as if excess casualties, via a Strike-fear creature action. Built on v0.11.133. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.132</title>
+<title>Chainmail — Battlefield · v0.11.134</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -319,7 +319,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.132</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.134</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -561,6 +561,7 @@
   <button data-act="paralyze-touch">Paralyzing touch (freeze enemy figures)</button>
   <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
   <button data-act="immolate">Immolate (burn figures in footprint)</button>
+  <button data-act="cause-morale-check">Strike fear (enemy in range check morale)</button>
   <button data-act="mark-fatigued">Mark as fatigued</button>
   <button data-act="clear-fatigue">Clear fatigue</button>
   <button data-act="reshape-line">Form line</button>
@@ -716,7 +717,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.133';
+const SIM_VERSION = '0.11.134';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2258,10 +2259,17 @@ function resolvePostMelee({ a, b, rng }) {
   };
 }
 
-function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued, diePenalty = 0 }) {
+function resolveLossMorale({ type, startCount, casualties, surrounded, rng, fatigued, diePenalty = 0, force = false }) {
   const t = typeById(type);
+  // Only types with a Loss-Table threshold check at all (rank-and-file + fantasy
+  // races). Fantastic individuals/works have no entry — and many "never check
+  // morale" — so they're never provoked, even by a forced aura check.
+  if (!t || !t.loss) return { triggered:false, pct:0, threshold:null };
   const pct = casualties / startCount;
-  if (pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
+  // `force` runs the check regardless of casualties — used by the morale aura
+  // (ability E, p.30/33/35/36): the foe checks "as if it had suffered excess
+  // casualties" using the same Loss-Table score.
+  if (!force && pct < t.loss.pct) return { triggered:false, pct, threshold:t.loss };
   const dice = roll2d6(rng);
   const fatiguePenalty = fatigued ? 1 : 0;
   const lightPenaltyTotal = diePenalty * 2;   // 2d6: -1 from each die rolled
@@ -2347,6 +2355,32 @@ function cavalryChargeCheck({ charger, defender, edge, mutualCharge, fatigued, d
   const passed = total >= target;
   return { autoStand:false, target, dice, bonus, modifier, fatiguePenalty, diePenalty, lightPenaltyTotal, total, passed,
     chargerType: charger.type, defenderType: defender.type, chargerClass: cls, edge };
+}
+
+// Morale aura — ability E (Appendix D): Super Heroes, Wizards, Wraiths, Dragons
+// and Rocs force nearby enemy units to check morale "as if they had suffered
+// excess casualties" (per-type text pp.30/33/35/36). The check is the ordinary
+// Loss-Table roll, run with force:true regardless of actual losses.
+//   Range: a Dragon's aura is a fixed 15″ (p.35). The Super Hero reaches to his
+//   charge movement (p.30), and the Wizard and Wraith inherit that ("as do / as
+//   if they were Super Heroes", pp.30/33). The Roc's reach is unstated ("as if
+//   they were Heroes", p.36); we use its charge move too, matching the rest.
+const MORALE_AURA_TYPES = new Set(['SUPER_HERO', 'WIZARD', 'WRAITH', 'DRAGON', 'ROC']);
+const MORALE_AURA_FIXED_IN = { DRAGON: 15 };
+const creatureCausesMoraleCheck = (u) => !!u && MORALE_AURA_TYPES.has(u.type);
+function moraleAuraRangeIn(u) {
+  if (!u) return 0;
+  return MORALE_AURA_FIXED_IN[u.type] ?? (CHARGE_ALLOWANCE[u.type] || MOVE_ALLOWANCE[u.type] || 12);
+}
+// Enemy units the aura can provoke: live foes within range that actually have a
+// Loss-Table threshold (rank-and-file + fantasy races). Fantastic individuals,
+// works, and "never check morale" types lack a loss entry and are skipped.
+function moraleAuraTargets(source, units) {
+  if (!creatureCausesMoraleCheck(source)) return [];
+  const reach = moraleAuraRangeIn(source);
+  return units.filter(t =>
+    t && !t.destroyed && t.side !== source.side && t.kind !== 'works' &&
+    typeById(t.type)?.loss && engineRangeToTarget(source, t) <= reach);
 }
 
 /* === D. MAN-TO-MAN ENGINE (Appendix B + p.25-26) ======================= */
@@ -8928,6 +8962,18 @@ function onUnitContextMenu(evt, unitId) {
   document.querySelector('#ctx-menu [data-act="paralyze-touch"]').hidden = !PARALYZER_TYPES.has(u.type);
   document.querySelector('#ctx-menu [data-act="free-paralysis"]').hidden = !isParalyzed(u);
   document.querySelector('#ctx-menu [data-act="immolate"]').hidden = u.type !== 'BALROG';
+  // Strike fear — ability E (p.30/33/35/36): offered to the aura creatures; once
+  // per turn (the foe checks on the creature's approach, not repeatedly).
+  const fearBtn = document.querySelector('#ctx-menu [data-act="cause-morale-check"]');
+  if (fearBtn) {
+    fearBtn.hidden = !creatureCausesMoraleCheck(u);
+    if (creatureCausesMoraleCheck(u)) {
+      const spent = !!(u.acted && u.acted.causedMorale);
+      fearBtn.textContent = spent
+        ? 'Strike fear — already this turn'
+        : `Strike fear (enemy within ${moraleAuraRangeIn(u)}″ check morale)`;
+    }
+  }
   // Half-move pause: offer "pause" only at/within the half-move with move left,
   // "resume" only while paused.
   document.querySelector('#ctx-menu [data-act="pause-half"]').hidden = !canPauseAtHalf(u);
@@ -9019,6 +9065,39 @@ function onContextMenuAction(evt) {
         }
         body += litNote;
         appendTurn(`Immolation · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`, body);
+      }
+    }
+  } else if (act === 'cause-morale-check') {
+    if (!creatureCausesMoraleCheck(u)) {
+      appendTurn(`Strike fear — n/a`, `<div class="step">${typeById(u.type).name} doesn't cause morale checks (ability E, p.30/33/35/36).</div>`);
+    } else if (u.acted && u.acted.causedMorale) {
+      appendTurn(`Strike fear — already this turn`, `<div class="step">${typeById(u.type).name} (${u.side}) has already provoked a morale check this turn. The foe checks on the creature's approach, not every turn — advance the turn to provoke again.</div>`);
+    } else {
+      const reach = moraleAuraRangeIn(u);
+      const targets = moraleAuraTargets(u, state.units);
+      if (!targets.length) {
+        appendTurn(`Strike fear — no foes in range`, `<div class="step">No enemy units that check morale lie within ${reach}″ of ${typeById(u.type).name} (${u.side}).</div>`);
+      } else {
+        const lines = [];
+        for (const d of targets) {
+          const surrounded = false;   // surround detection isn't modeled; failures remove the unit
+          const lr = resolveLossMorale({ type:d.type, startCount:d.startCount, casualties:0, surrounded,
+            rng: state.rng, fatigued: !!d.fatigued && state.settings.applyFatigue, diePenalty: lightDiePenalty(d), force:true });
+          const dName = typeById(d.type).name;
+          const tail = lossMoraleTail(lr);
+          if (lr.passed) {
+            lines.push(`<div class="step">${dName} (${d.side}) holds — needs ${lr.threshold.score}+, rolled 2d6 = ${lr.dice.a}+${lr.dice.b} = <b>${lr.dice.sum}</b>${tail}</div>`);
+          } else {
+            lines.push(`<div class="verdict v-rout">${dName} (${d.side}) breaks — needs ${lr.threshold.score}+, rolled <b>${lr.effectiveSum}</b> → removed</div>`);
+            d.count = 0; d.destroyed = true;
+            cleanupEngagementsForUnit(d.id);
+            if (d.id === state.targetId) state.targetId = null;
+            if (d.id === state.selectedId) state.selectedId = null;
+          }
+        }
+        u.acted = u.acted || {};
+        u.acted.causedMorale = true;
+        appendTurn(`Strike fear · ${typeById(u.type).name} (${u.side}) · ${targets.length} foe${targets.length>1?'s':''} within ${reach}″`, lines.join(''));
       }
     }
   } else if (act === 'free-paralysis') {
@@ -9793,6 +9872,23 @@ renderBoard();
   console.assert(lmFat.fatiguePenalty === 1 && lmFat.effectiveSum === 6 && lmFat.passed === false, 'fatigue −1: 7 → 6 fails HF 7+');
   const lmNone = resolveLossMorale({ type:'HF', startCount:30, casualties:5, surrounded:false, rng: always(6), fatigued:false });
   console.assert(lmNone.triggered === false, 'HF 16.7% below threshold → no check');
+  // Morale aura (ability E) — force runs the Loss check at 0% casualties; a type
+  // with no loss entry (Hero, works) is never provoked.
+  const lmForce = resolveLossMorale({ type:'HF', startCount:30, casualties:0, surrounded:false, rng: seq([forDie(3), forDie(3)]), fatigued:false, force:true });
+  console.assert(lmForce.triggered === true && lmForce.dice.sum === 6 && lmForce.passed === false, 'forced check: HF at 0% rolling 6 < 7 → breaks');
+  const lmForceHold = resolveLossMorale({ type:'HF', startCount:30, casualties:0, surrounded:false, rng: always(6), fatigued:false, force:true });
+  console.assert(lmForceHold.triggered === true && lmForceHold.passed === true, 'forced check: HF rolling 12 → holds');
+  console.assert(resolveLossMorale({ type:'HERO', startCount:1, casualties:0, surrounded:false, rng: always(1), fatigued:false, force:true }).triggered === false, 'forced check: a type with no loss entry is never provoked');
+  // Aura source set, ranges, and target filtering.
+  console.assert(['SUPER_HERO','WIZARD','WRAITH','DRAGON','ROC'].every(creatureCausesMoraleCheck) && !creatureCausesMoraleCheck({ type:'HERO' }) && !creatureCausesMoraleCheck({ type:'BALROG' }), 'ability E: Super Hero/Wizard/Wraith/Dragon/Roc only — not Hero/Balrog');
+  console.assert(moraleAuraRangeIn({ type:'DRAGON' }) === 15 && moraleAuraRangeIn({ type:'SUPER_HERO' }) === CHARGE_ALLOWANCE.SUPER_HERO && moraleAuraRangeIn({ type:'WRAITH' }) === CHARGE_ALLOWANCE.WRAITH, 'aura range: Dragon fixed 15″, others use charge move');
+  { const drag = { id:1, type:'DRAGON', side:'A', kind:'individual', x:0, y:0 };
+    const near = { id:2, type:'HF', side:'B', kind:'mass', count:10, x:inchesToPx(10), y:0 };   // 10″ ≤ 15
+    const far  = { id:3, type:'HF', side:'B', kind:'mass', count:10, x:inchesToPx(20), y:0 };    // 20″ > 15
+    const ally = { id:4, type:'HF', side:'A', kind:'mass', count:10, x:inchesToPx(5),  y:0 };     // friendly, skipped
+    const heroFoe = { id:5, type:'HERO', side:'B', kind:'individual', x:inchesToPx(5), y:0 };     // no loss entry, skipped
+    const tgts = moraleAuraTargets(drag, [drag, near, far, ally, heroFoe]).map(t => t.id);
+    console.assert(tgts.length === 1 && tgts[0] === 2, 'aura targets: only in-range enemy units with a loss entry — not far/friendly/Hero'); }
   const lmLight = resolveLossMorale({ type:'ORC', startCount:30, casualties:11, surrounded:false, rng: always(4), fatigued:false, diePenalty:1 });
   console.assert(lmLight.effectiveSum === 6 && lmLight.passed === false, 'orc bright light: loss morale subtracts 1 from each d6');
   const orcChargeLight = cavalryChargeCheck({ charger:{ type:'LH' }, defender:{ type:'ORC' }, edge:'front', mutualCharge:false, fatigued:false, diePenalty:1, rng: always(4) });
