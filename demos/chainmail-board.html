@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.137 · Fix melee dispatch: a fantastic creature vs a lone man-type figure (Elf/Orc/Man) now resolves on the mixed 'creature fights as N men' path instead of erroring on the Fantasy Combat Table (no FCT column for man-types). onResolveMixed picks the creature by FIGHTING_STRENGTH so it stays the profiled side regardless of attack direction. Built on v0.11.136. -->
+<!-- chainmail-board.html · v0.11.138 · Fix a panel crash: updateButtons read a.side without guarding the selected unit, so deleting a selected unit (or losing it in combat) while a target was set threw and broke the sidebar. Guard `a` in the counter-magic vsWiz check. Built on v0.11.137. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.137</title>
+<title>Chainmail — Battlefield · v0.11.138</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.137</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.138</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -723,7 +723,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.137';
+const SIM_VERSION = '0.11.138';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -6001,7 +6001,7 @@ function updateButtons() {
   if (cmBtn) {
     const showCm = !!(a && isMagicUser(a));
     const missilePhaseOk = !state.settings.enforcePhases || phaseId === 'missile';
-    const vsWiz = !!(d && isMagicUser(d) && d.side !== a.side);
+    const vsWiz = !!(a && d && isMagicUser(d) && d.side !== a.side);
     cmBtn.hidden = !showCm;
     cmBtn.disabled = !(cm && cm.ok && vsWiz && missilePhaseOk);
     cmBtn.title = !showCm ? '' :
