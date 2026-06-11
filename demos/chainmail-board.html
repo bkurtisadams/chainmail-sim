@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.141 · Army commander (p.21): designate one figure per side (context menu); every friendly unit within 12 inches adds +1 to the score of each die it rolls in combat and morale, including the unit it is with. Proximity aura folded into unitCombatDieBonus/unitMoraleDieBonus, non-stacking with the attached-leader bonus. Shares-fate and auto-rally clauses are a follow-on. Built on v0.11.140. -->
+<!-- chainmail-board.html · v0.11.142 · Draw the army-commander 12-inch radius on the board, selection-gated: when a unit is selected and its side has a commander, a dashed ring shows the commander's reach (center-to-center, matching commanderInRange). No toggle; disappears when nothing is selected. Built on v0.11.141. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.141</title>
+<title>Chainmail — Battlefield · v0.11.142</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.141</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.142</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -727,7 +727,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.141';
+const SIM_VERSION = '0.11.142';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4560,6 +4560,7 @@ function renderBoard() {
     renderTerrain() +
     renderHazards() +
     renderGrid() +
+    renderCommandRadius() +
     `<g id="units">${state.units.map(u => isConcealed(u) ? `<g opacity="0.5">${renderUnit(u)}</g>` : renderUnit(u)).join('')}</g>` +
     `<g id="overlay">${renderDarkness()}${renderProtection()}${renderAntiMagic()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
@@ -4748,6 +4749,21 @@ function renderTerrain() {
       dr.pts.map(p => `<circle cx="${p.x}" cy="${p.y}" r="3.5" fill="#fff" stroke="${dt.fill}" stroke-width="1.5"/>`).join('');
   }
   return `<g id="terrain" pointer-events="none">${rects}${draft}</g>`;
+}
+// Selection-gated command radius (p.21): when a unit is selected and its side has
+// an army commander, draw the commander's 12″ reach so coverage is readable at a
+// glance. Center-to-center, matching commanderInRange. No toggle — it shows only
+// for the current selection and disappears when nothing is selected.
+function renderCommandRadius() {
+  const sel = state.units.find(u => u.id === state.selectedId && !u.destroyed);
+  if (!sel) return '';
+  const cmd = armyCommanderOf(sel.side);
+  if (!cmd) return '';
+  const r = COMMANDER_RADIUS_IN * PX_PER_INCH;
+  return `<g id="command-radius" pointer-events="none">`
+    + `<circle cx="${cmd.x}" cy="${cmd.y}" r="${r}" fill="rgba(216,178,90,0.05)" stroke="rgba(216,178,90,0.7)" stroke-width="1.5" stroke-dasharray="5 5"/>`
+    + `<circle cx="${cmd.x}" cy="${cmd.y}" r="3" fill="rgba(216,178,90,0.9)"/>`
+    + `</g>`;
 }
 function renderGrid() {
   if (!state.showGrid) return '';
