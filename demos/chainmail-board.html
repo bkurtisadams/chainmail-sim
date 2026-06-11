@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.142 · Draw the army-commander 12-inch radius on the board, selection-gated: when a unit is selected and its side has a commander, a dashed ring shows the commander's reach (center-to-center, matching commanderInRange). No toggle; disappears when nothing is selected. Built on v0.11.141. -->
+<!-- chainmail-board.html · v0.11.143 · Make the command-radius ring legible: render it in the overlay ABOVE the ambient-darkness rect (so dim/night no longer dims it) and give it a dark halo under a bright dashed stroke that reads on light terrain and in darkness alike. Built on v0.11.142. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.142</title>
+<title>Chainmail — Battlefield · v0.11.143</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.142</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.143</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -727,7 +727,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.142';
+const SIM_VERSION = '0.11.143';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4560,9 +4560,8 @@ function renderBoard() {
     renderTerrain() +
     renderHazards() +
     renderGrid() +
-    renderCommandRadius() +
     `<g id="units">${state.units.map(u => isConcealed(u) ? `<g opacity="0.5">${renderUnit(u)}</g>` : renderUnit(u)).join('')}</g>` +
-    `<g id="overlay">${renderDarkness()}${renderProtection()}${renderAntiMagic()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
+    `<g id="overlay">${renderDarkness()}${renderCommandRadius()}${renderProtection()}${renderAntiMagic()}${renderCloudkill()}${renderOverlay()}${renderBreathPreview()}${renderCatapultHit()}${renderWizardMissile()}${renderCannonShot()}${renderMeasure()}${renderDragRuler()}</g>`;
   for (const u of state.units) {
     const node = board.querySelector(`[data-id="${u.id}"]`);
     if (node) {
@@ -4752,17 +4751,22 @@ function renderTerrain() {
 }
 // Selection-gated command radius (p.21): when a unit is selected and its side has
 // an army commander, draw the commander's 12″ reach so coverage is readable at a
-// glance. Center-to-center, matching commanderInRange. No toggle — it shows only
-// for the current selection and disappears when nothing is selected.
+// glance. Center-to-center, matching commanderInRange. Rendered in the overlay
+// ABOVE the ambient-darkness rect (it's a planning aid, not a lit board element),
+// with a dark halo under a bright dashed stroke so it stays legible on light
+// terrain and in dim/night alike. No toggle; shows only for the current selection.
 function renderCommandRadius() {
   const sel = state.units.find(u => u.id === state.selectedId && !u.destroyed);
   if (!sel) return '';
   const cmd = armyCommanderOf(sel.side);
   if (!cmd) return '';
   const r = COMMANDER_RADIUS_IN * PX_PER_INCH;
+  const cx = cmd.x, cy = cmd.y;
   return `<g id="command-radius" pointer-events="none">`
-    + `<circle cx="${cmd.x}" cy="${cmd.y}" r="${r}" fill="rgba(216,178,90,0.05)" stroke="rgba(216,178,90,0.7)" stroke-width="1.5" stroke-dasharray="5 5"/>`
-    + `<circle cx="${cmd.x}" cy="${cmd.y}" r="3" fill="rgba(216,178,90,0.9)"/>`
+    + `<circle cx="${cx}" cy="${cy}" r="${r}" fill="rgba(240,205,120,0.05)"/>`
+    + `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(15,12,22,0.6)" stroke-width="4" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>`
+    + `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(244,212,128,0.98)" stroke-width="2" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>`
+    + `<circle cx="${cx}" cy="${cy}" r="4.5" fill="rgba(244,212,128,0.98)" stroke="rgba(15,12,22,0.7)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     + `</g>`;
 }
 function renderGrid() {
