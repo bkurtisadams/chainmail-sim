@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.145 · Giant Wolves / Wargs / Dire Wolves (fantasy supp.): new mass creature — attacks as Light Horse, defends as a Wight (Heavy Horse defend class, so "killed as a Wight" drops in via defendCls), moves as Medium Horse (18, charge 24), large. The two-attacks-as-men-vs-fantastic attack mode and the goblin-rider mount are follow-ons. Built on v0.11.144. -->
+<!-- chainmail-board.html · v0.11.146 · Basilisk / Cockatrice (fantasy supp.): two new individual creatures whose only attack is a petrifying touch — each enemy figure in contact throws 2d6 (earthy types turn to stone unless 10+, all others 7+) and failures are removed. They defend as a Lycanthrope and deal no normal melee (gaze is not modelled). Cockatrice flies (18). Built on v0.11.145. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.145</title>
+<title>Chainmail — Battlefield · v0.11.146</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.145</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.146</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -565,6 +565,7 @@
   <button data-act="toggle-fly">Take off</button>
   <button data-act="breathe">Breathe fire (9″ cone)</button>
   <button data-act="paralyze-touch">Paralyzing touch (freeze enemy figures)</button>
+  <button data-act="petrify-touch">Petrifying touch (turn enemies to stone)</button>
   <button data-act="free-paralysis">Free paralysis (friendly Elf/Hero/Wizard ≤1″)</button>
   <button data-act="immolate">Immolate (burn figures in footprint)</button>
   <button data-act="cause-morale-check">Strike fear (enemy in range check morale)</button>
@@ -727,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.145';
+const SIM_VERSION = '0.11.146';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -925,6 +926,7 @@ const MOVE_ALLOWANCE = {
   // with the fantasy resolver slice)
   HERO:12, SUPER_HERO:12, WIZARD:12, BALROG:6, DRAGON:9, ELEMENTAL:12,
   ENT:6, GIANT:12, LYCAN:9, ROC:24, OGRE:9, TROLL:9, WIGHT:9, ZOMBIE:6, WRAITH:18,
+  BASILISK:6, COCKATRICE:9,
   // Fantasy races (Appendix D)
   ORC:9, GIANT_ORC:9, GOBLIN:6, KOBOLD:6, HOBGOBLIN:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
   WOLF:18,   // Medium Horse (→ Heavy Horse when bearing a rider — deferred)
@@ -941,6 +943,7 @@ const CHARGE_ALLOWANCE = {
   LH:30, MH:24, HH:18, MK:18,
   HERO:15, SUPER_HERO:15, WIZARD:12, BALROG:9, DRAGON:15, ELEMENTAL:12,
   ENT:6, GIANT:18, LYCAN:12, ROC:24, OGRE:12, TROLL:12, WIGHT:9, ZOMBIE:9, WRAITH:24,
+  BASILISK:6, COCKATRICE:9,
   ORC:12, GIANT_ORC:12, GOBLIN:9, KOBOLD:9, HOBGOBLIN:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
   WOLF:24,   // Medium Horse charge
 };
@@ -1009,6 +1012,11 @@ const FANTASTIC_TYPES = Object.freeze([
   { id:'WIGHT',      name:'Wight / Ghoul', morale:10,   point:10  },
   { id:'ZOMBIE',     name:'Zombie',        morale:10,   point:10  },
   { id:'WRAITH',     name:'Wraith',        morale:10,   point:10  },
+  // Basilisk / Cockatrice (fantasy supp.): no normal attack — their melee is the
+  // petrifying touch (a save-gated removal). They defend as a Lycanthrope. Gaze is
+  // not modelled (can't be), so touch is their only offence. GM-placed only.
+  { id:'BASILISK',   name:'Basilisk',      morale:'—',  point:'—' },
+  { id:'COCKATRICE', name:'Cockatrice',    morale:'—',  point:'—' },
 ]);
 const fantasticTypeById = (id) => FANTASTIC_TYPES.find(t => t.id === id);
 
@@ -2055,7 +2063,7 @@ const SIZE_BY_TYPE = {
   HOBBIT: 'tiny', SPRITE: 'tiny',
   DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
   ELF: 'man', ORC: 'man', GIANT_ORC: 'man', HOBGOBLIN: 'man',
-  WOLF: 'large',
+  WOLF: 'large', BASILISK: 'large', COCKATRICE: 'man',
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -2715,6 +2723,7 @@ function targetArmorIdx(target) {
 const FIGHTING_STRENGTH = {
   HERO: 4, SUPER_HERO: 8, WIZARD: 2, WRAITH: 2, LYCAN: 4, OGRE: 6, TROLL: 3,
   BALROG: 2, GIANT: 12, ENT: 6, DRAGON: 4, ROC: 4, ELEMENTAL: 4, WIGHT: 1, ZOMBIE: 1,
+  BASILISK: 4, COCKATRICE: 4,   // defend as a Lycanthrope (no offensive use — see NO_MELEE_ATTACK)
 };
 // Class used for the synthetic mass figures when an individual fights a mass
 // unit — each creature's "melee as N of class X" profile (fantasy supp. pp.30-37).
@@ -2733,7 +2742,7 @@ const fightingClassFor = (type) => FANTASY_FIGHTING_CLASS[type] || 'AF';
 // Giant attacks as Heavy Foot but defends as Armored Foot; Lycanthrope attacks
 // AF / defends HF; Roc and Wight melee as Light Horse but defend as Heavy Horse.
 // Others defend as they attack. Giants add one die whenever they swing.
-const FANTASY_DEFEND_CLASS = { GIANT: 'AF', LYCAN: 'HF', ROC: 'HH', WIGHT: 'HH', ZOMBIE: 'HH' };
+const FANTASY_DEFEND_CLASS = { GIANT: 'AF', LYCAN: 'HF', ROC: 'HH', WIGHT: 'HH', ZOMBIE: 'HH', BASILISK: 'HF', COCKATRICE: 'HF' };
 const defendClassFor = (type) => FANTASY_DEFEND_CLASS[type] || fightingClassFor(type);
 const FANTASY_BONUS_DICE = { GIANT: 1 };
 
@@ -2783,6 +2792,11 @@ const ELF_FCT_SCORES = Object.freeze({
   HERO:9, SUPER_HERO:11, WIZARD:10, WRAITH:8, WIGHT:6, LYCAN:9, OGRE:7, BALROG:12, GIANT:10,
 });
 function fantasyTarget(attackerType, defenderType) {
+  // Basilisk / Cockatrice "defend as a Lycanthrope" (fantasy supp.) — alias the
+  // defender column for both the Elf row and the general table. They have no
+  // attacker row (no normal attack), so attackerType is left to fall through to
+  // the null return below.
+  if (defenderType === 'BASILISK' || defenderType === 'COCKATRICE') defenderType = 'LYCAN';
   // p.29 — magic-armed Elf reads ELF_FCT_SCORES; this row is checked first so the
   // Ogre→Troll / Zombie→Wight aliases below can't clobber the Elf's own scores.
   if (attackerType === 'ELF') {
@@ -2834,8 +2848,16 @@ function elfUsesFantasyCombat(attacker, defender) {
 // the FCT if BOTH are FCT combatants. A man-type figure (MAN/Berserker or a
 // fantasy race like Elf/Orc) is NOT an FCT combatant — a creature fights it "as N
 // men" through the mixed resolver instead (Appendix D per-type text).
-const FCT_COMBATANTS = new Set([...Object.keys(FANTASY_TARGETS), 'OGRE', 'ZOMBIE']);
+const FCT_COMBATANTS = new Set([...Object.keys(FANTASY_TARGETS), 'OGRE', 'ZOMBIE', 'BASILISK', 'COCKATRICE']);
 const hasFctEntry = (type) => FCT_COMBATANTS.has(type);
+// Basilisk / Cockatrice: their only offence is the petrifying touch, so they deal
+// no normal melee damage (the mixed path zeroes their attack dice; the FCT path
+// already returns null for them as attacker). Touch is a save-gated removal: the
+// listed earthy types are turned to stone unless they roll 10+, all others 7+.
+const PETRIFIER_TYPES = new Set(['BASILISK', 'COCKATRICE']);
+const NO_MELEE_ATTACK = new Set(['BASILISK', 'COCKATRICE']);
+const PETRIFY_SAVE_HARD = new Set(['HOBBIT', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD', 'ORC', 'ENT', 'GIANT']);
+const petrifySaveTarget = (type) => PETRIFY_SAVE_HARD.has(type) ? 10 : 7;
 
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
@@ -3443,6 +3465,7 @@ const FLIERS = Object.freeze({
   WRAITH: { fly: 18, maxAloft: Infinity },
   BALROG: { fly: 15, maxAloft: 3 },
   SPRITE: { fly: 9,  maxAloft: 3 },
+  COCKATRICE: { fly: 18, maxAloft: Infinity },
 });
 function canFly(u) {
   if (!u || u.kind === 'works') return false;
@@ -5739,6 +5762,54 @@ function resolveRamBatter() {
 // A fantastic creature battering a structure in contact removes its FANTASTIC_BATTER
 // points per turn (melee phase). A Giant's ranged rock-throw is handled separately as a
 // thrown boulder on the missile path (giantBoulderState). Contact reuses the ram's pad.
+// Petrifying touch (fantasy supp.): the Basilisk/Cockatrice's only attack. Each
+// enemy figure in base contact throws 2d6 — the listed earthy types turn to stone
+// unless they roll 10+, all others on 7+ — and failures are removed (gaze is not
+// modelled, so this touch is the whole mechanic).
+function resolvePetrifyTouch(basilisk, target) {
+  if (edgeGapInches(basilisk, target) > 1 + 1e-9) {
+    appendTurn(`Petrifying touch — out of reach`,
+      `<div class="step">Move ${typeById(basilisk.type).name} into contact with ${typeById(target.type).name} first (now ${edgeGapInches(basilisk, target).toFixed(1)}″ away).</div>`);
+    return;
+  }
+  pushUndo('petrify-touch');
+  const thr = petrifySaveTarget(target.type);
+  const tName = typeById(target.type).name, nm = `${target.side} ${tName}`;
+  let html = `<div class="step">${basilisk.side} ${typeById(basilisk.type).name}'s touch — ${tName} turns to stone unless it rolls 2d6 ≥ ${thr}</div>`;
+  if (target.kind === 'individual') {
+    const roll = roll2d6(state.rng).sum;
+    if (roll < thr) {
+      target.destroyed = true;
+      html += `<div class="verdict v-rout">${nm} fails (rolled ${roll}) → turned to stone</div>`;
+      cleanupEngagementsForUnit(target.id);
+      if (target.id === state.selectedId) state.selectedId = null;
+      if (target.id === state.targetId) state.targetId = null;
+    } else {
+      html += `<div class="verdict v-stable">${nm} saves (rolled ${roll})</div>`;
+    }
+  } else {
+    const touched = Math.min(Math.max(1, figuresWithinFootprint(basilisk, target)), target.count);
+    let petrified = 0; const rolls = [];
+    for (let i = 0; i < touched; i++) { const r = roll2d6(state.rng).sum; rolls.push(r); if (r < thr) petrified++; }
+    html += `<div class="step">${touched} figure${touched > 1 ? 's' : ''} in contact roll: ${rolls.join(', ')}</div>`;
+    if (petrified > 0) {
+      applyCasualties(target, petrified);
+      capParalysisToCount(target);
+      if (target.destroyed) {
+        html += `<div class="verdict v-rout">${nm} — all turned to stone</div>`;
+        cleanupEngagementsForUnit(target.id);
+        if (target.id === state.selectedId) state.selectedId = null;
+        if (target.id === state.targetId) state.targetId = null;
+      } else {
+        html += `<div class="verdict v-killed">${petrified} turned to stone → ${target.count}/${target.startCount}</div>`;
+      }
+    } else {
+      html += `<div class="verdict v-stable">all saved — none petrified</div>`;
+    }
+  }
+  appendTurn(`Petrifying touch · ${typeById(basilisk.type).name} (${basilisk.side}) → ${nm}`, html);
+  renderBoard();
+}
 function creatureBatterState(a, d) {
   if (!a || a.kind === 'works' || !d || a.destroyed || d.destroyed) return null;
   const pts = FANTASTIC_BATTER[a.type];
@@ -8184,7 +8255,7 @@ function onResolveMixed(a, d) {
     polearm: !!defender.polearm, impetus: false, fatigued: !!defender.fatigued };
   // Frozen figures don't swing: the individual contributes 0 dice if paralyzed;
   // the mass contributes only its non-frozen figures.
-  const indActive = isParalyzed(ind) ? 0 : effFigures;
+  const indActive = (isParalyzed(ind) || NO_MELEE_ATTACK.has(ind.type)) ? 0 : effFigures;
   attackerParams.activeCount = aIsIndiv ? indActive : activeFigures(mass);
   defenderParams.activeCount = aIsIndiv ? activeFigures(mass) : indActive;
   // The individual (proxy) attacks as `cls` and defends as `defCls`; Giants add
@@ -9159,6 +9230,7 @@ function onUnitContextMenu(evt, unitId) {
   // Paralysis: touch is offered to paralyzers (Wight/Wraith); free is offered to
   // any unit currently holding paralyzed figures.
   document.querySelector('#ctx-menu [data-act="paralyze-touch"]').hidden = !PARALYZER_TYPES.has(u.type);
+  document.querySelector('#ctx-menu [data-act="petrify-touch"]').hidden = !PETRIFIER_TYPES.has(u.type);
   document.querySelector('#ctx-menu [data-act="free-paralysis"]').hidden = !isParalyzed(u);
   document.querySelector('#ctx-menu [data-act="immolate"]').hidden = u.type !== 'BALROG';
   // Strike fear — ability E (p.30/33/35/36): offered to the aura creatures; once
@@ -9255,6 +9327,13 @@ function onContextMenuAction(evt) {
       appendTurn(`Paralyzing touch · ${typeById(u.type).name} (${u.side}) → ${typeById(tgt.type).name} (${tgt.side})`,
         n > 0 ? `<div class="step">${n} figure${n>1?'s':''} paralyzed ${when}.</div>`
               : `<div class="step">No free figures left to paralyze.</div>`);
+    }
+  } else if (act === 'petrify-touch') {
+    const tgt = state.units.find(x => x.id === state.targetId);
+    if (!tgt || tgt.destroyed || tgt.side === u.side) {
+      appendTurn(`Petrifying touch — no target`, `<div class="step">Shift-click an enemy unit first, then use ${typeById(u.type).name}'s touch.</div>`);
+    } else {
+      resolvePetrifyTouch(u, tgt);
     }
   } else if (act === 'immolate') {
     const tgt = state.units.find(x => x.id === state.targetId);
@@ -10930,6 +11009,15 @@ renderBoard();
   console.assert(FANTASY_DEFEND_CLASS.WIGHT === 'HH', 'wolf: "killed as a Wight" == HH, matching the Wight defend class');
   console.assert(MOVE_ALLOWANCE.WOLF === 18 && CHARGE_ALLOWANCE.WOLF === 24, 'wolf: moves as Medium Horse (18, charge 24)');
   console.assert(sizeOf('WOLF') === 'large', 'wolf: large (bears a goblin rider)');
+
+  // Basilisk / Cockatrice (fantasy supp.): touch-petrify, defend as Lycanthrope, no normal attack.
+  console.assert(fantasyTarget('HERO', 'BASILISK') === fantasyTarget('HERO', 'LYCAN') && fantasyTarget('HERO', 'BASILISK') != null, 'basilisk: defends as a Lycanthrope on the FCT');
+  console.assert(fantasyTarget('BASILISK', 'HERO') === null && fantasyTarget('COCKATRICE', 'DRAGON') === null, 'basilisk: no attacker row — does not otherwise attack');
+  console.assert(defendClassFor('BASILISK') === 'HF' && defendClassFor('COCKATRICE') === 'HF', 'basilisk: mixed-path defence is the Lycanthrope class (HF)');
+  console.assert(NO_MELEE_ATTACK.has('BASILISK') && NO_MELEE_ATTACK.has('COCKATRICE'), 'basilisk: flagged as dealing no normal melee');
+  console.assert(petrifySaveTarget('ORC') === 10 && petrifySaveTarget('GIANT') === 10 && petrifySaveTarget('HF') === 7 && petrifySaveTarget('HERO') === 7, 'basilisk: earthy types save on 10+, all others on 7+');
+  console.assert(MOVE_ALLOWANCE.BASILISK === 6 && MOVE_ALLOWANCE.COCKATRICE === 9, 'basilisk: move 6 / cockatrice move 9');
+  console.assert(!!FLIERS.COCKATRICE && !FLIERS.BASILISK, 'basilisk: the cockatrice flies, the basilisk does not');
 
   console.assert(catapultTurnsPerShot('light', 5) === 2, 'catapult: crew above 4 gives no benefit');
   console.assert(catapultScatter(5, 3).dir === 'over' && catapultScatter(5, 3).miss === 5, 'catapult scatter: over wins, miss 5"');
