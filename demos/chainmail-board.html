@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.146 · Basilisk / Cockatrice (fantasy supp.): two new individual creatures whose only attack is a petrifying touch — each enemy figure in contact throws 2d6 (earthy types turn to stone unless 10+, all others 7+) and failures are removed. They defend as a Lycanthrope and deal no normal melee (gaze is not modelled). Cockatrice flies (18). Built on v0.11.145. -->
+<!-- chainmail-board.html · v0.11.147 · Fix: size the Giant Wolf as man-scale (was large), so its unit footprint is no bigger than a Light Horse unit — wolves are horse-comparable. Built on v0.11.146. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.146</title>
+<title>Chainmail — Battlefield · v0.11.147</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.146</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.147</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.146';
+const SIM_VERSION = '0.11.147';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2063,7 +2063,7 @@ const SIZE_BY_TYPE = {
   HOBBIT: 'tiny', SPRITE: 'tiny',
   DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
   ELF: 'man', ORC: 'man', GIANT_ORC: 'man', HOBGOBLIN: 'man',
-  WOLF: 'large', BASILISK: 'large', COCKATRICE: 'man',
+  WOLF: 'man', BASILISK: 'large', COCKATRICE: 'man',   // wolf is horse-comparable → man-scale like Light Horse
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -11008,7 +11008,7 @@ renderBoard();
   console.assert(defendTypeForMass('WOLF') === 'HH', 'wolf: mass/mixed defence routes to Heavy Horse (the Wight defend class)');
   console.assert(FANTASY_DEFEND_CLASS.WIGHT === 'HH', 'wolf: "killed as a Wight" == HH, matching the Wight defend class');
   console.assert(MOVE_ALLOWANCE.WOLF === 18 && CHARGE_ALLOWANCE.WOLF === 24, 'wolf: moves as Medium Horse (18, charge 24)');
-  console.assert(sizeOf('WOLF') === 'large', 'wolf: large (bears a goblin rider)');
+  console.assert(sizeOf('WOLF') === 'man', 'wolf: man-scale (no bigger than Light Horse)');
 
   // Basilisk / Cockatrice (fantasy supp.): touch-petrify, defend as Lycanthrope, no normal attack.
   console.assert(fantasyTarget('HERO', 'BASILISK') === fantasyTarget('HERO', 'LYCAN') && fantasyTarget('HERO', 'BASILISK') != null, 'basilisk: defends as a Lycanthrope on the FCT');
