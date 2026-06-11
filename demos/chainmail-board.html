@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.144 · Giant anti-personnel boulder (p.35): a Giant may now hurl a rock at enemy troops, not just structures — a small-catapult hit area (2 inch, no minimum range) that scatters and crushes the figures under it. Shared applyCircularHitArea with the catapult; giantBoulderState gains a siege/antipersonnel mode. Built on v0.11.143. -->
+<!-- chainmail-board.html · v0.11.145 · Giant Wolves / Wargs / Dire Wolves (fantasy supp.): new mass creature — attacks as Light Horse, defends as a Wight (Heavy Horse defend class, so "killed as a Wight" drops in via defendCls), moves as Medium Horse (18, charge 24), large. The two-attacks-as-men-vs-fantastic attack mode and the goblin-rider mount are follow-ons. Built on v0.11.144. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.144</title>
+<title>Chainmail — Battlefield · v0.11.145</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.144</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.145</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -727,7 +727,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.144';
+const SIM_VERSION = '0.11.145';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -816,6 +816,11 @@ const TYPES = Object.freeze([
   { id:'ELF',    name:'Elf',            cls:'HF', morale:6, loss:{ pct:1/3,  score:6 } },
   { id:'HOBBIT', name:'Hobbit',         cls:'LF', morale:5, loss:{ pct:1/3,  score:7 } },
   { id:'SPRITE', name:'Sprite / Pixie', cls:'LF', morale:3, loss:{ pct:0.25, score:8 } },
+  // Giant Wolves / Wargs / Dire Wolves (fantasy supp.): attack as Light Horse,
+  // defend as a Wight (FANTASY_DEFEND_CLASS.WIGHT = HH), move as Medium Horse.
+  // RAW gives them no morale/loss line, so they borrow Light Horse's. The "two
+  // attacks as men vs fantastic opponents" attack mode is a separate slice.
+  { id:'WOLF',   name:'Giant Wolf',     cls:'LH', defendCls:'HH', morale:6, loss:{ pct:0.25, score:8 } },
 ]);
 const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t => t.id === id) || MTM_TYPES.find(t => t.id === id);
 // Asymmetric defend class for a mass type (Appendix D), if it differs from cls.
@@ -909,6 +914,7 @@ const MASS_ARMOR_BY_TYPE = {
   LH:'half', MH:'half', HH:'fully', MK:'fully',
   ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', HOBGOBLIN:'half', DWARF:'half', GNOME:'half',
   ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
+  WOLF:'unarmored',   // natural beast — no armour vs missiles (melee defence is Wight-grade)
 };
 
 // Move allowances (p.9)
@@ -921,6 +927,7 @@ const MOVE_ALLOWANCE = {
   ENT:6, GIANT:12, LYCAN:9, ROC:24, OGRE:9, TROLL:9, WIGHT:9, ZOMBIE:6, WRAITH:18,
   // Fantasy races (Appendix D)
   ORC:9, GIANT_ORC:9, GOBLIN:6, KOBOLD:6, HOBGOBLIN:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
+  WOLF:18,   // Medium Horse (→ Heavy Horse when bearing a rider — deferred)
 };
 
 // Charge move distance (p.10 charge column / Appendix D). A declared charge
@@ -935,6 +942,7 @@ const CHARGE_ALLOWANCE = {
   HERO:15, SUPER_HERO:15, WIZARD:12, BALROG:9, DRAGON:15, ELEMENTAL:12,
   ENT:6, GIANT:18, LYCAN:12, ROC:24, OGRE:12, TROLL:12, WIGHT:9, ZOMBIE:9, WRAITH:24,
   ORC:12, GIANT_ORC:12, GOBLIN:9, KOBOLD:9, HOBGOBLIN:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
+  WOLF:24,   // Medium Horse charge
 };
 
 // Move/counter-move turn sequence (Slice 8D, p.9). `side` marks the two move
@@ -2047,6 +2055,7 @@ const SIZE_BY_TYPE = {
   HOBBIT: 'tiny', SPRITE: 'tiny',
   DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
   ELF: 'man', ORC: 'man', GIANT_ORC: 'man', HOBGOBLIN: 'man',
+  WOLF: 'large',
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -10914,7 +10923,14 @@ renderBoard();
     console.assert(victim.destroyed === true && res.struck === true, 'giant boulder: a figure under the hit area is crushed');
     console.assert(immune.destroyed !== true && res.anyImmune === true, 'giant boulder: a catapult-immune Giant under the area is spared (p.39)');
     state.units = save; }
-  console.assert(catapultTurnsPerShot('heavy', 4) === 3 && catapultTurnsPerShot('heavy', 1) === 6, 'catapult: heavy 4 crew=3, 1 crew=6');
+
+  // Giant Wolf (fantasy supp.): attacks as Light Horse, defends as a Wight (HH), moves as Medium Horse.
+  console.assert(typeById('WOLF') && typeById('WOLF').cls === 'LH' && typeById('WOLF').defendCls === 'HH', 'wolf: attacks as Light Horse, defends as a Wight (HH)');
+  console.assert(defendTypeForMass('WOLF') === 'HH', 'wolf: mass/mixed defence routes to Heavy Horse (the Wight defend class)');
+  console.assert(FANTASY_DEFEND_CLASS.WIGHT === 'HH', 'wolf: "killed as a Wight" == HH, matching the Wight defend class');
+  console.assert(MOVE_ALLOWANCE.WOLF === 18 && CHARGE_ALLOWANCE.WOLF === 24, 'wolf: moves as Medium Horse (18, charge 24)');
+  console.assert(sizeOf('WOLF') === 'large', 'wolf: large (bears a goblin rider)');
+
   console.assert(catapultTurnsPerShot('light', 5) === 2, 'catapult: crew above 4 gives no benefit');
   console.assert(catapultScatter(5, 3).dir === 'over' && catapultScatter(5, 3).miss === 5, 'catapult scatter: over wins, miss 5"');
   console.assert(catapultScatter(2, 4).dir === 'under' && catapultScatter(2, 4).miss === 4, 'catapult scatter: under wins, miss 4"');
