@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.143 · Make the command-radius ring legible: render it in the overlay ABOVE the ambient-darkness rect (so dim/night no longer dims it) and give it a dark halo under a bright dashed stroke that reads on light terrain and in darkness alike. Built on v0.11.142. -->
+<!-- chainmail-board.html · v0.11.144 · Giant anti-personnel boulder (p.35): a Giant may now hurl a rock at enemy troops, not just structures — a small-catapult hit area (2 inch, no minimum range) that scatters and crushes the figures under it. Shared applyCircularHitArea with the catapult; giantBoulderState gains a siege/antipersonnel mode. Built on v0.11.143. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.143</title>
+<title>Chainmail — Battlefield · v0.11.144</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.143</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.144</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -727,7 +727,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.143';
+const SIM_VERSION = '0.11.144';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -3246,6 +3246,7 @@ function resolveRamContact(ram, target, d1, d2) {
 const FANTASTIC_BATTER = { ELEMENTAL: 6, BALROG: 4, GIANT: 3, ENT: 2, TROLL: 2, OGRE: 1 };
 const STRUCTURE_INFLAMERS = new Set(['BALROG']);   // a batterer whose touch also sets wood alight
 const GIANT_ROCK_RANGE_IN = 20;                    // a Giant out of contact hurls rocks as a small catapult (p.35)
+const GIANT_ROCK_HIT_AREA_IN = 2;                  // small-catapult burst — figures under it are crushed (p.35/39)
 // Apply a creature's structural points to a defense-value target; an inflamer also
 // ignites a flammable target via the C.8 burn system. Pure: mutates the target.
 function applyCreatureBatter(attackerType, target, points) {
@@ -5582,19 +5583,17 @@ function resolveEngineFire() {
 }
 // Catapult hit area vs troops (p.12): roll the optional scatter, drop the circle, and
 // kill every uncovered figure of any unit wholly or partially under it — friend or foe.
-function resolveCatapultAntipersonnel(a, d, es) {
-  const o = d6(state.rng), un = d6(state.rng);
-  const sc = catapultScatter(o, un);
-  const impact = scatterImpact(a.x, a.y, d.x, d.y, sc);
-  const radiusPx = inchesToPx(CATAPULTS[es.f.key].hitArea / 2);
-  state.lastCatapultHit = { x: impact.x, y: impact.y, rPx: radiusPx, side: a.side };
-  const scatterTxt = sc.dir === 'on' ? 'on target' : `${sc.dir}shoot ${sc.miss}″`;
+// Crush every figure under a circular catapult-style hit area centred at
+// (impactX,impactY): individuals die, mass units lose the figures under the area,
+// unless catapult-immune (p.39) or shielded by overhead cover. Shared by the
+// light/heavy catapult and the Giant's thrown rock (p.35). Returns the per-figure
+// log fragment plus flags for the caller's summary line.
+function applyCircularHitArea(a, impactX, impactY, radiusPx) {
   const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
-  let html = `<div class="step">${a.side} ${es.wt.name} calls ${es.r.toFixed(1)}″ at ${d.side} ${nm(d)} · scatter ${o}/${un} → ${scatterTxt} · ${CATAPULTS[es.f.key].hitArea}″ hit area</div>`;
-  let struck = false, anyUnder = false, anyImmune = false;
+  let html = '', struck = false, anyUnder = false, anyImmune = false;
   for (const t of state.units.slice()) {
     if (t.destroyed || t.kind === 'works') continue;
-    const n = figuresUnderCircle(t, impact.x, impact.y, radiusPx);
+    const n = figuresUnderCircle(t, impactX, impactY, radiusPx);
     if (n <= 0) continue;
     anyUnder = true;
     if (catapultImmune(t)) {
@@ -5627,8 +5626,21 @@ function resolveCatapultAntipersonnel(a, d, es) {
       html += `<div class="step">${t.side} ${nm(t)}: <b>${n}</b> killed${friendly} → ${t.count}/${t.startCount}</div>`;
     }
   }
-  if (!struck && !anyUnder) html += `<div class="verdict v-noeffect">the rock lands clear — no figures under the hit area</div>`;
-  else if (!struck) html += anyImmune
+  return { html, struck, anyUnder, anyImmune };
+}
+function resolveCatapultAntipersonnel(a, d, es) {
+  const o = d6(state.rng), un = d6(state.rng);
+  const sc = catapultScatter(o, un);
+  const impact = scatterImpact(a.x, a.y, d.x, d.y, sc);
+  const radiusPx = inchesToPx(CATAPULTS[es.f.key].hitArea / 2);
+  state.lastCatapultHit = { x: impact.x, y: impact.y, rPx: radiusPx, side: a.side };
+  const scatterTxt = sc.dir === 'on' ? 'on target' : `${sc.dir}shoot ${sc.miss}″`;
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  let html = `<div class="step">${a.side} ${es.wt.name} calls ${es.r.toFixed(1)}″ at ${d.side} ${nm(d)} · scatter ${o}/${un} → ${scatterTxt} · ${CATAPULTS[es.f.key].hitArea}″ hit area</div>`;
+  const hit = applyCircularHitArea(a, impact.x, impact.y, radiusPx);
+  html += hit.html;
+  if (!hit.struck && !hit.anyUnder) html += `<div class="verdict v-noeffect">the rock lands clear — no figures under the hit area</div>`;
+  else if (!hit.struck) html += hit.anyImmune
     ? `<div class="verdict v-noeffect">no effect — nothing under the area could be harmed</div>`
     : `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
   appendTurn(`${es.wt.name} fires`, html);
@@ -5728,15 +5740,18 @@ function creatureBatterState(a, d) {
   return r <= pad ? { ok: true, points: pts, r } : { ok: false, reason: 'reach', r };
 }
 // A Giant hurls a boulder as a small catapult (p.35): a thrown ranged attack, ≤20″,
-// that batters an enemy structure for −2. Routed through the missile button + firing
-// arc (giants show the arc like other missile units); resolution stays separate.
+// no minimum range. Against a structure it batters for −2 ('siege'); against enemy
+// troops it drops a small-catapult hit area that crushes the figures under it
+// ('antipersonnel'). Routed through the missile button + firing arc (giants show
+// the arc like other missile units); resolution stays separate.
 function giantBoulderState(a, d) {
-  if (!a || a.type !== 'GIANT' || !d || a.destroyed || d.destroyed) return null;
-  if (!(d.defenseMax > 0) || a.side === d.side) return { ok: false, reason: 'target' };
+  if (!a || a.type !== 'GIANT' || a.destroyed) return null;
+  if (!d || d.destroyed || a.side === d.side) return { ok: false, reason: 'target' };
+  const mode = (d.kind === 'works' || d.defenseMax > 0) ? 'siege' : 'antipersonnel';
   const r = engineRangeToTarget(a, d);
-  if (r > GIANT_ROCK_RANGE_IN) return { ok: false, reason: 'range', r };
-  if (!inFiringArc(a, d)) return { ok: false, reason: 'arc', r };
-  return { ok: true, r };
+  if (r > GIANT_ROCK_RANGE_IN) return { ok: false, reason: 'range', r, mode };
+  if (!inFiringArc(a, d)) return { ok: false, reason: 'arc', r, mode };
+  return { ok: true, r, mode };
 }
 function resolveCreatureBatter() {
   const a = state.units.find(u => u.id === state.selectedId);
@@ -5760,14 +5775,35 @@ function resolveGiantBoulder() {
   if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'missile') return;
   if (a.acted && a.acted.fired) return;          // one boulder per turn (thrown)
   pushUndo('giant-boulder');
-  const pts = SIEGE_WEAPONS.smallCatapult.points;
-  const res = batterTarget(d, pts) || { remaining: null, destroyed: false };
   a.acted.fired = true;
   a.shotsThisTurn = (a.shotsThisTurn || 0) + 1;
+  if (gb.mode === 'antipersonnel') { resolveGiantBoulderAntipersonnel(a, d, gb.r); renderBoard(); return; }
+  const pts = SIEGE_WEAPONS.smallCatapult.points;
+  const res = batterTarget(d, pts) || { remaining: null, destroyed: false };
   const tName = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure';
   appendTurn('Giant hurls a boulder',
     `<div class="step">${a.side} Giant hurls a boulder at ${tName} (${gb.r.toFixed(1)}″) — −${pts} defense · ${res.remaining}/${d.defenseMax}${res.destroyed ? ' · BREACHED' : ''}</div>`);
   renderBoard();
+}
+// Anti-personnel boulder (p.35): scatter like a small catapult, then crush figures
+// under the GIANT_ROCK_HIT_AREA_IN burst (shared applyCircularHitArea). No minimum
+// range; catapult-immunity (p.39) and overhead cover still apply.
+function resolveGiantBoulderAntipersonnel(a, d, r) {
+  const o = d6(state.rng), un = d6(state.rng);
+  const sc = catapultScatter(o, un);
+  const impact = scatterImpact(a.x, a.y, d.x, d.y, sc);
+  const radiusPx = inchesToPx(GIANT_ROCK_HIT_AREA_IN / 2);
+  state.lastCatapultHit = { x: impact.x, y: impact.y, rPx: radiusPx, side: a.side };
+  const scatterTxt = sc.dir === 'on' ? 'on target' : `${sc.dir}shoot ${sc.miss}″`;
+  const nm = (u) => typeById(u.type)?.name || (u.kind === 'individual' ? 'figure' : 'unit');
+  let html = `<div class="step">${a.side} Giant hurls a boulder ${r.toFixed(1)}″ at ${d.side} ${nm(d)} · scatter ${o}/${un} → ${scatterTxt} · ${GIANT_ROCK_HIT_AREA_IN}″ hit area (small catapult, p.35)</div>`;
+  const hit = applyCircularHitArea(a, impact.x, impact.y, radiusPx);
+  html += hit.html;
+  if (!hit.struck && !hit.anyUnder) html += `<div class="verdict v-noeffect">the boulder lands clear — no figures under the hit area</div>`;
+  else if (!hit.struck) html += hit.anyImmune
+    ? `<div class="verdict v-noeffect">no effect — nothing under the area could be harmed</div>`
+    : `<div class="verdict v-noeffect">no effect — every figure under the area was covered</div>`;
+  appendTurn('Giant hurls a boulder', html);
 }
 
 // === ESCALADE — climb-to-the-wall man-to-man fight (p.22-23, 25) ===========
@@ -6052,9 +6088,11 @@ function updateButtons() {
     (a && d && !canPerceive(a, d)) ? 'The target is concealed — you cannot see it to fire on it (p.32)' :
     (missileEnabled && passThroughCase && phaseId !== 'missile') ? 'Pass-through fire — loose at the enemy paused at half-move (p.12)' :
     (missileEnabled && splitFireCase   && phaseId !== 'missile') ? 'Split-move and fire from the half-move pause (p.12)' :
-    (!missileEnabled && boulderReady) ? `Hurl a boulder — −${SIEGE_WEAPONS.smallCatapult.points} to the ${d && d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure'} (≤${GIANT_ROCK_RANGE_IN}″)` :
+    (!missileEnabled && boulderReady) ? (gb.mode === 'antipersonnel'
+        ? `Hurl a boulder — drop a ${GIANT_ROCK_HIT_AREA_IN}″ hit area on ${d ? d.side + ' ' : ''}troops at ${gb.r.toFixed(1)}″, crushing figures under it (scatter applies, ≤${GIANT_ROCK_RANGE_IN}″, p.35)`
+        : `Hurl a boulder — −${SIEGE_WEAPONS.smallCatapult.points} to the ${d && d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'structure') : 'structure'} (≤${GIANT_ROCK_RANGE_IN}″)`) :
     (!missileEnabled && a && a.type === 'GIANT' && gb && !gb.ok) ?
-      (gb.reason === 'target' ? 'A Giant hurls boulders at an enemy structure — shift-click one' :
+      (gb.reason === 'target' ? 'A Giant hurls boulders at an enemy structure or enemy troops — shift-click one' :
        gb.reason === 'range' ? `Too far to hurl a boulder (now ${gb.r.toFixed(1)}″, max ${GIANT_ROCK_RANGE_IN}″)` :
        gb.reason === 'arc' ? 'Boulder target is outside the firing arc — rotate to bear' : '') : '';
   const es = engineFireState(a, d);
@@ -10856,6 +10894,26 @@ renderBoard();
     const spansB = cannonSectionsHitting('light', 'B', 0, 30);   // black spans [16,22] and [25,30]
     console.assert(figuresUnderDowel(ind(19, 0), 0, 0, 1, 0, R, hw, spansB) === 1, 'dowel: 19″ is in a black section → LONG hit'); }
   console.assert(catapultTurnsPerShot('light', 4) === 2 && catapultTurnsPerShot('light', 2) === 4, 'catapult: light 4 crew=2, 2 crew=4');
+
+  // Giant anti-personnel boulder (p.35): troop target → hit-area throw; structure → siege.
+  { const giant  = { type:'GIANT', side:'A', kind:'individual', x:0, y:0, facing:0, destroyed:false };
+    const wall   = { type:'HF', side:'B', kind:'works', defenseMax:10, worksType:'wall', x:inchesToPx(10), y:0, destroyed:false };
+    const troops = { type:'HF', side:'B', kind:'mass', count:10, x:inchesToPx(10), y:0, destroyed:false };
+    const far    = { type:'HF', side:'B', kind:'mass', count:10, x:inchesToPx(30), y:0, destroyed:false };
+    console.assert(giantBoulderState(giant, wall).mode === 'siege', 'giant boulder: a structure target is a siege throw');
+    console.assert(giantBoulderState(giant, troops).mode === 'antipersonnel', 'giant boulder: an enemy unit is an anti-personnel throw');
+    console.assert(giantBoulderState(giant, far).ok === false && giantBoulderState(giant, far).reason === 'range', 'giant boulder: beyond 20″ is out of range (no minimum, but capped at 20″)');
+    console.assert(giantBoulderState(giant, { type:'HF', side:'A', kind:'mass', count:10, x:inchesToPx(5), y:0 }).ok === false, 'giant boulder: cannot target a friendly unit'); }
+  // applyCircularHitArea crushes figures under the burst; catapult-immune types are spared (p.39).
+  { const save = state.units;
+    const a = { side:'A', x:0, y:0 };
+    const victim = { id:611, type:'HF',    side:'B', kind:'individual', x:0, y:0, destroyed:false };
+    const immune = { id:612, type:'GIANT', side:'B', kind:'individual', x:0, y:0, destroyed:false };
+    state.units = [victim, immune];
+    const res = applyCircularHitArea(a, 0, 0, inchesToPx(GIANT_ROCK_HIT_AREA_IN / 2));
+    console.assert(victim.destroyed === true && res.struck === true, 'giant boulder: a figure under the hit area is crushed');
+    console.assert(immune.destroyed !== true && res.anyImmune === true, 'giant boulder: a catapult-immune Giant under the area is spared (p.39)');
+    state.units = save; }
   console.assert(catapultTurnsPerShot('heavy', 4) === 3 && catapultTurnsPerShot('heavy', 1) === 6, 'catapult: heavy 4 crew=3, 1 crew=6');
   console.assert(catapultTurnsPerShot('light', 5) === 2, 'catapult: crew above 4 gives no benefit');
   console.assert(catapultScatter(5, 3).dir === 'over' && catapultScatter(5, 3).miss === 5, 'catapult scatter: over wins, miss 5"');
@@ -11156,7 +11214,7 @@ renderBoard();
     console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'B', x:240, y:240 - inchesToPx(25), defenseMax:33, defenseLeft:33 }).reason === 'range', 'boulder: beyond 20″ → out of range');
     console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'B', x:240 + inchesToPx(5), y:240, defenseMax:33, defenseLeft:33 }).reason === 'arc', 'boulder: target to the flank → outside the firing arc');
     console.assert(giantBoulderState(giant(240), { kind:'works', worksType:'curtain', side:'A', x:240, y:240 - inchesToPx(5), defenseMax:33, defenseLeft:33 }).reason === 'target', 'boulder: a friendly structure is not a target');
-    console.assert(giantBoulderState(giant(240), { kind:'mass', type:'HF', side:'B', x:240, y:240 - inchesToPx(5) }).reason === 'target', 'boulder: troops have no defense value (anti-structure only)'); }
+    console.assert(giantBoulderState(giant(240), { kind:'mass', type:'HF', side:'B', x:240, y:240 - inchesToPx(5) }).mode === 'antipersonnel' && giantBoulderState(giant(240), { kind:'mass', type:'HF', side:'B', x:240, y:240 - inchesToPx(5) }).ok === true, 'boulder: enemy troops in arc → anti-personnel throw (p.35)'); }
   console.assert(moveAllowanceOf({ kind:'works', worksType:'tower', crew:8 }) === 4 && moveAllowanceOf({ kind:'works', worksType:'tower', crew:0 }) === 0, 'move: a pushed tower is capped to push speed (8 men = 4″, 0 men = immobile)');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'mantlet', crew:2 }) === 6, 'move: a mantlet with 2 pushers moves 6″');
   console.assert(moveAllowanceOf({ kind:'works', worksType:'gunLight', crew:4 }) === 1e6 && moveAllowanceOf({ kind:'works', worksType:'curtain' }) === 1e6, 'move: non-pushed engines/structures keep free setup repositioning');
