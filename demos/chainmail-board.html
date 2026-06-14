@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.147 · Fix: size the Giant Wolf as man-scale (was large), so its unit footprint is no bigger than a Light Horse unit — wolves are horse-comparable. Built on v0.11.146. -->
+<!-- chainmail-board.html · v0.11.148 · Giant Wolves attack fantastic creatures "as two men" (fantasy supp.): the mixed resolver swaps their Light Horse offensive row for a man's (Light Foot) and doubles the swings (the pack-bite), while they're still hit and killed on their own Wight defend class — so the doubled swings don't inflate their hittable count. New attackClassOverride hook on resolveMassMelee threads the swap through both the forward strike and the return. Excludes heroic man-types (Hero/Super-Hero/Wizard). Built on v0.11.147. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.147</title>
+<title>Chainmail — Battlefield · v0.11.148</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.147</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.148</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.147';
+const SIM_VERSION = '0.11.148';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2196,15 +2196,18 @@ function resolveMassMelee({ attacker, defender, rng }) {
   const aT = typeById(attacker.type), dT = typeById(defender.type);
   const result = { attacker:{}, defender:{} };
 
-  const aEff   = effectiveAttackerClass(aT.cls, attacker);
-  const aBonus = classBumpsToBonus(aT.cls, attacker);
+  // attackClassOverride swaps the OFFENSIVE row only (e.g. a wolf biting "as a
+  // man"); the unit is still hit / killed on its own type's defend class.
+  const aBaseCls = attacker.attackClassOverride || aT.cls;
+  const aEff   = effectiveAttackerClass(aBaseCls, attacker);
+  const aBonus = classBumpsToBonus(aBaseCls, attacker);
   const dTargetCls = defender.defendType || dT.cls;   // class the attacker rolls against
   const aRow   = COMBAT[aEff]?.[dTargetCls];
   if (!aRow) throw new Error(`no combat row: ${aEff} vs ${dTargetCls}`);
   let aDPM = aRow.dice / aRow.perMen;
-  const aPolearm = POLEARM_CLASSES.has(aT.cls) && attacker.polearm;
+  const aPolearm = POLEARM_CLASSES.has(aBaseCls) && attacker.polearm;
   if (aPolearm) aDPM += 1;
-  if (IMPETUS_CLASSES.has(aT.cls) && attacker.impetus) aDPM += 1;
+  if (IMPETUS_CLASSES.has(aBaseCls) && attacker.impetus) aDPM += 1;
   const aTotal = Math.floor((attacker.activeCount ?? attacker.count) * aDPM) + (attacker.bonusDice || 0);
   const aKills = applyDieBonus(aRow.kills, (aBonus ? 1 : 0) + (attacker.dieScoreBonus || 0));
   const aDiePenalty = attacker.diePenalty || 0;
@@ -2220,13 +2223,14 @@ function resolveMassMelee({ attacker, defender, rng }) {
     result.defender = { type:dT.id, startCount:defender.count, effectiveClass:dT.cls,
       dicePerMan:0, totalDice:0, dice:[], killsDealt:0, noReturn:true };
   } else {
-    const dRetCls = effectiveDefenderReturnClass(dT.cls, defender);
+    const dBaseCls = defender.attackClassOverride || dT.cls;
+    const dRetCls = effectiveDefenderReturnClass(dBaseCls, defender);
     const aTargetCls = attacker.defendType || aT.cls;   // class the defender rolls against
     const dRow = COMBAT[dRetCls]?.[aTargetCls];
     let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
-    const dPolearm = POLEARM_CLASSES.has(dT.cls) && defender.polearm;
+    const dPolearm = POLEARM_CLASSES.has(dBaseCls) && defender.polearm;
     if (dPolearm) dDPM += 1;
-    if (IMPETUS_CLASSES.has(dT.cls) && defender.impetus) dDPM += 1;
+    if (IMPETUS_CLASSES.has(dBaseCls) && defender.impetus) dDPM += 1;
     const dTotal = Math.floor((defender.activeCount ?? defender.count) * dDPM) + (defender.bonusDice || 0);
     const dDiePenalty = defender.diePenalty || 0;
     const dKills = dRow ? applyDieBonus(dRow.kills, defender.dieScoreBonus || 0) : [];
@@ -2235,7 +2239,7 @@ function resolveMassMelee({ attacker, defender, rng }) {
       type:dT.id, startCount:defender.count, effectiveClass:dRetCls,
       dicePerMan:dDPM, totalDice:dTotal, polearmApplied:dPolearm,
       impetusApplied:IMPETUS_CLASSES.has(dT.cls) && defender.impetus,
-      standingHorseApplied: dRetCls !== dT.cls, fatigueApplied: !!defender.fatigued, diePenalty:dDiePenalty,
+      standingHorseApplied: dRetCls !== dBaseCls, fatigueApplied: !!defender.fatigued, diePenalty:dDiePenalty,
       killScores:dKills,
       dice:dRoll.dice, killsDealt:dRoll.kills,
     };
@@ -2858,6 +2862,20 @@ const PETRIFIER_TYPES = new Set(['BASILISK', 'COCKATRICE']);
 const NO_MELEE_ATTACK = new Set(['BASILISK', 'COCKATRICE']);
 const PETRIFY_SAVE_HARD = new Set(['HOBBIT', 'DWARF', 'GNOME', 'GOBLIN', 'KOBOLD', 'ORC', 'ENT', 'GIANT']);
 const petrifySaveTarget = (type) => PETRIFY_SAVE_HARD.has(type) ? 10 : 7;
+
+// Giant Wolves attack a fantastic creature "as two men" (fantasy supp.): in the
+// mixed resolver their Light Horse offensive row is swapped for a man's profile
+// and their swings are doubled (the pack-bite). They are still hit and killed on
+// their own defend class (as a Wight), so doubling the swings does NOT make them
+// more killable. Two flagged judgment calls (RAW leaves both open):
+//   · "a man" = Light Foot — flip WOLF_FANTASTIC_ATTACK_CLASS to 'HF'/'AF' to taste.
+//   · man-type individuals (Hero/Super-Hero/Wizard) are excluded — the rule is for
+//     fantastic monsters; vs a heroic man the wolf keeps its Light Horse profile.
+const WOLF_FANTASTIC_ATTACK_CLASS = 'LF';
+const WOLF_MAN_TYPE_INDIV = new Set(['HERO', 'SUPER_HERO', 'WIZARD']);
+const WOLF_TWO_MEN_VS = new Set(
+  Object.keys(FIGHTING_STRENGTH).filter(t => !WOLF_MAN_TYPE_INDIV.has(t))
+);
 
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
@@ -8270,6 +8288,14 @@ function onResolveMixed(a, d) {
   // creature side is an individual fighting "as N men" — never a led unit.
   const massLed = unitCombatDieBonus(mass);
   if (massLed) massParams.dieScoreBonus = (massParams.dieScoreBonus || 0) + massLed;
+  // Giant Wolves bite a fantastic creature "as two men" (fantasy supp.): swap the
+  // Light Horse offensive row for a man's and double the swings, but leave the
+  // hittable figure count alone (casualties land on mass.count, not activeCount).
+  const wolfTwoMen = mass.type === 'WOLF' && WOLF_TWO_MEN_VS.has(ind.type);
+  if (wolfTwoMen) {
+    massParams.attackClassOverride = WOLF_FANTASTIC_ATTACK_CLASS;
+    massParams.activeCount = (massParams.activeCount || 0) * 2;
+  }
   const melee = resolveMassMelee({ attacker: attackerParams, defender: defenderParams, rng: state.rng });
 
   // Casualties, with imperviousness applied: a creature immune to normal melee
@@ -8314,6 +8340,7 @@ function onResolveMixed(a, d) {
           `<b>${melee.defender.killsDealt}</b> kills ${diceTrace(melee.defender.dice, melee.defender.killScores||[])}` +
           (dMods.length ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${dMods.join(' · ')}</small>` : '') + `</div>`;
   html += `<div class="step">casualties — A: <b>${aCas}</b> · B: <b>${dCas}</b></div>`;
+  if (wolfTwoMen) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${massT.name} fight fantastic creatures as two men (fantasy supp.) — a man's profile, swings doubled, still killed as a Wight.</small></div>`;
   if (indImmune) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name} is impervious to normal weapons — the mass inflicts no casualties on it.</small></div>`;
   if (halfKillNote) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${halfKillNote}</small></div>`;
 
@@ -11009,6 +11036,17 @@ renderBoard();
   console.assert(FANTASY_DEFEND_CLASS.WIGHT === 'HH', 'wolf: "killed as a Wight" == HH, matching the Wight defend class');
   console.assert(MOVE_ALLOWANCE.WOLF === 18 && CHARGE_ALLOWANCE.WOLF === 24, 'wolf: moves as Medium Horse (18, charge 24)');
   console.assert(sizeOf('WOLF') === 'man', 'wolf: man-scale (no bigger than Light Horse)');
+
+  // Wolves "attack as two men" vs fantastic creatures (fantasy supp.): the mixed
+  // resolver swaps the Light Horse row for a man's and doubles the swings, while
+  // the wolf is still hit / killed on its own (Wight) figure count.
+  console.assert(WOLF_TWO_MEN_VS.has('DRAGON') && WOLF_TWO_MEN_VS.has('TROLL') && WOLF_TWO_MEN_VS.has('WIGHT'), 'wolf two-men: applies vs fantastic monsters');
+  console.assert(!WOLF_TWO_MEN_VS.has('HERO') && !WOLF_TWO_MEN_VS.has('SUPER_HERO') && !WOLF_TWO_MEN_VS.has('WIZARD'), 'wolf two-men: excludes heroic man-types (keeps Light Horse vs them)');
+  { const twoMen = resolveMassMelee({ attacker:{ type:'WOLF', count:6, activeCount:12, attackClassOverride:WOLF_FANTASTIC_ATTACK_CLASS }, defender:{ type:'HF', count:10, defendType:'HH' }, rng: always(5) });
+    const plain  = resolveMassMelee({ attacker:{ type:'WOLF', count:6, activeCount:6 }, defender:{ type:'HF', count:10, defendType:'HH' }, rng: always(5) });
+    console.assert(twoMen.attacker.effectiveClass === 'LF' && plain.attacker.effectiveClass === 'LH', 'wolf two-men: override switches the offensive row to a man (LF); plain stays Light Horse');
+    console.assert(twoMen.attacker.totalDice === 3 && plain.attacker.totalDice === 2, 'wolf two-men: 12 man-swings on LF/HH (3 dice) beat 6 Light Horse swings (2 dice)');
+    console.assert(twoMen.attacker.startCount === 6, 'wolf two-men: doubled swings do NOT inflate the hittable figure count'); }
 
   // Basilisk / Cockatrice (fantasy supp.): touch-petrify, defend as Lycanthrope, no normal attack.
   console.assert(fantasyTarget('HERO', 'BASILISK') === fantasyTarget('HERO', 'LYCAN') && fantasyTarget('HERO', 'BASILISK') != null, 'basilisk: defends as a Lycanthrope on the FCT');
