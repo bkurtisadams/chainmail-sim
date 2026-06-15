@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.148 · Giant Wolves attack fantastic creatures "as two men" (fantasy supp.): the mixed resolver swaps their Light Horse offensive row for a man's (Light Foot) and doubles the swings (the pack-bite), while they're still hit and killed on their own Wight defend class — so the doubled swings don't inflate their hittable count. New attackClassOverride hook on resolveMassMelee threads the swap through both the forward strike and the return. Excludes heroic man-types (Hero/Super-Hero/Wizard). Built on v0.11.147. -->
+<!-- chainmail-board.html · v0.11.149 · Goblin Wolf-Riders (fantasy supp.): a goblin mounted on a Giant Wolf, modelled as a single fused cavalry unit (Chainmail cavalry already bundles rider+mount — no separate mount subsystem). Attacks as Light Horse like the wolf; the exposed rider negates the wolf's Wight hide so it defends as ordinary Medium Horse; bearing the rider slows it from Medium to Heavy Horse (12 / charge 18); morale/loss from the goblin; keeps the wolf's "two men vs fantastic" bite. Like the bare wolf it is not in CHARGE_CLASS (charges + gets impetus, no cavalry-charge-morale check). Built on v0.11.148. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.148</title>
+<title>Chainmail — Battlefield · v0.11.149</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.148</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.149</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.148';
+const SIM_VERSION = '0.11.149';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -822,6 +822,16 @@ const TYPES = Object.freeze([
   // RAW gives them no morale/loss line, so they borrow Light Horse's. The "two
   // attacks as men vs fantastic opponents" attack mode is a separate slice.
   { id:'WOLF',   name:'Giant Wolf',     cls:'LH', defendCls:'HH', morale:6, loss:{ pct:0.25, score:8 } },
+  // Goblin Wolf-Riders (fantasy supp.): a goblin mounted on a Giant Wolf, modelled
+  // as a single fused cavalry unit (Chainmail cavalry already bundles rider+mount —
+  // no separate mount entity). Attacks as Light Horse like the wolf, but the exposed
+  // rider negates the wolf's Wight-grade hide, so it defends as ordinary Medium
+  // Horse. Bearing the rider slows it from Medium to Heavy Horse (12 / charge 18).
+  // Morale/loss come from the goblin (the rider is what breaks). Keeps the wolf's
+  // "two men vs fantastic" bite (the wolf is still the one biting). Like the bare
+  // wolf it is not in CHARGE_CLASS, so it charges + gets melee impetus but does not
+  // trigger the cavalry-charge-morale check.
+  { id:'WOLFRIDER', name:'Goblin Wolf-Rider', cls:'LH', defendCls:'MH', morale:5, loss:{ pct:1/3, score:7 } },
 ]);
 const typeById = (id) => TYPES.find(t => t.id === id) || FANTASTIC_TYPES.find(t => t.id === id) || MTM_TYPES.find(t => t.id === id);
 // Asymmetric defend class for a mass type (Appendix D), if it differs from cls.
@@ -916,6 +926,7 @@ const MASS_ARMOR_BY_TYPE = {
   ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', HOBGOBLIN:'half', DWARF:'half', GNOME:'half',
   ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
   WOLF:'unarmored',   // natural beast — no armour vs missiles (melee defence is Wight-grade)
+  WOLFRIDER:'unarmored',   // unarmored goblin on a bare wolf
 };
 
 // Move allowances (p.9)
@@ -929,7 +940,8 @@ const MOVE_ALLOWANCE = {
   BASILISK:6, COCKATRICE:9,
   // Fantasy races (Appendix D)
   ORC:9, GIANT_ORC:9, GOBLIN:6, KOBOLD:6, HOBGOBLIN:6, DWARF:6, GNOME:6, ELF:12, HOBBIT:12, SPRITE:9,
-  WOLF:18,   // Medium Horse (→ Heavy Horse when bearing a rider — deferred)
+  WOLF:18,   // Medium Horse
+  WOLFRIDER:12,   // Heavy Horse — the goblin's load slows the wolf one cavalry grade
 };
 
 // Charge move distance (p.10 charge column / Appendix D). A declared charge
@@ -946,6 +958,7 @@ const CHARGE_ALLOWANCE = {
   BASILISK:6, COCKATRICE:9,
   ORC:12, GIANT_ORC:12, GOBLIN:9, KOBOLD:9, HOBGOBLIN:9, DWARF:9, GNOME:9, ELF:12, HOBBIT:12, SPRITE:9,
   WOLF:24,   // Medium Horse charge
+  WOLFRIDER:18,   // Heavy Horse charge (laden)
 };
 
 // Move/counter-move turn sequence (Slice 8D, p.9). `side` marks the two move
@@ -2063,7 +2076,7 @@ const SIZE_BY_TYPE = {
   HOBBIT: 'tiny', SPRITE: 'tiny',
   DWARF: 'small', GNOME: 'small', GOBLIN: 'small', KOBOLD: 'small',
   ELF: 'man', ORC: 'man', GIANT_ORC: 'man', HOBGOBLIN: 'man',
-  WOLF: 'man', BASILISK: 'large', COCKATRICE: 'man',   // wolf is horse-comparable → man-scale like Light Horse
+  WOLF: 'man', WOLFRIDER: 'man', BASILISK: 'large', COCKATRICE: 'man',   // wolf is horse-comparable → man-scale like Light Horse
 };
 const sizeOf = (type) => SIZE_BY_TYPE[type] || 'man';
 const sizeScale = (type) => SIZES[sizeOf(type)]?.scale || 1;
@@ -2876,6 +2889,9 @@ const WOLF_MAN_TYPE_INDIV = new Set(['HERO', 'SUPER_HERO', 'WIZARD']);
 const WOLF_TWO_MEN_VS = new Set(
   Object.keys(FIGHTING_STRENGTH).filter(t => !WOLF_MAN_TYPE_INDIV.has(t))
 );
+// Mass types whose attack is a wolf's bite, so the two-men-vs-fantastic rule
+// applies: the bare wolf and the goblin wolf-rider (the wolf still does the biting).
+const WOLF_BITERS = new Set(['WOLF', 'WOLFRIDER']);
 
 function splitFiringGroups(count, maxGroup) {
   if (count <= maxGroup) return [count];
@@ -8291,7 +8307,7 @@ function onResolveMixed(a, d) {
   // Giant Wolves bite a fantastic creature "as two men" (fantasy supp.): swap the
   // Light Horse offensive row for a man's and double the swings, but leave the
   // hittable figure count alone (casualties land on mass.count, not activeCount).
-  const wolfTwoMen = mass.type === 'WOLF' && WOLF_TWO_MEN_VS.has(ind.type);
+  const wolfTwoMen = WOLF_BITERS.has(mass.type) && WOLF_TWO_MEN_VS.has(ind.type);
   if (wolfTwoMen) {
     massParams.attackClassOverride = WOLF_FANTASTIC_ATTACK_CLASS;
     massParams.activeCount = (massParams.activeCount || 0) * 2;
@@ -11047,6 +11063,18 @@ renderBoard();
     console.assert(twoMen.attacker.effectiveClass === 'LF' && plain.attacker.effectiveClass === 'LH', 'wolf two-men: override switches the offensive row to a man (LF); plain stays Light Horse');
     console.assert(twoMen.attacker.totalDice === 3 && plain.attacker.totalDice === 2, 'wolf two-men: 12 man-swings on LF/HH (3 dice) beat 6 Light Horse swings (2 dice)');
     console.assert(twoMen.attacker.startCount === 6, 'wolf two-men: doubled swings do NOT inflate the hittable figure count'); }
+
+  // Goblin Wolf-Rider (fantasy supp.): a fused cavalry unit — attacks as Light
+  // Horse like the wolf, defends as ordinary Medium Horse (exposed rider negates
+  // the Wight hide), moves as laden Heavy Horse, keeps the wolf's two-men bite,
+  // and like the bare wolf is not a CHARGE_CLASS mounted type.
+  console.assert(typeById('WOLFRIDER') && typeById('WOLFRIDER').cls === 'LH' && typeById('WOLFRIDER').defendCls === 'MH', 'wolf-rider: attacks as Light Horse, defends as ordinary Medium Horse');
+  console.assert(defendTypeForMass('WOLFRIDER') === 'MH', 'wolf-rider: mass/mixed defence routes to Medium Horse (no Wight hide)');
+  console.assert(typeById('WOLFRIDER').morale === 5 && typeById('WOLFRIDER').loss.score === 7, 'wolf-rider: uses the goblin morale/loss line');
+  console.assert(MOVE_ALLOWANCE.WOLFRIDER === 12 && CHARGE_ALLOWANCE.WOLFRIDER === 18, 'wolf-rider: laden Heavy Horse (12, charge 18) — one grade slower than the free wolf');
+  console.assert(sizeOf('WOLFRIDER') === 'man', 'wolf-rider: man-scale like the wolf');
+  console.assert(WOLF_BITERS.has('WOLFRIDER') && WOLF_BITERS.has('WOLF') && WOLF_TWO_MEN_VS.has('DRAGON'), 'wolf-rider: keeps the wolf two-men bite vs fantastic creatures');
+  console.assert(isMountedType('WOLFRIDER') === false && isMountedType('WOLF') === false, 'wolf-rider: not a CHARGE_CLASS mounted type (parity with the bare wolf)');
 
   // Basilisk / Cockatrice (fantasy supp.): touch-petrify, defend as Lycanthrope, no normal attack.
   console.assert(fantasyTarget('HERO', 'BASILISK') === fantasyTarget('HERO', 'LYCAN') && fantasyTarget('HERO', 'BASILISK') != null, 'basilisk: defends as a Lycanthrope on the FCT');
