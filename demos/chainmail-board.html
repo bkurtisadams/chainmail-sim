@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.157 · Simultaneous-kill rule for Hero/Super-Hero/Lycanthrope. RAW (p.30/p.34): regular troops on the non-Fantasy tables must score the creature's FULL fighting strength (Hero 4, Super-Hero 8, Lycanthrope 4) in a SINGLE resolution to kill it — fewer hits have NO effect and nothing carries over. The mixed resolver was bleeding a 4-hp pool cumulatively, so a mass unit could whittle a Hero down over rounds (wrong). Now onResolveMixed routes these types through new pure creatureHpAfter(): kills>=strength -> dead, else hp restored full. Cumulative creatures (Ogre/Giant/Roc) still bleed, unchanged. New house-rule setting heroCumulativeDamage (default off) reverts the three simultaneous types to the cumulative/Troll model. Self-tested. Built on v0.11.156. -->
+<!-- chainmail-board.html · v0.11.158 · Magic sword now counts in normal (mixed) combat. p.29: "In normal combat they merely add an extra die." onResolveMixed only summed FANTASY_BONUS_DICE + elemental bonus, so a magic-armed Hero/Super-Hero/Wizard fighting a mass unit got nothing from the sword. Added swordDie (ind.magicWeapon ? 1 : 0) into creatureBonus → the creature rolls one extra die whenever it swings (attack or return), with a log note. One die for any tier — the +2/+3 of super-swords applies on the Fantasy Combat Table (already handled), not here. Self-tested. Built on v0.11.157. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.157</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.158</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.157';
+const SIM_VERSION = '0.11.158';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -8335,7 +8335,12 @@ function onResolveMixed(a, d) {
   const defCls = defendClassFor(ind.type);
   const bonusDice = FANTASY_BONUS_DICE[ind.type] || 0;
   const elemBonus = elementalMeleeBonus(ind, mass);   // Air +2 vs airborne / Earth +1 vs earthbound (p.38)
-  const creatureBonus = bonusDice + elemBonus;
+  // Magic sword (p.29): "In normal combat they merely add an extra die." One die
+  // for any tier — the +2/+3 of super-swords applies on the Fantasy Combat Table,
+  // not here. (Elves never reach this path as the creature, so no overlap with
+  // the elf-entry per-foe bonus.)
+  const swordDie = ind.magicWeapon ? 1 : 0;
+  const creatureBonus = bonusDice + elemBonus + swordDie;
   const clsDesc = (cls === defCls ? cls : `${cls} atk / ${defCls} def`) + (creatureBonus ? ` +${creatureBonus} die${creatureBonus === 1 ? '' : 's'}` : '');
   const indImmune = MELEE_IMMUNE_INDIV.has(ind.type);
   const effFigures = Math.min(ind.hp, fs);  // synthetic count for the engine
@@ -8431,6 +8436,7 @@ function onResolveMixed(a, d) {
   html += `<div class="step">casualties — A: <b>${aCas}</b> · B: <b>${dCas}</b></div>`;
   if (wolfTwoMen) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${massT.name} fight fantastic creatures as two men (fantasy supp.) — a man's profile, swings doubled, still killed as a Wight.</small></div>`;
   if (indImmune) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name} is impervious to normal weapons — the mass inflicts no casualties on it.</small></div>`;
+  if (swordDie) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name}'s magic sword adds +1 die in normal combat (p.29).</small></div>`;
   if (halfKillNote) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${halfKillNote}</small></div>`;
 
   // Route casualties: the mass always takes its losses cumulatively; the creature
@@ -10467,6 +10473,10 @@ renderBoard();
   // House-rule override: simultaneous types bleed like a Troll when the setting is on.
   console.assert(creatureHpAfter('HERO', 4, 4, 4, 1, true) === 3, 'house rule on: Hero bleeds cumulatively (1 hit → hp 3)');
   console.assert(SIMULTANEOUS_KILL.has('HERO') && SIMULTANEOUS_KILL.has('SUPER_HERO') && SIMULTANEOUS_KILL.has('LYCAN') && !SIMULTANEOUS_KILL.has('OGRE') && !SIMULTANEOUS_KILL.has('GIANT'), 'simultaneous set: Hero/Super-Hero/Lycan only');
+  // Magic sword (p.29): a Hero (4×AF) with a magic sword rolls one extra die in normal combat.
+  { const plain = resolveMassMelee({ attacker:{type:'AF',count:4}, defender:{type:'HF',count:10}, rng: always(6) });
+    const armed = resolveMassMelee({ attacker:{type:'AF',count:4, bonusDice:1}, defender:{type:'HF',count:10}, rng: always(6) });
+    console.assert(armed.attacker.totalDice === plain.attacker.totalDice + 1 && armed.attacker.killsDealt === plain.attacker.killsDealt + 1, 'magic sword: +1 die in normal combat (4 AF → 5 dice)'); }
   console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('OGRE') === 'HF' && fightingClassFor('TROLL') === 'AF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, OGRE HF, True Troll AF vs men, HERO default AF');
   console.assert(FIGHTING_STRENGTH.DRAGON === 4 && FIGHTING_STRENGTH.ENT === 6 && FIGHTING_STRENGTH.WIGHT === 1 && FIGHTING_STRENGTH.ZOMBIE === 1 && FIGHTING_STRENGTH.OGRE === 6 && FIGHTING_STRENGTH.TROLL === 3, 'fantasy fighting strengths wired');
   console.assert(MISSILE_IMMUNE_INDIV.has('ZOMBIE') && MELEE_IMMUNE_INDIV.has('DRAGON') && !MELEE_IMMUNE_INDIV.has('ZOMBIE') && !MELEE_IMMUNE_INDIV.has('WIZARD') && MELEE_IMMUNE_INDIV.has('TROLL') && !MELEE_IMMUNE_INDIV.has('OGRE'), 'missile/melee immunity: zombie missile only; dragon/true troll melee yes, wizard/ogre no');
