@@ -38,4 +38,13 @@ const f4 = firstStriker({ round:2, prevFirstStriker:'attacker',
   a:{ weapon:pike,  fromAbove:false }, d:{ weapon:sword, fromAbove:false, attackedFrom:'front' } });
 console.assert(f4.who === 'defender', 'round 2 — sword faster than pike');
 
+// Left flank (p.25): a mace defender (cls 3) vs a dagger attacker (cls 1) would normally
+// strike first (weapon 2 classes higher), but a left-flank attack forces 2nd-blow position.
+const f5front = firstStriker({ round:1,
+  a:{ weapon:dagger, charging:false, mounted:false }, d:{ weapon:mace, attackedFrom:'front', fromAbove:false } });
+console.assert(f5front.who === 'defender', 'front: mace (2 cls higher) strikes first');
+const f5left = firstStriker({ round:1,
+  a:{ weapon:dagger, charging:false, mounted:false }, d:{ weapon:mace, attackedFrom:'left', fromAbove:false } });
+console.assert(f5left.who === 'attacker' && f5left.defenderReturns === true, 'left flank: attacker first, defender still returns');
+
 console.log('[man-to-man] OK');

@@ -58,6 +58,9 @@ export function firstStriker(state) {
     if (a.charging && CHARGE_REACH_CLASSES.has(a.weapon.cls) && a.weapon.cls > d.weapon.cls)
       return { who:'attacker', defenderReturns:true };
     if (d.attackedFrom === 'rear')              return { who:'attacker', defenderReturns:false };
+    // Left flank forces the defender to 2nd-blow position (round 1), overriding the
+    // defender-first cases below; he still returns a blow (p.25).
+    if (d.attackedFrom === 'left')              return { who:'attacker', defenderReturns:true };
     const diff = a.weapon.cls - d.weapon.cls;
     if (diff >= 8)                              return { who:'defender', defenderReturns:true };
     if (d.fromAbove)                            return { who:'defender', defenderReturns:true };

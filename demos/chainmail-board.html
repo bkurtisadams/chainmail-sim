@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.151 · Fantasy Combat Table: meeting the target now KILLS (was a non-lethal fall-back on exact match), per the rulebook's own "score X" / "X or better" wording (Elf p.29, True Troll p.37) — every FCT kill was one pip too hard. Removed the fall-back band from the melee FCT (it belongs only to the Wizard-missile table). Fatigue rule B (p.10) now applied: a fatigued unit defends one class lower, so it is correctly easier to kill (previously only rules A and C were modelled). Inline FCT asserts retuned to the kill-on-equal rule. Built on v0.11.150. -->
+<!-- chainmail-board.html · v0.11.152 · Man-to-man left flank (p.25): a left-flank attack now forces the defender to 2nd-blow position on round 1 — the attacker strikes first even when the defender holds a 2+-class-higher weapon or fights from above, but the defender still returns a blow (unlike rear, which denies the return). Two-part fix: onResolveMtm now preserves 'left' through attackedFrom (right flank stays frontal — no RAW penalty) instead of flattening everything non-rear to 'front', and mtmFirstStriker gained the round-1 left-flank clause. The mtm log now prints an explicit "first blow: SIDE — reason" line so the displayed edge and the resolved initiative visibly agree. Mirrored the rule into the frozen engine/man-to-man.js + test. Built on v0.11.151. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.151</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.152</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.151';
+const SIM_VERSION = '0.11.152';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2590,24 +2590,29 @@ function mtmFirstStriker(state) {
   const { round, a, d, prevFirstStriker } = state;
   if (round === 1) {
     if (a.charging && CHARGE_REACH_CLASSES.has(a.weapon.cls) && a.weapon.cls > d.weapon.cls)
-      return { who:'attacker', defenderReturns:true };
-    if (d.attackedFrom === 'rear')              return { who:'attacker', defenderReturns:false };
+      return { who:'attacker', defenderReturns:true, reason:'charge reach — longer weapon first (p.26 §4d)' };
+    if (d.attackedFrom === 'rear')              return { who:'attacker', defenderReturns:false, reason:'rear attack — defender gets no return (p.25)' };
+    // Left flank forces the defender to 2nd-blow position this round — it OVERRIDES the
+    // defender-first cases below (weapon class / fighting from above), since a foe on the
+    // shield side denies the defender his initiative. He still returns a blow (p.25).
+    if (d.attackedFrom === 'left')              return { who:'attacker', defenderReturns:true, reason:'left flank — defender forced to 2nd blow (p.25)' };
     const diff = a.weapon.cls - d.weapon.cls;
-    if (diff >= 8)                              return { who:'defender', defenderReturns:true };
-    if (d.fromAbove)                            return { who:'defender', defenderReturns:true };
-    if (diff <= -2)                             return { who:'defender', defenderReturns:true };
-    return { who:'attacker', defenderReturns:true };
+    if (diff >= 8)                              return { who:'defender', defenderReturns:true, reason:"defender's weapon 8+ classes lower — strikes first (p.26 §4d)" };
+    if (d.fromAbove)                            return { who:'defender', defenderReturns:true, reason:'defender fights from above (p.25)' };
+    if (diff <= -2)                             return { who:'defender', defenderReturns:true, reason:"defender's weapon 2+ classes higher (p.25)" };
+    return { who:'attacker', defenderReturns:true, reason:'attacker strikes first (p.25)' };
   }
   let first = prevFirstStriker || 'attacker';
+  let reason = 'first blow carries from the prior round (p.25)';
   const opp  = first === 'attacker' ? d : a;
   const self = first === 'attacker' ? a : d;
-  if (opp.weapon.cls - self.weapon.cls <= -2) first = (first === 'attacker' ? 'defender' : 'attacker');
-  if (opp.fromAbove)                          first = (first === 'attacker' ? 'defender' : 'attacker');
-  return { who:first, defenderReturns:true };
+  if (opp.weapon.cls - self.weapon.cls <= -2) { first = (first === 'attacker' ? 'defender' : 'attacker'); reason = 'opponent now holds the 2+-class-lower weapon (p.26)'; }
+  if (opp.fromAbove)                          { first = (first === 'attacker' ? 'defender' : 'attacker'); reason = 'opponent fights from above (p.25)'; }
+  return { who:first, defenderReturns:true, reason };
 }
 function mtmResolveRound(state) {
   const { a, d, round, rng } = state;
-  const { who:first, defenderReturns } = mtmFirstStriker(state);
+  const { who:first, defenderReturns, reason:firstReason } = mtmFirstStriker(state);
 
   let aBlows = mtmBlowCountFor(a.weapon.cls, d.weapon.cls);
   let dBlows = mtmBlowCountFor(d.weapon.cls, a.weapon.cls);
@@ -2643,12 +2648,12 @@ function mtmResolveRound(state) {
       if (unpenalized >= blow.tn) blow.breakWeapon = true;
     }
     blows.push(blow);
-    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, parryCase: pCase, defenderReturns };
+    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, firstStriker: first, firstReason, parryCase: pCase, defenderReturns };
     if (blow.breakWeapon) {
       for (let j = i + 1; j < seq.length; j++) if (seq[j] === 'defender') { seq.splice(j, 1); j--; }
     }
   }
-  return { blows, outcome:'continues', nextFirstStriker:first, parryCase:pCase, defenderReturns };
+  return { blows, outcome:'continues', nextFirstStriker:first, firstStriker:first, firstReason, parryCase:pCase, defenderReturns };
 }
 
 /* === E. INDIVIDUAL MISSILE ENGINE (Appendix B bottom) ================== */
@@ -8134,7 +8139,9 @@ function onResolveMelee() {
 // Man-to-man resolver dispatch. Both combatants are individuals.
 function onResolveMtm(a, d) {
   const edge = engagementEdge(a, d);
-  const attackedFrom = (edge === 'rear') ? 'rear' : 'front';
+  // p.25: rear denies the return blow; left flank forces the defender to 2nd-blow
+  // position (round 1). Right flank carries no penalty in RAW, so it resolves frontal.
+  const attackedFrom = edge === 'rear' ? 'rear' : edge === 'left' ? 'left' : 'front';
   const aT = typeById(a.type), dT = typeById(d.type);
   const aw = mtmWeaponById(a.meleeWeapon || 'sword');
   const dw = mtmWeaponById(d.meleeWeapon || 'sword');
@@ -8160,10 +8167,12 @@ function onResolveMtm(a, d) {
 
   // Build log
   let html = '';
+  const firstSide  = r.firstStriker === 'attacker' ? 'A' : 'B';
+  const firstSideC = r.firstStriker === 'attacker' ? 'var(--side-a-d)' : 'var(--side-b-d)';
   html += `<div class="step">Round ${round} · ${edge.toUpperCase()} · ` +
           `<b style="color:var(--side-a-d)">A</b> ${aT.name} w/ ${aw.name} (cls ${aw.cls}) vs ` +
           `<b style="color:var(--side-b-d)">B</b> ${dT.name} w/ ${dw.name} (cls ${dw.cls}) · ` +
-          `parry case ${r.parryCase}${r.defenderReturns ? '' : ' · rear → no return'}</div>`;
+          `parry case ${r.parryCase} · first blow: <b style="color:${firstSideC}">${firstSide}</b> — ${r.firstReason}</div>`;
   for (let i = 0; i < r.blows.length; i++) {
     const b = r.blows[i];
     const side = b.striker === 'attacker' ? 'A' : 'B';
