@@ -26,10 +26,9 @@ export function resolveFantasyCombat({
   const targetMod = defenderTierMod;  // weaker magic users on defense — target lowered (easier)
   const effectiveRoll = dice.sum + rollMod;
   const target = baseTarget + targetMod;
-  let outcome;
-  if (effectiveRoll < target)        outcome = 'no_effect';
-  else if (effectiveRoll === target) outcome = 'fall_back';
-  else                               outcome = 'killed';
+  // Meeting the target kills (p.29 Elf "score X", p.37 True Troll "X or better").
+  // The "driven back" band lives on the Wizard-missile table, not the melee FCT.
+  const outcome = effectiveRoll >= target ? 'killed' : 'no_effect';
   const attacker = fantasticTypeById(attackerId);
   const canWithdraw = outcome === 'no_effect' && !!attacker.withdraw;
   return { ok:true, dice, baseTarget, target, rollMod, targetMod, effectiveRoll, outcome, canWithdraw };

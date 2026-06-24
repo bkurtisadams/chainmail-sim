@@ -15,7 +15,7 @@ const r_ne = resolveFantasyCombat({ attackerId:'DRAGON', defenderId:'HERO', rng:
 console.assert(r_ne.outcome === 'no_effect', 'roll 4 = no effect');
 
 const r_fb = resolveFantasyCombat({ attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.2, 0.4]) }); // 5
-console.assert(r_fb.outcome === 'fall_back', 'roll 5 = fall back');
+console.assert(r_fb.outcome === 'killed', 'roll 5 = killed (meets target 5)');
 
 const r_k = resolveFantasyCombat({ attackerId:'DRAGON', defenderId:'HERO', rng: stubRng([0.4, 0.4]) });  // 6
 console.assert(r_k.outcome === 'killed', 'roll 6 = killed');
@@ -50,7 +50,7 @@ console.assert(r_dt.target === 10 && r_dt.outcome === 'no_effect', 'Sorcerer def
 
 // Elf magic
 const r_e = resolveFantasyCombat({ attackerId:'ELF_MAGIC', defenderId:'WRAITH', rng: stubRng([0.6, 0.6]) });
-console.assert(r_e.ok && r_e.baseTarget === 8 && r_e.outcome === 'fall_back', 'Elf magic vs Wraith target 8');
+console.assert(r_e.ok && r_e.baseTarget === 8 && r_e.outcome === 'killed', 'Elf magic vs Wraith target 8 → kills on 8');
 
 const r_ei = resolveFantasyCombat({ attackerId:'ELF_MAGIC', defenderId:'DRAGON', rng: stubRng([0, 0]) });
 console.assert(!r_ei.ok && r_ei.reason.includes('Elf-magic'), 'Elf magic vs Dragon — no entry');

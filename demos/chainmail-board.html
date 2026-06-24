@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.150 · Worg/Goblin Wolf-Rider attack class: Light Horse -> Medium Horse. The rider is now a clean three-way trade vs the riderless Giant Wolf — hits HARDER (Medium Horse), moves SLOWER (laden Heavy Horse 12/18), defends WORSE (Medium Horse, no Wight hide). Move/charge/defend/morale and the two-men-vs-fantastic bite are unchanged from v0.11.149. Built on v0.11.149. -->
+<!-- chainmail-board.html · v0.11.151 · Fantasy Combat Table: meeting the target now KILLS (was a non-lethal fall-back on exact match), per the rulebook's own "score X" / "X or better" wording (Elf p.29, True Troll p.37) — every FCT kill was one pip too hard. Removed the fall-back band from the melee FCT (it belongs only to the Wizard-missile table). Fatigue rule B (p.10) now applied: a fatigued unit defends one class lower, so it is correctly easier to kill (previously only rules A and C were modelled). Inline FCT asserts retuned to the kill-on-equal rule. Built on v0.11.150. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.150</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.151</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.150';
+const SIM_VERSION = '0.11.151';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2216,7 +2216,8 @@ function resolveMassMelee({ attacker, defender, rng }) {
   const aBaseCls = attacker.attackClassOverride || aT.cls;
   const aEff   = effectiveAttackerClass(aBaseCls, attacker);
   const aBonus = classBumpsToBonus(aBaseCls, attacker);
-  const dTargetCls = defender.defendType || dT.cls;   // class the attacker rolls against
+  let dTargetCls = defender.defendType || dT.cls;   // class the attacker rolls against
+  if (defender.fatigued) dTargetCls = FATIGUE_DOWN[dTargetCls] || dTargetCls;  // p.10 rule B: defend one class lower
   const aRow   = COMBAT[aEff]?.[dTargetCls];
   if (!aRow) throw new Error(`no combat row: ${aEff} vs ${dTargetCls}`);
   let aDPM = aRow.dice / aRow.perMen;
@@ -2240,7 +2241,8 @@ function resolveMassMelee({ attacker, defender, rng }) {
   } else {
     const dBaseCls = defender.attackClassOverride || dT.cls;
     const dRetCls = effectiveDefenderReturnClass(dBaseCls, defender);
-    const aTargetCls = attacker.defendType || aT.cls;   // class the defender rolls against
+    let aTargetCls = attacker.defendType || aT.cls;   // class the defender rolls against
+    if (attacker.fatigued) aTargetCls = FATIGUE_DOWN[aTargetCls] || aTargetCls;  // p.10 rule B
     const dRow = COMBAT[dRetCls]?.[aTargetCls];
     let dDPM = dRow ? dRow.dice / dRow.perMen : 0;
     const dPolearm = POLEARM_CLASSES.has(dBaseCls) && defender.polearm;
@@ -2847,10 +2849,10 @@ function resolveFantasyCombat({ attacker, defender, rng, attackerTier, defenderT
   // it IS the bonus. Only bearers carry the flag, so no type gate is needed.
   const swordBonus = attacker.magicWeapon ? attacker.magicWeapon : 0;
   total += swordBonus;
-  let outcome;
-  if (total > target)      outcome = 'killed';
-  else if (total === target) outcome = 'fallback';
-  else                     outcome = 'no_effect';
+  // p.29 (Elf "score X") and p.37 (True Troll "X or better") — meeting the
+  // target kills. No fall-back band on the melee FCT; "driven back" belongs to
+  // the Wizard-missile table (resolveMissileHit), not here.
+  const outcome = total >= target ? 'killed' : 'no_effect';
   return { ok:true, target, baseTarget, swordBonus, dice, total, outcome };
 }
 // p.29 — a magic-armed Elf engaging a listed fantastic creature fights it on the
@@ -8223,14 +8225,10 @@ function onResolveFantasy(a, d) {
           (r.total !== r.dice.sum ? ` = <b>${r.total}</b>` : '') + `</div>`;
 
   if (r.outcome === 'killed') {
-    html += `<div class="verdict v-rout">B · ${dT.name} → killed (${r.total} > ${r.target})</div>`;
+    html += `<div class="verdict v-rout">B · ${dT.name} → killed (${r.total} ≥ ${r.target})</div>`;
     d.count = 0; d.destroyed = true; if (d.maxHp) d.hp = 0;
     cleanupEngagementsForUnit(d.id);
     if (d.id === state.targetId) state.targetId = null;
-  } else if (r.outcome === 'fallback') {
-    html += `<div class="verdict v-back2">B · ${dT.name} falls back one move (${r.total} = ${r.target})</div>`;
-    // Displace defender directly away by one full move allowance
-    performAutoMove(d, a, d.status || 'ready');
   } else {
     html += `<div class="verdict v-noeffect">no effect (${r.total} < ${r.target})</div>`;
   }
@@ -10282,7 +10280,7 @@ renderBoard();
   const fcTrollKill = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: always(6) });
   console.assert(fcTrollKill.target === 10 && fcTrollKill.outcome === 'killed', 'Hero vs True Troll target 10; rolling 12 → killed');
   const fcTrollFall = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(6)]) });
-  console.assert(fcTrollFall.outcome === 'fallback', 'Hero vs True Troll rolling exactly 10 → fall back');
+  console.assert(fcTrollFall.outcome === 'killed', 'Hero vs True Troll rolling exactly 10 → killed (meets "10 or better", p.37)');
   const fcTrollDenied = resolveFantasyCombat({ attacker:{ type:'DRAGON' }, defender:{ type:'TROLL' }, rng: always(6) });
   console.assert(!fcTrollDenied.ok, 'Dragon has no kill entry vs True Troll');
   const fcTrollAsGiant = resolveFantasyCombat({ attacker:{ type:'TROLL' }, defender:{ type:'HERO' }, rng: always(6) });
@@ -10367,15 +10365,15 @@ renderBoard();
   console.assert(elfUsesFantasyCombat({ type:'BALROG', magicWeapon:1 }, { type:'ELF' }) === false, 'elf FCT path: one direction — a creature striking an Elf fights it normally');
   // The Elf's roll carries the magic sword's +1 (Excalibur +2/+3, p.29).
   const fcElfWight = resolveFantasyCombat({ attacker:{ type:'ELF', magicWeapon:1 }, defender:{ type:'WIGHT' }, rng: seq([forDie(3), forDie(2)]) });
-  console.assert(fcElfWight.target === 6 && fcElfWight.swordBonus === 1 && fcElfWight.total === 6 && fcElfWight.outcome === 'fallback', 'elf FCT: 2d6=5 +1 sword = 6 vs Wight 6 → fall back');
+  console.assert(fcElfWight.target === 6 && fcElfWight.swordBonus === 1 && fcElfWight.total === 6 && fcElfWight.outcome === 'killed', 'elf FCT: 2d6=5 +1 sword = 6 vs Wight 6 → kills (p.29 "score 6")');
   const fcElfWightSuper = resolveFantasyCombat({ attacker:{ type:'ELF', magicWeapon:3 }, defender:{ type:'WIGHT' }, rng: seq([forDie(3), forDie(2)]) });
   console.assert(fcElfWightSuper.total === 8 && fcElfWightSuper.outcome === 'killed', 'elf FCT: an Excalibur +3 turns 5 into 8 → kills Wight 6');
 
   // Magic-sword FCT bonus is general (p.29) — any bearer adds it; a swordless one does not.
-  const fcHeroSword = resolveFantasyCombat({ attacker:{ type:'HERO', magicWeapon:1 }, defender:{ type:'TROLL' }, rng: seq([forDie(5), forDie(5)]) });
-  console.assert(fcHeroSword.swordBonus === 1 && fcHeroSword.total === 11 && fcHeroSword.outcome === 'killed', 'magic sword: a Hero +1 turns 10 into 11 → kills True Troll 10');
-  const fcHeroNoSword = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(5), forDie(5)]) });
-  console.assert(fcHeroNoSword.swordBonus === 0 && fcHeroNoSword.total === 10 && fcHeroNoSword.outcome === 'fallback', 'magic sword: a swordless Hero rolling 10 → only falls back');
+  const fcHeroSword = resolveFantasyCombat({ attacker:{ type:'HERO', magicWeapon:1 }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(5)]) });
+  console.assert(fcHeroSword.swordBonus === 1 && fcHeroSword.total === 10 && fcHeroSword.outcome === 'killed', 'magic sword: a Hero +1 turns 9 into 10 → kills True Troll 10');
+  const fcHeroNoSword = resolveFantasyCombat({ attacker:{ type:'HERO' }, defender:{ type:'TROLL' }, rng: seq([forDie(4), forDie(5)]) });
+  console.assert(fcHeroNoSword.swordBonus === 0 && fcHeroNoSword.total === 9 && fcHeroNoSword.outcome === 'no_effect', 'magic sword: a swordless Hero rolling 9 → misses True Troll 10');
 
   // Fantasy-vs-mass melee profiles (Slice 6X).
   console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('OGRE') === 'HF' && fightingClassFor('TROLL') === 'AF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, OGRE HF, True Troll AF vs men, HERO default AF');
