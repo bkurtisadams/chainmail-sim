@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.153 · Man-to-man log: per-striker blow numbering. Blows now read "A blow 1 of 2 / A blow 2 of 2" (each striker counted on its own, with the total being the blows that striker was entitled to this round) instead of the old whole-round sequence index ("B blow 1 / A blow 2 / A blow 3"), which falsely implied A had a missing first blow. mtmResolveRound now exposes blowAllotment {attacker,defender}; the mtm and escalade log loops consume it. Display-only — no resolver math changed. Built on v0.11.152. -->
+<!-- chainmail-board.html · v0.11.154 · Label toggle + hover ID. New display setting "Show unit labels" (default on): off hides the on-board name/type/count text under each token to declutter crowded melees (e.g. a hero ringed by figures), while a native <title> tooltip on every unit group keeps full ID on hover — side · name (label) · weapon · armor · hp for individuals, side · name · count for masses. Added unitTitle(); gated the name <text> on state.settings.showUnitLabels. Display-only. Built on v0.11.153. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.153</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.154</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -633,6 +633,7 @@
       <label><input type="checkbox" data-setting="keepCapturedVisible"> Keep captured units visible (faded)</label>
       <label><input type="checkbox" data-setting="arcForAllMissile"> Show arc of fire for all missile units</label>
       <label><input type="checkbox" data-setting="showFacingEdges"> Show front/flank/rear facing edges</label>
+      <label><input type="checkbox" data-setting="showUnitLabels"> Show unit labels (off = hover the token for ID)</label>
       <label>Facing-edge opacity
         <input type="range" min="0.1" max="1" step="0.05" data-setting-range="facingEdgeOpacity" style="flex:0 0 140px; margin-left:auto;"></label>
       <label>Facing-edge thickness
@@ -728,7 +729,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.153';
+const SIM_VERSION = '0.11.154';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -3386,6 +3387,7 @@ const state = {
     keepCapturedVisible: true,
     arcForAllMissile: false,
     showFacingEdges: true,   // front/flank/rear edge lines on mass units
+    showUnitLabels: true,    // on-board name/type text under each token; off = hover the token for a native tooltip instead
     facingEdgeOpacity: 0.85, // opacity of those facing edges (0.1–1)
     facingEdgeWeight: 1.5,   // stroke-width multiplier for facing edges (0.5–3); edges use non-scaling-stroke so they stay visible when zoomed out
     applyWrapAroundBonus: true,
@@ -5039,6 +5041,26 @@ function renderWorks(u) {
 function escXml(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
+// Native hover/tooltip text for a unit's <g> — the ID line that stays available
+// when on-board labels are switched off. Full kit for individuals (weapon/armor/hp),
+// strength for masses.
+function unitTitle(u) {
+  const T = typeById(u.type);
+  const nm = u.label ? `${escXml(u.label)} (${T ? T.name : u.type})` : (T ? T.name : u.type);
+  const parts = [`${u.side} · ${nm}`];
+  if (u.kind === 'works') {
+    const wt = WORKS_TYPES[u.worksType];
+    if (wt) parts.push(wt.name);
+  } else if (u.kind === 'individual') {
+    if (u.meleeWeapon) parts.push(mtmWeaponById(u.meleeWeapon)?.name);
+    if (u.weapon)      parts.push(rangedWeaponById(u.weapon)?.name);
+    if (u.armor)       parts.push(ARMOR_MTM.find(a => a.id === u.armor)?.label);
+    if (u.maxHp > 1)   parts.push(`hp ${u.hp}/${u.maxHp}`);
+  } else {
+    parts.push(`${u.count}/${u.startCount}`);
+  }
+  return escXml(parts.filter(Boolean).join(' · '));
+}
 function renderUnit(u) {
   if (u.destroyed) return '';
   if (u.kind === 'works') return renderWorks(u);
@@ -5301,18 +5323,19 @@ function renderUnit(u) {
 
   return `
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
+        <title>${unitTitle(u)}</title>
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
         ${pips}
         ${edges}
         ${outline}
       </g>
       ${badges}
-      <text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="10.5" font-weight="700"
+      ${state.settings.showUnitLabels === false ? '' : `<text x="${u.x}" y="${labelY}" font-family="sans-serif" font-size="10.5" font-weight="700"
             fill="${u.side==='A'?'var(--side-a-d)':'var(--side-b-d)'}" text-anchor="middle" pointer-events="none">
         ${u.label
           ? `<tspan font-size="11.5">${u.side} · ${escXml(u.label)}</tspan><tspan x="${u.x}" dy="12" font-size="9" font-weight="600" fill="var(--ink-soft)">${T.name} · ${u.count}/${u.startCount}</tspan>`
           : `${u.side} · ${T.name} · ${u.count}/${u.startCount}`}
-      </text>
+      </text>`}
       ${chargeBadgeStr}
       ${fatigueBadgeStr}
       ${halfPauseBadgeStr}
