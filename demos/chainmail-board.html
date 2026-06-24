@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.156 · Engagement banner declutter. The FRONTAL/round/overhang banner was pinned to the contact midpoint, burying both tokens and their name labels. It now lifts clear above the higher of the two tokens (x still centred on the pair), so the units stay visible; the thin edge-coloured contact line is unchanged. New "Engagement banner opacity" display slider (overlayLabelOpacity, default 0.85, range 0-1); at 0 the banner is hidden entirely and only the contact line remains. Built on v0.11.155. -->
+<!-- chainmail-board.html · v0.11.157 · Simultaneous-kill rule for Hero/Super-Hero/Lycanthrope. RAW (p.30/p.34): regular troops on the non-Fantasy tables must score the creature's FULL fighting strength (Hero 4, Super-Hero 8, Lycanthrope 4) in a SINGLE resolution to kill it — fewer hits have NO effect and nothing carries over. The mixed resolver was bleeding a 4-hp pool cumulatively, so a mass unit could whittle a Hero down over rounds (wrong). Now onResolveMixed routes these types through new pure creatureHpAfter(): kills>=strength -> dead, else hp restored full. Cumulative creatures (Ogre/Giant/Roc) still bleed, unchanged. New house-rule setting heroCumulativeDamage (default off) reverts the three simultaneous types to the cumulative/Troll model. Self-tested. Built on v0.11.156. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.156</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.157</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -704,6 +704,7 @@
       <h3>Optional Rules</h3>
       <label><input type="checkbox" data-setting="applyWrapAroundBonus"> Wrap-around bonus in round 2+ (p.16 §4)</label>
       <label><input type="checkbox" data-setting="applyFatigue"> Fatigue after 3 melee rounds (p.10–11; SP/Landsknechte threshold is 6)</label>
+      <label><input type="checkbox" data-setting="heroCumulativeDamage"> Heroes/Super-Heroes/Lycanthropes take cumulative damage <i>(house rule — RAW needs all kills in one resolution, p.30/p.34)</i></label>
       <label><input type="checkbox" data-setting="applyCavalryChargeMorale"> Cavalry-charge morale check (p.17)</label>
       <label><input type="checkbox" data-setting="applyPrisoners"> Prisoners step on surrender (p.17)</label>
       <label><input type="checkbox" data-setting="applyChargeFollowThrough"> Victorious charger follows through its charge (p.16)</label>
@@ -731,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.156';
+const SIM_VERSION = '0.11.157';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2754,6 +2755,23 @@ const FIGHTING_STRENGTH = {
   BALROG: 2, GIANT: 12, ENT: 6, DRAGON: 4, ROC: 4, ELEMENTAL: 4, WIGHT: 1, ZOMBIE: 1,
   BASILISK: 4, COCKATRICE: 4,   // defend as a Lycanthrope (no offensive use — see NO_MELEE_ATTACK)
 };
+// "Simultaneous kill" creatures (p.30 Hero/Super-Hero, p.34 Lycanthrope): regular
+// troops on the non-Fantasy tables must score the creature's FULL fighting strength
+// in a SINGLE resolution to kill it — fewer hits have "no effect", with nothing
+// carried over. The hp pool below is therefore all-or-nothing for these types
+// (it stays full and only ever drops straight to 0), unlike the cumulative
+// "accumulation of hits" creatures (Ogre p.34, Giant/Roc) which bleed down.
+// The house-rule setting heroCumulativeDamage flips them to the cumulative model.
+const SIMULTANEOUS_KILL = new Set(['HERO', 'SUPER_HERO', 'LYCAN']);
+// New hp for an hp-bearing creature after a round deals `kills` against it.
+// Simultaneous types die only if `kills` reaches `strength` in this one resolution;
+// fewer = no effect, hp restored to full (nothing carries over). Cumulative types
+// bleed hp. `cumulativeOverride` (the house-rule setting) forces the bleed model.
+// Pure — no state/DOM, so the board self-tests it.
+function creatureHpAfter(type, hp, maxHp, strength, kills, cumulativeOverride) {
+  if (SIMULTANEOUS_KILL.has(type) && !cumulativeOverride) return kills >= strength ? 0 : maxHp;
+  return Math.max(0, hp - kills);
+}
 // Class used for the synthetic mass figures when an individual fights a mass
 // unit — each creature's "melee as N of class X" profile (fantasy supp. pp.30-37).
 // Defaults to AF (heroes, super-heroes, wizards, wraiths, lycanthropes).
@@ -3395,6 +3413,7 @@ const state = {
     overlayLabelOpacity: 0.85, // engagement banner (FRONTAL/round/overhang) fill opacity; 0 hides the banner (the thin edge-coloured contact line stays)
     applyWrapAroundBonus: true,
     applyFatigue: false,
+    heroCumulativeDamage: false,  // house rule: Hero/Super-Hero/Lycanthrope take cumulative damage like a Troll/Ogre. RAW (off) needs all kills in one resolution (p.30/p.34).
     applyCavalryChargeMorale: false,
     applyPrisoners: false,
     applyChargeFollowThrough: true,   // p.16: a victorious round-1 charger continues the balance of its charge
@@ -8414,16 +8433,18 @@ function onResolveMixed(a, d) {
   if (indImmune) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${indT.name} is impervious to normal weapons — the mass inflicts no casualties on it.</small></div>`;
   if (halfKillNote) html += `<div class="step"><small style="color:var(--ink-soft); font-family:var(--sans)">${halfKillNote}</small></div>`;
 
-  // Route casualties: attacker casualties go to a; defender casualties go to d.
-  // The individual side uses hp; the mass side uses count (applyCasualties).
-  if (aIsIndiv) {
-    // a = ind, d = mass
-    ind.hp = Math.max(0, ind.hp - aCas);
-    applyCasualties(mass, dCas);
-  } else {
-    // a = mass, d = ind
-    applyCasualties(mass, aCas);
-    ind.hp = Math.max(0, ind.hp - dCas);
+  // Route casualties: the mass always takes its losses cumulatively; the creature
+  // side either bleeds hp (cumulative types) or is all-or-nothing (simultaneous types).
+  const indCas  = aIsIndiv ? aCas : dCas;   // kills scored AGAINST the creature this resolution
+  const massCas = aIsIndiv ? dCas : aCas;   // kills the creature dealt to the mass
+  applyCasualties(mass, massCas);
+  const cumulativeOverride = !!state.settings.heroCumulativeDamage;
+  const simultaneous = SIMULTANEOUS_KILL.has(ind.type) && !cumulativeOverride;
+  ind.hp = creatureHpAfter(ind.type, ind.hp, ind.maxHp, fs, indCas, cumulativeOverride);
+  let simNote = '';
+  if (simultaneous && ind.hp > 0 && indCas > 0) {
+    // survived a simultaneous-kill round: took some hits but not the full strength
+    simNote = `${indT.name} takes ${indCas} of the ${fs} simultaneous kills needed — no effect, and nothing carries over (p.${ind.type === 'LYCAN' ? '34' : '30'}).`;
   }
   capParalysisToCount(mass);
   // Wight/Ghoul touch: after this round's blows, it paralyzes figures it
@@ -8439,13 +8460,14 @@ function onResolveMixed(a, d) {
     cleanupEngagementsForUnit(ind.id);
     if (ind.id === state.selectedId) state.selectedId = null;
     if (ind.id === state.targetId)   state.targetId = null;
+  } else if (simNote) {
+    html += `<div class="step v-stable"><small style="color:var(--ink-soft); font-family:var(--sans)">${simNote}</small></div>`;
   } else {
     html += `<div class="step">${aIsIndiv?'A':'B'} · ${indT.name} hp now ${ind.hp}/${ind.maxHp}</div>`;
   }
   // Mass-side post-melee morale + loss check if still alive
   if (!mass.destroyed && mass.count > 0) {
     const massSide = aIsIndiv ? 'B' : 'A';
-    const massCas = aIsIndiv ? dCas : aCas;
     if (massCas > 0) {
       const cas = mass.startCount - mass.count;
       const lr = unitLossMorale(mass, { casualties: cas });
@@ -10430,6 +10452,21 @@ renderBoard();
   console.assert(fcHeroNoSword.swordBonus === 0 && fcHeroNoSword.total === 9 && fcHeroNoSword.outcome === 'no_effect', 'magic sword: a swordless Hero rolling 9 → misses True Troll 10');
 
   // Fantasy-vs-mass melee profiles (Slice 6X).
+  // Simultaneous-kill rule (p.30 Hero/Super-Hero, p.34 Lycanthrope): full strength in
+  // ONE resolution kills; fewer = no effect, hp restored to full (no carryover).
+  console.assert(creatureHpAfter('HERO', 4, 4, 4, 3, false) === 4, 'Hero: 3 of 4 kills → no effect, hp stays 4');
+  console.assert(creatureHpAfter('HERO', 4, 4, 4, 4, false) === 0, 'Hero: 4 simultaneous kills → dead');
+  console.assert(creatureHpAfter('SUPER_HERO', 8, 8, 8, 7, false) === 8, 'Super-Hero: 7 of 8 → no effect');
+  console.assert(creatureHpAfter('SUPER_HERO', 8, 8, 8, 8, false) === 0, 'Super-Hero: 8 simultaneous → dead');
+  console.assert(creatureHpAfter('LYCAN', 4, 4, 4, 2, false) === 4, 'Lycanthrope: 2 of 4 → no effect (p.34)');
+  // No carryover: a prior 3-kill round leaves hp full, so a later 3-kill round still does nothing.
+  console.assert(creatureHpAfter('HERO', 4, 4, 4, 3, false) === 4 && creatureHpAfter('HERO', 4, 4, 4, 3, false) === 4, 'Hero: successive sub-lethal rounds never accumulate');
+  // Cumulative creatures (Ogre/Giant/Roc, etc.) bleed hp — they are NOT in the set.
+  console.assert(creatureHpAfter('OGRE', 6, 6, 6, 3, false) === 3, 'Ogre: cumulative — 3 hits → hp 3');
+  console.assert(creatureHpAfter('GIANT', 12, 12, 12, 5, false) === 7, 'Giant: cumulative — 5 hits → hp 7');
+  // House-rule override: simultaneous types bleed like a Troll when the setting is on.
+  console.assert(creatureHpAfter('HERO', 4, 4, 4, 1, true) === 3, 'house rule on: Hero bleeds cumulatively (1 hit → hp 3)');
+  console.assert(SIMULTANEOUS_KILL.has('HERO') && SIMULTANEOUS_KILL.has('SUPER_HERO') && SIMULTANEOUS_KILL.has('LYCAN') && !SIMULTANEOUS_KILL.has('OGRE') && !SIMULTANEOUS_KILL.has('GIANT'), 'simultaneous set: Hero/Super-Hero/Lycan only');
   console.assert(fightingClassFor('DRAGON') === 'HH' && fightingClassFor('OGRE') === 'HF' && fightingClassFor('TROLL') === 'AF' && fightingClassFor('HERO') === 'AF', 'fantasy fighting classes: DRAGON HH, OGRE HF, True Troll AF vs men, HERO default AF');
   console.assert(FIGHTING_STRENGTH.DRAGON === 4 && FIGHTING_STRENGTH.ENT === 6 && FIGHTING_STRENGTH.WIGHT === 1 && FIGHTING_STRENGTH.ZOMBIE === 1 && FIGHTING_STRENGTH.OGRE === 6 && FIGHTING_STRENGTH.TROLL === 3, 'fantasy fighting strengths wired');
   console.assert(MISSILE_IMMUNE_INDIV.has('ZOMBIE') && MELEE_IMMUNE_INDIV.has('DRAGON') && !MELEE_IMMUNE_INDIV.has('ZOMBIE') && !MELEE_IMMUNE_INDIV.has('WIZARD') && MELEE_IMMUNE_INDIV.has('TROLL') && !MELEE_IMMUNE_INDIV.has('OGRE'), 'missile/melee immunity: zombie missile only; dragon/true troll melee yes, wizard/ogre no');
