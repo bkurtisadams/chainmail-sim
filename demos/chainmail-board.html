@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.154 · Label toggle + hover ID. New display setting "Show unit labels" (default on): off hides the on-board name/type/count text under each token to declutter crowded melees (e.g. a hero ringed by figures), while a native <title> tooltip on every unit group keeps full ID on hover — side · name (label) · weapon · armor · hp for individuals, side · name · count for masses. Added unitTitle(); gated the name <text> on state.settings.showUnitLabels. Display-only. Built on v0.11.153. -->
+<!-- chainmail-board.html · v0.11.155 · Two New-Unit panel fixes. (1) Alignment no longer resets when you change Kind: syncKindFields stopped reseeding the alignment picker (it overwrote a manual pick with the repopulated type's default, so Law→Kind:Individual flipped to Neutral). Alignment is now seeded once at init and reseeds only on a Type change, per the picker's contract; loadUnitIntoPanel still restores a stored alignment. (2) Magic-sword note no longer overflows: the field-note used flex:1 0 100% + margin-left:92px (92px wider than the row, shrink:0), now flex:1 1 calc(100% - 92px) + min-width:0 so it wraps under the control and stays in bounds. Built on v0.11.154. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -195,7 +195,7 @@
      wrap to its own line (under the control: 84px label + 8px gap) so the select
      keeps full width instead of being crushed. */
   #f-magic-sword-row { flex-wrap: wrap; }
-  #f-magic-sword-row .field-note { flex: 1 0 100%; margin-left: 92px; }
+  #f-magic-sword-row .field-note { flex: 1 1 calc(100% - 92px); margin-left: 92px; min-width: 0; }
 
   #log { font-size: 13px; line-height: 1.55; }
   #log:empty::before { content: "—  resolve combat to see results"; color: var(--ink-soft);
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.154</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.155</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -729,7 +729,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.154';
+const SIM_VERSION = '0.11.155';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4518,7 +4518,6 @@ function syncKindFields() {
   syncPikeRow();
   syncMagicRow();
   syncMagicItemsRow();
-  syncAlignmentDefault();
 }
 // Reset the Alignment picker to the current type's default (a manual choice is kept
 // until the type changes).
@@ -4555,6 +4554,7 @@ function readMagicSword(type) {
 }
 $('#f-kind').addEventListener('change', syncKindFields);
 syncKindFields();
+syncAlignmentDefault();   // seed alignment for the default type once; Kind changes no longer reseed, so a manual pick survives a Kind switch (a Type change still reseeds, per the picker's contract)
 
 // Live point-value readout for the unit being configured (p.27). Mirrors the
 // fields the spawn builder reads, so the cost shown is the cost that lands.
