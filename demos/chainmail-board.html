@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.158 · Magic sword now counts in normal (mixed) combat. p.29: "In normal combat they merely add an extra die." onResolveMixed only summed FANTASY_BONUS_DICE + elemental bonus, so a magic-armed Hero/Super-Hero/Wizard fighting a mass unit got nothing from the sword. Added swordDie (ind.magicWeapon ? 1 : 0) into creatureBonus → the creature rolls one extra die whenever it swings (attack or return), with a log note. One die for any tier — the +2/+3 of super-swords applies on the Fantasy Combat Table (already handled), not here. Self-tested. Built on v0.11.157. -->
+<!-- chainmail-board.html · v0.11.159 · Missile arc-of-fire fix + mounted-individual movement. BUG (arc never drawn): renderUnit COMPUTED the firing-arc path into `arc` but the return template never interpolated ${arc}, so no unit (mass or individual) ever showed its missile arc. With no visible 45deg cone you could not tell whether a target sat inside the firing arc, which also made fire seem dead ("the bow does not exist") — the missile button correctly disables when the target is outside the arc, but silently. Now ${arc} is emitted inside the unit's rotated group (facing-relative coords), behind the token. BUG (mounted individual): baseMoveAllowanceOf/chargeAllowanceOf ignored u.mounted, so a mounted Hero moved/charged as if on foot. A mounted individual now rides as Heavy Horse (12" move / 18" charge; Hero "ranges to Heavy Horse", p.30) via isMountedIndividual; arc/facing/road already keyed off mounted. Selected panel now shows an individual's Missile weapon (+range) and the mounted ride class, so the bow/horse are confirmable at a glance. Self-tested. Built on v0.11.158. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.158</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.159</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.158';
+const SIM_VERSION = '0.11.159';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -3520,7 +3520,15 @@ function snapPos(u, px, py) {
    Pure helpers so the per-turn move-allowance logic is testable without the
    DOM. A unit's allowance comes from MOVE_ALLOWANCE (default 12″); movedThisTurn
    accumulates straight-line drag/nudge distance and resets each round. */
-const baseMoveAllowanceOf = (u) => MOVE_ALLOWANCE[u.type] || 12;
+// A mounted individual (Hero/Wizard/man, etc.) rides as Heavy Horse — the top of
+// the Hero's range ("from Light Foot to Heavy Horse", p.30). The mass Heavy Horse
+// profile is 12″ move / 18″ charge, so a mounted figure uses those instead of its
+// on-foot table value. (A foot Hero already moves 12 in the table, so the visible
+// gain is the 18″ charge and full cavalry treatment — arc, facing, road bonus.)
+const MOUNTED_MOVE_IN = 12;     // Heavy Horse move
+const MOUNTED_CHARGE_IN = 18;   // Heavy Horse charge
+const isMountedIndividual = (u) => u.kind === 'individual' && !!u.mounted;
+const baseMoveAllowanceOf = (u) => isMountedIndividual(u) ? MOUNTED_MOVE_IN : (MOVE_ALLOWANCE[u.type] || 12);
 // Altitude (p.34-38): combat only ever distinguishes airborne vs grounded, so u.airborne
 // is the binary that gates play; u.altitudeIn rides along for Levitate's rise / wall
 // clearance but combat never reads it. FLIERS = innate fliers (fly speed ″/turn, max
@@ -3555,7 +3563,7 @@ function maxAloftOf(u) {
 const LEVITATE_RISE_IN = 6;
 const LEVITATE_MAX_IN = 36;
 const LEVITATE_DURATION = 6;
-const chargeAllowanceOf = (u) => CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u);
+const chargeAllowanceOf = (u) => isMountedIndividual(u) ? MOUNTED_CHARGE_IN : (CHARGE_ALLOWANCE[u.type] || baseMoveAllowanceOf(u));
 // Road move bonus (p.9 ROAD column): horse types only — HH +3, MH/LH +6; foot get
 // none. MK (Mounted Knights) ride as Heavy Horse (+3). Catapults/cannons (+3) and
 // wagons (+6) are deferred (works move by push-speed). A mounted individual gets the
@@ -5346,6 +5354,7 @@ function renderUnit(u) {
   return `
       <g class="unit" data-id="${u.id}" transform="translate(${u.x} ${u.y}) rotate(${u.facing})">
         <title>${unitTitle(u)}</title>
+        ${arc}
         <rect x="${xL}" y="${yT}" width="${w}" height="${h}" rx="2" fill="rgba(255,250,230,0.55)" stroke="rgba(0,0,0,0.12)" stroke-width="0.5"/>
         ${pips}
         ${edges}
@@ -5669,7 +5678,8 @@ function updateSidebar() {
           (u.maxHp > 1 ? `<div class="stat"><span class="k">HP / strength</span><span class="v">${u.hp} / ${u.maxHp}</span></div>` : '') +
           (u.meleeWeapon ? `<div class="stat"><span class="k">Melee wpn</span><span class="v">${(mtmWeaponById(u.meleeWeapon)||{name:u.meleeWeapon}).name} · cls ${(mtmWeaponById(u.meleeWeapon)||{cls:'?'}).cls}</span></div>` : '') +
           (u.armor ? `<div class="stat"><span class="k">Armor</span><span class="v">${(ARMOR_MTM.find(a=>a.id===u.armor)||{label:u.armor}).label}</span></div>` : '') +
-          (u.mounted ? `<div class="stat"><span class="k">Mounted</span><span class="v">yes</span></div>` : '')
+          (u.weapon ? `<div class="stat"><span class="k">Missile</span><span class="v">${(rangedWeaponById(u.weapon)||{name:u.weapon}).name}${WEAPON_RANGES[u.weapon] ? ` · ${WEAPON_RANGES[u.weapon]}″` : ''}</span></div>` : '') +
+          (u.mounted ? `<div class="stat"><span class="k">Mounted</span><span class="v">yes · rides as Heavy Horse (${MOUNTED_MOVE_IN}″ / charge ${MOUNTED_CHARGE_IN}″)</span></div>` : '')
         : `<div class="stat"><span class="k">Formation</span><span class="v">${u.formation || 'line'}</span></div>` +
           `<div class="stat"><span class="k">Spacing</span><span class="v">${u.spacing}${u.hedgehog?' · hedgehog':''}</span></div>` +
           (u.polearm ? `<div class="stat"><span class="k">Pikes</span><span class="v">+1 die/man</span></div>` : '')) +
@@ -10937,6 +10947,11 @@ renderBoard();
   console.assert(facingTier(0)===0 && facingTier(45)===0.25 && facingTier(46)===0.5 && facingTier(90)===0.5 && facingTier(91)===1, 'facing tiers: oblique ≤45, face ≤90, about ≤180');
   console.assert(facingDiscipline({type:'HF'})===1 && facingDiscipline({type:'PE'})===2 && facingDiscipline({type:'SP'})===0.5 && facingDiscipline({type:'HH'})===0.5, 'discipline mod: foot 1, peasant/levy ×2, swiss/horse ×½');
   console.assert(facingDiscipline({type:'HERO', mounted:true})===0.5, 'a mounted individual gets the ½ horse modifier');
+  // Mounted individual rides as Heavy Horse (12 move / 18 charge); foot keeps its table value.
+  console.assert(baseMoveAllowanceOf({kind:'individual',type:'HERO',mounted:true})===12 && chargeAllowanceOf({kind:'individual',type:'HERO',mounted:true})===18, 'mounted hero: 12 move / 18 charge (Heavy Horse)');
+  console.assert(chargeAllowanceOf({kind:'individual',type:'HERO',mounted:false})===15, 'foot hero keeps its 15 charge');
+  console.assert(baseMoveAllowanceOf({kind:'mass',type:'HF'})===9, 'mass HF move unaffected by the mounted-individual rule');
+  console.assert(isHorseman({kind:'individual',type:'HERO',mounted:true})===true && chargeAllowanceOf({kind:'individual',type:'WIZARD',mounted:true})===18, 'mounted wizard is a horseman charging 18');
   console.assert(facingCostInches({type:'HF'},45)===2.25 && facingCostInches({type:'HF'},90)===4.5 && facingCostInches({type:'HF'},180)===9, 'HF (9″): oblique 2.25″, face 4.5″, about 9″');
   console.assert(facingCostInches({type:'HH'},180)===6 && facingCostInches({type:'MH'},90)===4.5, 'horse halves: HH about 6″, MH face 4.5″');
   console.assert(facingCostInches({type:'PE'},45)===4.5, 'peasant doubles: oblique costs ½ its allowance');
