@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.152 · Man-to-man left flank (p.25): a left-flank attack now forces the defender to 2nd-blow position on round 1 — the attacker strikes first even when the defender holds a 2+-class-higher weapon or fights from above, but the defender still returns a blow (unlike rear, which denies the return). Two-part fix: onResolveMtm now preserves 'left' through attackedFrom (right flank stays frontal — no RAW penalty) instead of flattening everything non-rear to 'front', and mtmFirstStriker gained the round-1 left-flank clause. The mtm log now prints an explicit "first blow: SIDE — reason" line so the displayed edge and the resolved initiative visibly agree. Mirrored the rule into the frozen engine/man-to-man.js + test. Built on v0.11.151. -->
+<!-- chainmail-board.html · v0.11.153 · Man-to-man log: per-striker blow numbering. Blows now read "A blow 1 of 2 / A blow 2 of 2" (each striker counted on its own, with the total being the blows that striker was entitled to this round) instead of the old whole-round sequence index ("B blow 1 / A blow 2 / A blow 3"), which falsely implied A had a missing first blow. mtmResolveRound now exposes blowAllotment {attacker,defender}; the mtm and escalade log loops consume it. Display-only — no resolver math changed. Built on v0.11.152. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.152</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.153</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -728,7 +728,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.152';
+const SIM_VERSION = '0.11.153';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -2648,12 +2648,12 @@ function mtmResolveRound(state) {
       if (unpenalized >= blow.tn) blow.breakWeapon = true;
     }
     blows.push(blow);
-    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, firstStriker: first, firstReason, parryCase: pCase, defenderReturns };
+    if (blow.kill) return { blows, outcome: who, nextFirstStriker: first, firstStriker: first, firstReason, parryCase: pCase, defenderReturns, blowAllotment: { attacker: aBlows, defender: dBlows } };
     if (blow.breakWeapon) {
       for (let j = i + 1; j < seq.length; j++) if (seq[j] === 'defender') { seq.splice(j, 1); j--; }
     }
   }
-  return { blows, outcome:'continues', nextFirstStriker:first, firstStriker:first, firstReason, parryCase:pCase, defenderReturns };
+  return { blows, outcome:'continues', nextFirstStriker:first, firstStriker:first, firstReason, parryCase:pCase, defenderReturns, blowAllotment: { attacker: aBlows, defender: dBlows } };
 }
 
 /* === E. INDIVIDUAL MISSILE ENGINE (Appendix B bottom) ================== */
@@ -5998,6 +5998,7 @@ function resolveEscalade() {
   let html = `<div class="step">Round ${round} · escalade via ${viaName} · ` +
     `<b style="color:var(--side-a-d)">${a.side}</b> ${aT ? aT.name : 'climber'} w/ ${climber.weapon.name} vs ` +
     `<b style="color:var(--side-b-d)">${d.side}</b> ${dT ? dT.name : 'defender'} on the wall (strikes first for height)</div>`;
+  const seenBySide = { attacker: 0, defender: 0 };
   for (let i = 0; i < r.blows.length; i++) {
     const b = r.blows[i];
     const onWall = b.striker === 'defender';
@@ -6006,7 +6007,9 @@ function resolveEscalade() {
     const modStr = b.mods ? ` ${b.mods > 0 ? '+' : ''}${b.mods}` : '';
     const penStr = b.parried ? ` − ${b.penalty} parry` : '';
     const result = b.kill ? `<b style="color:#a3322a">KILL</b>` : (b.breakWeapon ? `miss · <b>weapon breaks</b>` : 'miss');
-    html += `<div class="step"><b style="color:${sideC}">${side}</b> ${onWall ? 'defender' : 'climber'} blow ${i + 1}` +
+    const n = ++seenBySide[b.striker];
+    const m = r.blowAllotment ? r.blowAllotment[b.striker] : n;
+    html += `<div class="step"><b style="color:${sideC}">${side}</b> ${onWall ? 'defender' : 'climber'} blow ${n} of ${m}` +
       `${b.parried ? ' (parried)' : ''} · ${b.weapon} vs ${b.targetArmor} (TN ${b.tn}+) · ` +
       `2d6 = ${b.dice[0]}+${b.dice[1]}${modStr}${penStr} = <b>${b.total}</b> → ${result}</div>`;
   }
@@ -8173,6 +8176,7 @@ function onResolveMtm(a, d) {
           `<b style="color:var(--side-a-d)">A</b> ${aT.name} w/ ${aw.name} (cls ${aw.cls}) vs ` +
           `<b style="color:var(--side-b-d)">B</b> ${dT.name} w/ ${dw.name} (cls ${dw.cls}) · ` +
           `parry case ${r.parryCase} · first blow: <b style="color:${firstSideC}">${firstSide}</b> — ${r.firstReason}</div>`;
+  const seenBySide = { attacker: 0, defender: 0 };
   for (let i = 0; i < r.blows.length; i++) {
     const b = r.blows[i];
     const side = b.striker === 'attacker' ? 'A' : 'B';
@@ -8180,7 +8184,9 @@ function onResolveMtm(a, d) {
     const modStr = b.mods ? ` ${b.mods > 0 ? '+' : ''}${b.mods}` : '';
     const penStr = b.parried ? ` − ${b.penalty} parry` : '';
     const result = b.kill ? `<b style="color:#a3322a">KILL</b>` : (b.breakWeapon ? `miss · <b>weapon breaks</b>` : 'miss');
-    html += `<div class="step"><b style="color:${sideC}">${side}</b> blow ${i+1}` +
+    const n = ++seenBySide[b.striker];
+    const m = r.blowAllotment ? r.blowAllotment[b.striker] : n;
+    html += `<div class="step"><b style="color:${sideC}">${side}</b> blow ${n} of ${m}` +
             `${b.parried ? ' (parried)' : ''} · ${b.weapon} vs ${b.targetArmor} (TN ${b.tn}+) · ` +
             `2d6 = ${b.dice[0]}+${b.dice[1]}${modStr}${penStr} = <b>${b.total}</b> → ${result}</div>`;
   }
