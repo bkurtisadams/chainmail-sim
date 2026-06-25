@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.166 · Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
+<!-- chainmail-board.html · v0.11.167 · Joust section visual upgrade: ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
+  PRIOR (v0.11.166): Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -253,15 +254,50 @@
   .jm-banner { font-family: var(--sans); font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-soft); text-align: center; margin-bottom: 12px; }
   .jm-actions { display: flex; gap: 10px; margin-top: 14px; }
   .jm-actions .jm-run { flex: 1; margin-top: 0; }
-  .jm-aimcap { font-size: 12px; text-align: center; margin: 6px 0 4px; }
-  .jm-shield { width: 100%; max-width: 188px; display: block; margin: 4px auto 0; }
-  .jm-shield-body { fill: var(--bg); stroke: var(--rule); stroke-width: 1; }
-  .jm-shield-div { stroke: var(--rule); stroke-width: 0.5; }
-  .jm-zone rect { fill: var(--panel); stroke: var(--rule); stroke-width: 0.5; cursor: pointer; }
-  .jm-zone text { fill: var(--ink-soft); font-size: 11px; pointer-events: none; }
-  .jm-zone:hover rect { stroke: var(--ink-soft); }
-  .jm-zone.on rect { fill: var(--rank-hi); stroke: var(--gold); stroke-width: 1; }
-  .jm-zone.on text { fill: var(--ink); font-weight: 700; }
+  .jm-aimcap { font-size: 12px; text-align: center; margin: 4px 0 8px; }
+  .jm-aimcap strong { color: var(--ink); }
+  .jm-target { width: 100%; max-width: 220px; height: auto; display: block; margin: 2px auto 4px; overflow: visible; }
+  .jt-face { fill: rgba(255,255,255,0.32); stroke: rgba(21,19,16,0.40); stroke-width: 1.25; transition: fill 0.12s, stroke 0.12s; }
+  .jt-hit { cursor: pointer; }
+  .jt-hit:hover .jt-face { fill: var(--rank-hi); stroke: var(--gold); }
+  #joust-col-A .jt-hit.on .jt-face { fill: rgba(58,110,144,0.22); stroke: var(--side-a); stroke-width: 2.25; }
+  #joust-col-B .jt-hit.on .jt-face { fill: rgba(156,59,44,0.22); stroke: var(--side-b); stroke-width: 2.25; }
+  .jt-line, .jt-frame { fill: none; stroke: rgba(17,15,12,0.72); stroke-width: 2.2; pointer-events: none; }
+  .jt-frame { stroke-width: 3; }
+  .jt-code { pointer-events: none; fill: #26231d; font-family: var(--serif); font-weight: 800; font-size: 28px; text-anchor: middle; }
+  .jt-sub { pointer-events: none; fill: #4f493d; font-family: var(--serif); font-size: 13px; text-anchor: middle; }
+  .jt-label { pointer-events: none; fill: #26231d; font-family: var(--serif); font-weight: 600; font-size: 20px; text-anchor: start; }
+  .jt-helm-icon { fill: none; stroke: #3b3a36; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; pointer-events: none; }
+  .jm-deflab { font-family: var(--sans); font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); margin: 8px 0 4px; }
+  .jm-deflist { display: flex; flex-direction: column; gap: 2px; }
+  .jm-defrow { min-height: 26px; display: grid; grid-template-columns: 18px 16px 1fr; align-items: center; gap: 6px; padding: 3px 7px; border: 1px solid transparent; border-radius: 5px; font-size: 12px; cursor: pointer; transition: background 0.12s, border-color 0.12s, opacity 0.12s; }
+  .jm-defrow:hover { background: rgba(255,255,255,0.4); border-color: rgba(216,178,90,0.5); }
+  .jm-orb { width: 16px; height: 16px; border-radius: 999px; border: 2px solid rgba(34,30,24,0.5); background: rgba(255,255,255,0.4); box-shadow: inset 0 0 0 3px rgba(255,255,255,0.6); }
+  .jm-defrow.on { background: rgba(255,255,255,0.6); }
+  #joust-col-A .jm-defrow.on { border-color: var(--side-a); }
+  #joust-col-B .jm-defrow.on { border-color: var(--side-b); }
+  #joust-col-A .jm-defrow.on .jm-orb { border-color: var(--side-a); background: var(--side-a); box-shadow: inset 0 0 0 4px var(--panel); }
+  #joust-col-B .jm-defrow.on .jm-orb { border-color: var(--side-b); background: var(--side-b); box-shadow: inset 0 0 0 4px var(--panel); }
+  .jm-defrow.illegal { opacity: 0.32; cursor: not-allowed; }
+  .jm-defrow.illegal:hover { background: transparent; border-color: transparent; }
+  .jm-defnum { color: var(--ink-soft); text-align: right; }
+  .jm-legal { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--rule); font-size: 11px; color: var(--ink-soft); }
+  .jm-legal strong { color: var(--ink); }
+  .jm-bout-head, .jm-arms-head { font-family: var(--sans); font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-soft); margin: 10px 0 4px; }
+  .jm-bout { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+  .jm-bout td { padding: 4px 7px; border-bottom: 1px solid rgba(0,0,0,0.08); }
+  .jm-bout tr:last-child td { border-bottom: 0; }
+  .jm-bout tr:nth-child(even) td { background: rgba(0,0,0,0.03); }
+  .jm-bout td:first-child { color: var(--ink-soft); width: 58%; border-right: 1px solid rgba(0,0,0,0.08); }
+  .jm-bout td:last-child { text-align: right; font-weight: 700; }
+  .jm-bout td.good { color: var(--front); }
+  .jm-bout td.bad { color: var(--rear); }
+  .jm-arms-body { display: flex; align-items: center; gap: 12px; }
+  .jm-arms-svg { width: 84px; height: auto; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.25)); }
+  .jm-arms-meta { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+  .jm-arms-meta strong { color: var(--ink); }
+  .jm-arms-btn { font-family: var(--sans); font-size: 11px; letter-spacing: 0.4px; padding: 4px 10px; margin-top: 6px; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--ink); cursor: pointer; }
+  .jm-arms-btn:hover { border-color: var(--gold); background: var(--panel); }
   .jm-body { display: grid; grid-template-columns: 192px 1fr; gap: 16px; align-items: start; }
   .jm-rail { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
   .jm-rail-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--sans); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 8px; }
@@ -732,7 +768,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.166';
+const SIM_VERSION = '0.11.167';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -3398,6 +3434,10 @@ const state = {
   joustTotals: { A: 0, B: 0 },
   joustForced: { A: false, B: false },
   joustSel: { A: { aim: 'Helm', pos: 4 }, B: { aim: 'Helm', pos: 4 } },
+  joustArms: { // v0.11.167: per-side heraldry (literals — JOUST_ARMS_DEFAULT is declared later)
+    A: { division: 'quarterly', primary: 'azure', secondary: 'or', charge: 'lion', accent: 'gules' },
+    B: { division: 'perPale', primary: 'gules', secondary: 'argent', charge: 'eagle', accent: 'sable' },
+  },
   joustLog: [],
   joustDone: false,
   joustOutcome: '',
@@ -6550,21 +6590,120 @@ function resetJoustDuel() {
   state.joustOutcome = '';
   state.joustSel = { A: { aim: 'Helm', pos: 4 }, B: { aim: 'Helm', pos: 4 } };
 }
-const JOUST_SHIELD_ZONES = [
-  ['Helm', 'Helm', 100, 22], ['DC', 'DC', 61, 72], ['CP', 'CP', 100, 72], ['SC', 'SC', 139, 72],
-  ['DF', 'DF', 61, 120], ['FP', 'FP', 100, 120], ['SF', 'SF', 139, 120], ['Base', 'Base', 100, 176],
+// v0.11.167: Appendix-C aim-target shield (ported from the odd-chainmail sheet's joust tab).
+// Nine polygon regions (DC/CP/SC chief, DF/FP/SF fess, Base) plus a Helm circle above; the
+// existing onJoustModeAction delegation reads data-knight/data-aim off .jt-hit. selAim is a
+// JOUST_AIMS id (Helm/DC/CP/SC/DF/FP/SF/Base).
+const JOUST_TARGET_REGIONS = [
+  ['DC', 'DC', 'Dexter', 'M32 92 H117.33 V148 H32 Z', 74.66, 124, 143],
+  ['CP', 'CP', 'Pale Chief', 'M117.33 92 H202.66 V148 H117.33 Z', 160, 124, 143],
+  ['SC', 'SC', 'Sinister', 'M202.66 92 H288 V148 H202.66 Z', 245.33, 124, 143],
+  ['DF', 'DF', 'Dexter Fess', 'M32 148 H117.33 V222 H32 Z', 74.66, 184, 203],
+  ['FP', 'FP', 'Fess Pale', 'M117.33 148 H202.66 V222 H117.33 Z', 160, 184, 203],
+  ['SF', 'SF', 'Sinister Fess', 'M202.66 148 H288 V222 H202.66 Z', 245.33, 184, 203],
+  ['Base', 'BASE', 'Base', 'M32 222 H288 C288 294 220 341 160 358 C100 341 32 294 32 222 Z', 160, 277, 302],
 ];
-function joustShieldSVG(knight, selAim) {
-  const zones = JOUST_SHIELD_ZONES.map(([aim, lbl, cx, cy]) => {
-    const w = lbl.length > 2 ? 48 : 36, x = cx - w / 2, y = cy - 10;
-    return `<g class="jm-zone${selAim === aim ? ' on' : ''}" data-knight="${knight}" data-aim="${aim}">` +
-      `<rect x="${x}" y="${y}" width="${w}" height="20" rx="4"></rect>` +
-      `<text x="${cx}" y="${cy + 4}" text-anchor="middle">${lbl}</text></g>`;
-  }).join('');
-  return `<svg viewBox="0 0 200 244" class="jm-shield" role="img" aria-label="Aiming point — click a zone">` +
-    `<path class="jm-shield-body" d="M26 48 L174 48 L174 150 Q174 202 100 236 Q26 202 26 150 Z"></path>` +
-    `<line class="jm-shield-div" x1="26" y1="96" x2="174" y2="96"></line>` +
-    `<line class="jm-shield-div" x1="100" y1="48" x2="100" y2="210"></line>${zones}</svg>`;
+function joustAimTargetSVG(knight, selAim) {
+  const regions = JOUST_TARGET_REGIONS.map(([aim, code, sub, d, tx, cy, sy]) =>
+    `<g class="jt-hit${selAim === aim ? ' on' : ''}" data-knight="${knight}" data-aim="${aim}" role="button" tabindex="0" aria-label="${code}">` +
+    `<path class="jt-face" d="${d}"></path>` +
+    `<text class="jt-code" x="${tx}" y="${cy}">${code}</text>` +
+    `<text class="jt-sub" x="${tx}" y="${sy}">${sub}</text></g>`).join('');
+  return `<svg class="jm-target" viewBox="0 0 320 380" role="img" aria-label="Aim point — click a region">` +
+    `<g class="jt-hit${selAim === 'Helm' ? ' on' : ''}" data-knight="${knight}" data-aim="Helm" role="button" tabindex="0" aria-label="Helm">` +
+    `<circle class="jt-face" cx="160" cy="44" r="35"></circle>` +
+    `<path class="jt-helm-icon" d="M139 45 C139 28 148 20 160 20 C172 20 181 28 181 45 L181 63 H139 Z M145 43 H175 M153 48 V61 M160 48 V63 M167 48 V61"></path>` +
+    `<text class="jt-label" x="218" y="52">Helm</text></g>` +
+    `<path class="jt-frame" d="M32 92 H288 V222 C288 294 220 341 160 358 C100 341 32 294 32 222 Z" fill="rgba(255,255,255,0.10)"></path>${regions}` +
+    `<path class="jt-line" d="M117.33 92 V222 M202.66 92 V222 M32 148 H288 M32 222 H288"></path>` +
+    `<path class="jt-frame" d="M32 92 H288 V222 C288 294 220 341 160 358 C100 341 32 294 32 222 Z"></path></svg>`;
+}
+
+// v0.11.167: heraldic coat-of-arms (ported from buildArmsSvg in actor-character-sheet.mjs).
+const JOUST_TINCTURE_HEX = Object.freeze({
+  or: '#d8b13a', argent: '#edf0f3', azure: '#2f5fa6', gules: '#a72b34',
+  sable: '#23242a', vert: '#2f7d4f', purpure: '#6f3f7a',
+});
+const JOUST_CHARGE_PATHS = Object.freeze({
+  cross: 'M44 18 H56 V40 H78 V52 H56 V82 H44 V52 H22 V40 H44 Z',
+  saltire: 'M26 20 L50 44 L74 20 L80 26 L56 50 L80 74 L74 80 L50 56 L26 80 L20 74 L44 50 L20 26 Z',
+  chevron: 'M50 30 L80 72 L70 78 L50 50 L30 78 L20 72 Z',
+  star: 'M50 18 L59 41 L84 41 L64 56 L72 80 L50 65 L28 80 L36 56 L16 41 L41 41 Z',
+  lozenge: 'M50 18 L74 50 L50 82 L26 50 Z',
+  tower: 'M30 44 H38 V36 H46 V44 H54 V36 H62 V44 H70 V84 H30 Z',
+  sword: 'M47 16 H53 V60 H64 V70 H53 V86 H47 V70 H36 V60 H47 Z',
+  fleur: 'M50 16 C44 30 36 34 36 46 C36 54 44 56 50 50 C56 56 64 54 64 46 C64 34 56 30 50 16 Z M32 56 H68 V64 H32 Z M44 64 C40 76 46 84 50 84 C54 84 60 76 56 64 Z',
+  lion: 'M30 34 C30 26 40 24 44 30 C48 24 52 24 54 30 L58 28 C66 30 70 40 66 48 L72 52 L66 56 L70 64 L62 62 L64 74 L54 68 L52 80 L44 70 L34 78 L36 64 L28 66 L32 56 L26 50 C24 44 26 38 30 34 Z',
+  eagle: 'M50 22 L58 34 L78 30 L66 44 L82 50 L64 54 L72 70 L54 60 L50 82 L46 60 L28 70 L36 54 L18 50 L34 44 L22 30 L42 34 Z',
+});
+function joustArmsSVG(arms, seed) {
+  const safe = String(seed || 'arms').replace(/[^a-zA-Z0-9_-]/g, '');
+  const hex = (t) => JOUST_TINCTURE_HEX[t] || '#cccccc';
+  const p = hex(arms.primary), s = hex(arms.secondary), a = hex(arms.accent);
+  const shield = 'M8 6 H92 V52 C92 84 70 104 50 112 C30 104 8 84 8 52 Z';
+  let field = '', lines = '';
+  switch (arms.division) {
+    case 'perPale':
+      field = `<rect width="50" height="116" fill="${p}"/><rect x="50" width="50" height="116" fill="${s}"/>`;
+      lines = `<path d="M50 6 V109" stroke="rgba(0,0,0,.24)" stroke-width="1.5"/>`; break;
+    case 'perFess':
+      field = `<rect width="100" height="58" fill="${p}"/><rect y="58" width="100" height="58" fill="${s}"/>`;
+      lines = `<path d="M8 58 H92" stroke="rgba(0,0,0,.24)" stroke-width="1.5"/>`; break;
+    case 'perBend':
+      field = `<rect width="100" height="116" fill="${s}"/><polygon points="0,0 100,0 0,116" fill="${p}"/>`;
+      lines = `<path d="M8 6 L92 99" stroke="rgba(0,0,0,.24)" stroke-width="1.5"/>`; break;
+    case 'perChevron':
+      field = `<rect width="100" height="116" fill="${p}"/><polygon points="50,40 100,116 0,116" fill="${s}"/>`;
+      lines = `<path d="M8 112 L50 40 L92 112" stroke="rgba(0,0,0,.24)" stroke-width="1.5"/>`; break;
+    case 'quarterly':
+      field = `<rect width="50" height="58" fill="${p}"/><rect x="50" width="50" height="58" fill="${s}"/><rect y="58" width="50" height="58" fill="${s}"/><rect x="50" y="58" width="50" height="58" fill="${p}"/>`;
+      lines = `<path d="M50 6 V109 M8 58 H92" stroke="rgba(0,0,0,.24)" stroke-width="1.5"/>`; break;
+    default:
+      field = `<rect width="100" height="116" fill="${p}"/>`;
+  }
+  const cp = JOUST_CHARGE_PATHS[arms.charge];
+  const icon = (x, y, sc) => cp ? `<g transform="translate(${x} ${y}) scale(${sc})"><path d="${cp}" fill="${a}" stroke="rgba(0,0,0,.38)" stroke-width="1.75"/></g>` : '';
+  const charge = !cp ? '' : (arms.division === 'quarterly' ? `${icon(8, 6, 0.36)}${icon(57, 66, 0.30)}` : icon(10, 17, 0.80));
+  return `<svg class="jm-arms-svg" viewBox="0 0 100 116" role="img" aria-label="coat of arms">` +
+    `<defs><clipPath id="jm-arms-${safe}"><path d="${shield}"/></clipPath></defs>` +
+    `<g clip-path="url(#jm-arms-${safe})">${field}${lines}${charge}</g>` +
+    `<path d="${shield}" fill="none" stroke="#1f1d19" stroke-width="3"/>` +
+    `<path d="M12 10 H88 V52 C88 79 67 98 50 106 C33 98 12 79 12 52 Z" fill="none" stroke="rgba(255,255,255,.24)" stroke-width="1"/></svg>`;
+}
+function randomJoustArms() {
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const tincts = Object.keys(JOUST_TINCTURE_HEX);
+  const primary = pick(tincts);
+  let secondary = pick(tincts);
+  while (secondary === primary) secondary = pick(tincts);
+  return { division: pick(['plain', 'perPale', 'perFess', 'quarterly', 'perBend', 'perChevron']),
+    primary, secondary, charge: pick(Object.keys(JOUST_CHARGE_PATHS)), accent: pick(tincts) };
+}
+const JOUST_ARMS_DEFAULT = Object.freeze({
+  A: { division: 'quarterly', primary: 'azure', secondary: 'or', charge: 'lion', accent: 'gules' },
+  B: { division: 'perPale', primary: 'gules', secondary: 'argent', charge: 'eagle', accent: 'sable' },
+});
+const jcap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
+function joustLegalLabel(aim) {
+  const list = JOUST_PDP_AP[aim];
+  if (list === 'any') return 'Any';
+  const parts = []; let i = 0;
+  while (i < list.length) {
+    let j = i;
+    while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+    parts.push(j > i ? `${list[i]}\u2013${list[j]}` : `${list[i]}`); i = j + 1;
+  }
+  return parts.join(', ');
+}
+// Lance/helm status for a knight from the most recent ride (Foundry's applyRide fold):
+// a knight's lance breaks when his own attack reads 'B'; his helm is knocked off when the
+// opponent's attack on him reads 'H'. Returns nulls before the first ride.
+function joustBoutStatus(knight) {
+  const last = state.joustLog[state.joustLog.length - 1];
+  if (!last) return { lance: null, helm: null };
+  const mine = knight === 'A' ? last.aCode : last.bCode;
+  const incoming = knight === 'A' ? last.bCode : last.aCode;
+  return { lance: mine !== 'B', helm: incoming !== 'H' };
 }
 function renderJoustDuel() {
   renderJoustStandings();
@@ -6586,15 +6725,33 @@ function renderJoustDuel() {
   if (banner) banner.textContent = state.joustDone ? 'Duel complete' : `Ride ${state.joustRide} of 3`;
   if (runBtn) runBtn.disabled = state.joustDone;
   for (const [k, u] of [['A', a], ['B', d]]) {
-    const sel = state.joustSel[k], aimName = (JOUST_AIMS.find(x => x.id === sel.aim) || {}).name || sel.aim;
-    const posSel = state.joustForced[k]
-      ? `<select disabled><option>4 · Steady seat (forced *)</option></select>`
-      : `<select data-knight="${k}" data-kind="pos"${state.joustDone ? ' disabled' : ''}>${JOUST_POSITIONS.map(p => `<option value="${p.n}"${p.n === sel.pos ? ' selected' : ''}>${p.n} · ${p.name}</option>`).join('')}</select>`;
+    const sel = state.joustSel[k], forced = state.joustForced[k], done = state.joustDone;
+    const aimName = (JOUST_AIMS.find(x => x.id === sel.aim) || {}).name || sel.aim;
+    const defRows = JOUST_POSITIONS.map(p => {
+      const legal = forced ? p.n === 4 : joustPositionAllowed(sel.aim, p.n);
+      const on = (forced ? 4 : sel.pos) === p.n;
+      const lock = !legal || done;
+      return `<div class="jm-defrow${on ? ' on' : ''}${lock ? ' illegal' : ''}"${lock ? '' : ` data-knight="${k}" data-pos="${p.n}"`}>` +
+        `<span class="jm-orb"></span><span class="jm-defnum">${p.n}.</span><span>${p.name}</span></div>`;
+    }).join('');
+    const bs = joustBoutStatus(k);
+    const arms = state.joustArms[k] || JOUST_ARMS_DEFAULT[k];
     $(`#joust-col-${k}`).innerHTML =
       `<div class="jm-colhead"><span class="jm-badge jm-${k.toLowerCase()}">${k}</span> ${joustName(u)}</div>` +
-      joustShieldSVG(k, sel.aim) +
+      joustAimTargetSVG(k, sel.aim) +
       `<div class="jm-aimcap">Aiming: <strong>${aimName}</strong></div>` +
-      `<div class="jm-field"><label>Saddle position</label>${posSel}</div>`;
+      `<div class="jm-deflab">Saddle position</div><div class="jm-deflist">${defRows}</div>` +
+      `<div class="jm-legal">Legal defenses: <strong>${forced ? 'Position 4 (forced *)' : joustLegalLabel(sel.aim)}</strong></div>` +
+      `<div class="jm-bout-head">Bout status</div><table class="jm-bout">` +
+        `<tr><td>Opponent</td><td>${joustName(k === 'A' ? d : a)}</td></tr>` +
+        `<tr><td>Ride</td><td>${Math.min(state.joustRide, 3)} / 3</td></tr>` +
+        `<tr><td>Score</td><td>${state.joustTotals[k]}</td></tr>` +
+        `<tr><td>Lance</td><td class="${bs.lance === false ? 'bad' : 'good'}">${bs.lance === false ? 'Broken' : 'Intact'}</td></tr>` +
+        `<tr><td>Helm</td><td class="${bs.helm === false ? 'bad' : 'good'}">${bs.helm === false ? 'Off' : 'On'}</td></tr>` +
+        `<tr><td>Forced next</td><td>${forced ? 'Position 4' : 'None'}</td></tr></table>` +
+      `<div class="jm-arms-head">Heraldry</div><div class="jm-arms-body">${joustArmsSVG(arms, `${state.joustA}-${k}`)}` +
+        `<div class="jm-arms-meta"><strong>${jcap(arms.division)}</strong><br>${jcap(arms.primary)} &amp; ${jcap(arms.secondary)}<br>Charge: ${jcap(arms.charge)}` +
+        `<br><button class="jm-arms-btn" data-jact="arms" data-knight="${k}">⚄ Randomize arms</button></div></div>`;
   }
   renderJoustResult(a, d);
 }
@@ -6673,8 +6830,8 @@ function runJoustRide() {
   const ride = resolveJoustRide(aChoice, bChoice, state.rng);
   state.joustTotals.A += ride.score.A; state.joustTotals.B += ride.score.B;
   state.joustLog.push({ ride: state.joustRide,
-    aRes: ride.aAtk.result, aCell: ride.aAtk.multiOutcome ? ride.aAtk.cell : '',
-    bRes: ride.bAtk.result, bCell: ride.bAtk.multiOutcome ? ride.bAtk.cell : '' });
+    aRes: ride.aAtk.result, aCell: ride.aAtk.multiOutcome ? ride.aAtk.cell : '', aCode: ride.aAtk.code,
+    bRes: ride.bAtk.result, bCell: ride.bAtk.multiOutcome ? ride.bAtk.cell : '', bCode: ride.bAtk.code });
   if (ride.unhorsed.A || ride.unhorsed.B || state.joustRide >= 3) {
     state.joustDone = true;
     state.joustOutcome = (ride.unhorsed.A && ride.unhorsed.B) ? 'double unhorse'
@@ -6697,14 +6854,27 @@ function onResolverAction(evt) {
   if (evt.target.dataset.jact === 'open') enterJoustMode(state.selectedId, state.targetId);
 }
 function onJoustModeAction(evt) {
-  const zone = evt.target.closest ? evt.target.closest('.jm-zone') : null;
-  if (zone && !state.joustDone) {
-    state.joustSel[zone.dataset.knight].aim = zone.dataset.aim;
+  const hit = evt.target.closest ? evt.target.closest('.jt-hit') : null;
+  if (hit && !state.joustDone) {
+    const k = hit.dataset.knight, aim = hit.dataset.aim;
+    state.joustSel[k].aim = aim;
+    if (!state.joustForced[k] && !joustPositionAllowed(aim, state.joustSel[k].pos)) {
+      const legal = JOUST_PDP_AP[aim];
+      state.joustSel[k].pos = legal === 'any' ? 1 : legal[0];
+    }
     renderJoustDuel();
     return;
   }
-  const act = evt.target.dataset.jact;
-  if (act === 'run') runJoustRide();
+  const row = evt.target.closest ? evt.target.closest('.jm-defrow[data-pos]') : null;
+  if (row && !state.joustDone) {
+    state.joustSel[row.dataset.knight].pos = Number(row.dataset.pos);
+    renderJoustDuel();
+    return;
+  }
+  const btn = evt.target.closest ? evt.target.closest('[data-jact]') : null;
+  const act = btn ? btn.dataset.jact : evt.target.dataset.jact;
+  if (act === 'arms') { state.joustArms[btn.dataset.knight] = randomJoustArms(); renderJoustDuel(); }
+  else if (act === 'run') runJoustRide();
   else if (act === 'exit') exitJoustMode();
   else if (act === 'reset') { resetJoustDuel(); renderJoustDuel(); }
   else if (act === 'clear-tourney') { if (confirm('Clear all tournament scores?')) { clearTournament(); renderJoustStandings(); } }
