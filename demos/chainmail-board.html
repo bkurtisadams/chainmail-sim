@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.162 · THE missile bug: Fire button never rendered with phases enforced. renderTurnUI relocates action buttons from the hidden #action-bank into the visible #phase-dock per phase. The enforced-mode dock list for the missile phase listed only the wizard/magic missile buttons and OMITTED btn-missile, so the regular "Fire missiles" button stayed stranded in the hidden bank — it existed in the DOM (updateButtons even enabled it, so cmMissile read disabled=false) but was never visible, and there was no way to loose an arrow. Advisory mode docks every button, which is why freeform play and all headless freeform repros worked and this never reproduced until the diagnostic showed enforcePhases=true. Fix: btn-missile is now first in the enforced missile-phase dock list (also restores the Giant boulder hurl, which shares that button). Regression self-test added: btn-missile docks in the missile phase and leaves it at melee. Diagnostics from v0.11.161 (window.cmMissile / window.CM_DEBUG) retained. Built on v0.11.161. -->
+<!-- chainmail-board.html · v0.11.163 · Fixed 7 self-test assertion failures — all were faulty TESTS, the engine was correct. (1-4) Footprint/figure/immolation asserts checked absolute pixel sizes (pip 20, fig 12, a 4-figure burn) that legitimately change with the figureScale setting, so they failed for anyone running a non-30mm casting scale; the geometry test region is now pinned to figureScale=1 (save/restore). (5) "5 fortifications" stale after the structure roster grew to 10 (gate/gatehouse/towers/buildings added) — updated to 10. (6) Wizard-light test left the ambient at day, so an orc "outside the light" was still in daylight and correctly penalised, contradicting the assert — the block now runs under a night ambient (save/restore). (7) Pass-through side-gate test never cleared state.setup, so canSideMoveNow short-circuited to true and a non-moving side read as moving — the block now clears setup for the live-turn asserts (save/restore). No engine logic changed. Built on v0.11.162. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.162</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.163</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.162';
+const SIM_VERSION = '0.11.163';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -10635,7 +10635,8 @@ renderBoard();
   // Pass-through fire (p.12): a stationary missile unit may loose at an enemy at
   // its half-move pause. Advisory mode first (side gate always open) to isolate
   // the shooter/target conditions, then an enforce-mode side-gate check.
-  { const _e = state.settings.enforcePhases, _pi = state.phaseIdx, _fm = state.firstMover;
+  { const _e = state.settings.enforcePhases, _pi = state.phaseIdx, _fm = state.firstMover, _su = state.setup;
+    state.setup = false;   // canSideMoveNow short-circuits to true during deployment; the side-gate asserts below need a live turn
     state.settings.enforcePhases = false;
     const firer = { side:'B', weapon:'longbow', movedThisTurn:0, charged:false };
     const paused = { side:'A', halfMovePaused:true };
@@ -10648,7 +10649,7 @@ renderBoard();
     state.settings.enforcePhases = true; state.firstMover = 'A'; state.phaseIdx = 1; // move1 → A is the mover
     console.assert(canPassThroughFire({ side:'B', weapon:'longbow', movedThisTurn:0 }, { side:'A', halfMovePaused:true }) === true, 'pass-through (enforce, A moving): stationary B looses at paused A');
     console.assert(canPassThroughFire({ side:'A', weapon:'longbow', movedThisTurn:0 }, { side:'B', halfMovePaused:true }) === false, 'pass-through (enforce, A moving): no shot at a B target — B is not the side moving');
-    state.settings.enforcePhases = _e; state.phaseIdx = _pi; state.firstMover = _fm; }
+    state.settings.enforcePhases = _e; state.phaseIdx = _pi; state.firstMover = _fm; state.setup = _su; }
 
   // Missile log title (side-accurate; "Missile" unless a pass-through shot).
   console.assert(missileTitle({ type:'LF', side:'A' }, { type:'HF', side:'B' }) === `Missile · ${typeById('LF').name} (A) → ${typeById('HF').name} (B)`, 'missile title reads real sides, Missile verb when not pass-through');
@@ -10879,6 +10880,11 @@ renderBoard();
   console.assert(withBonus.attacker.totalDice === 11 && withBonus.attacker.killsDealt === 11, 'bonus die: HF×10 +1 → 11 dice/kills');
 
   // Figure size tiers (Slice 7C): footprint scales with size; man unchanged.
+  // Pin figureScale = 1 for the geometry asserts below — they check absolute pip /
+  // figure / footprint sizes, which legitimately change when the player picks a
+  // smaller casting scale (15mm etc.). Restored before the next section.
+  const _figScaleSaved = state.settings.figureScale;
+  state.settings.figureScale = 1;
   console.assert(sizeOf('DRAGON') === 'huge' && sizeOf('GIANT') === 'huge' && sizeOf('ROC') === 'huge', 'dragons/giants/rocs huge');
   console.assert(sizeOf('OGRE') === 'large' && sizeOf('TROLL') === 'large' && sizeOf('BALROG') === 'large', 'ogres/trolls/balrogs large');
   console.assert(sizeOf('HERO') === 'man' && sizeOf('WIGHT') === 'man' && sizeOf('LYCAN') === 'man', 'heroes/wights/lycanthropes man-sized');
@@ -10938,6 +10944,7 @@ renderBoard();
   console.assert(figuresWithinFootprint(balrog, immMass) === 1, 'immolation: dead-centre on a close 3×3 burns the figure underfoot');
   console.assert(figuresWithinFootprint({ kind:'individual', type:'BALROG', x:112, y:112 }, immMass) === 4, 'immolation: offset over a cluster burns those 4 figures (footprint, not a fixed number)');
   console.assert(figuresWithinFootprint(balrog, { ...immMass, x:1000, y:1000 }) === 0, 'immolation: distant mass burns nothing');
+  state.settings.figureScale = _figScaleSaved;   // end geometry-scale guard
 
   // Fantasy races core roster (Slice 7D).
   console.assert(typeById('ORC').cls === 'HF' && typeById('GIANT_ORC').cls === 'AF' && typeById('HOBGOBLIN').cls === 'AF' && typeById('HOBBIT').cls === 'LF', 'orc attacks HF, giant orc/hobgoblin AF, hobbit as LF');
@@ -11477,7 +11484,7 @@ renderBoard();
     console.assert(batterTarget(wall, 3).remaining === 27, 'a light gun (-3) chips a 30-defense wall to 27');
     for (let i = 0; i < 9; i++) batterTarget(wall, 3);
     console.assert(wall.destroyed && wall.defenseLeft === 0, 'sustained battering breaches the wall (defense 0)'); }
-  console.assert(WORKS_STRUCTURES.length === 5 && WORKS_STRUCTURES.every(s => s.cat === 'structure' && s.range && !s.fires), 'works: 5 fortifications spawnable, each a non-firing target with a defense range');
+  console.assert(WORKS_STRUCTURES.length === 10 && WORKS_STRUCTURES.every(s => s.cat === 'structure' && s.range && !s.fires), 'works: 10 fortifications spawnable, each a non-firing target with a defense range');
   console.assert(ftToPx(30) === PX_PER_INCH && ftToIn(90) === 3, 'ground scale: 30 ft = 1″ (1″ = 10 yards)');
   console.assert(WORKS_STRUCTURES.every(s => s.lengthFt > 0 && s.thickFt > 0 && s.heightFt > 0), 'works: structures carry footprint dimensions in feet');
   // Mobile siege equipment + wooden-works fire (v0.11.24)
@@ -11604,7 +11611,8 @@ renderBoard();
     const ok = canActInDark({ type:'GOBLIN', x:0, y:0 }), trollOk = canActInDark({ type:'TROLL', x:0, y:0 }), blind = canActInDark({ type:'HF', x:0, y:0 });
     state.darkness = sv; state.units = su; state.turn = st;
     console.assert(ok === true && trollOk === true && blind === false, 'darkness gate: dark-capable creatures act, HF blinded at full dark'); })();
-  (() => { const sw = state.wizardLight, su = state.units;
+  (() => { const sw = state.wizardLight, su = state.units, sbl = state.battlefieldLight;
+    state.battlefieldLight = 'night';   // ambient dark, so only the Wizard Light makes a bright spot
     state.units = [{ id: -3, type:'WIZARD', x:300, y:240, destroyed:false }];
     state.wizardLight = { casterId: -3, side:'A' };
     const litOrc = { type:'ORC', x:300, y:240 }, litGoblin = { type:'GOBLIN', x:300, y:240 }, litKobold = { type:'KOBOLD', x:300, y:240 }, litHobgoblin = { type:'HOBGOBLIN', x:300, y:240 }, litWight = { type:'WIGHT', x:300, y:240 }, litZombie = { type:'ZOMBIE', x:300, y:240 }, darkOrc = { type:'ORC', x:900, y:240 }, man = { type:'HF', x:300, y:240 };
@@ -11612,7 +11620,7 @@ renderBoard();
     console.assert(lightDiePenalty(litGoblin) === 1 && lightMoraleRating(litGoblin, 5) === 4 && lightDiePenalty(litKobold) === 1 && lightMoraleRating(litKobold, 5) === 4 && lightDiePenalty(litHobgoblin) === 1 && lightMoraleRating(litHobgoblin, 5) === 4, 'goblin/kobold/hobgoblin bright light: -1 die and -1 morale');
     console.assert(lightDiePenalty(litWight) === 1 && lightMoraleRating(litWight, 10) === 10 && lightDiePenalty(litZombie) === 1 && lightMoraleRating(litZombie, 10) === 10, 'wight/zombie full light: -1 die only, morale unchanged');
     console.assert(lightDiePenalty(darkOrc) === 0 && lightDiePenalty(man) === 0, 'bright light: outside light and non-sensitive troops no penalty');
-    state.wizardLight = sw; state.units = su; })();
+    state.wizardLight = sw; state.units = su; state.battlefieldLight = sbl; })();
   console.assert(defaultAlignment('ORC') === 'chaos' && defaultAlignment('GIANT_ORC') === 'chaos' && defaultAlignment('HOBGOBLIN') === 'chaos' && defaultAlignment('ZOMBIE') === 'chaos' && defaultAlignment('DRAGON') === 'chaos' && defaultAlignment('WRAITH') === 'chaos', 'align: orc/giant orc/hobgoblin/zombie/dragon/wraith default Chaos');
   console.assert(defaultAlignment('HERO') === 'law' && defaultAlignment('ELF') === 'law' && defaultAlignment('DWARF') === 'law', 'align: hero/elf/dwarf default Law');
   console.assert(defaultAlignment('WIZARD') === 'neutral' && defaultAlignment('GIANT') === 'neutral' && defaultAlignment('LYCAN') === 'neutral' && defaultAlignment('HF') === 'neutral', 'align: two-list figures + men default Neutral');
