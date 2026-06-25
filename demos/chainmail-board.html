@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.163 · Fixed 7 self-test assertion failures — all were faulty TESTS, the engine was correct. (1-4) Footprint/figure/immolation asserts checked absolute pixel sizes (pip 20, fig 12, a 4-figure burn) that legitimately change with the figureScale setting, so they failed for anyone running a non-30mm casting scale; the geometry test region is now pinned to figureScale=1 (save/restore). (5) "5 fortifications" stale after the structure roster grew to 10 (gate/gatehouse/towers/buildings added) — updated to 10. (6) Wizard-light test left the ambient at day, so an orc "outside the light" was still in daylight and correctly penalised, contradicting the assert — the block now runs under a night ambient (save/restore). (7) Pass-through side-gate test never cleared state.setup, so canSideMoveNow short-circuited to true and a non-moving side read as moving — the block now clears setup for the live-turn asserts (save/restore). No engine logic changed. Built on v0.11.162. -->
+<!-- chainmail-board.html · v0.11.164 · Fantasy-race armour vs individual missile fire + wolf defence-class ruling. targetArmorIdx() defaulted every mass type missing from MASS_TO_INDIV_ARMOR_IDX to chain (idx 4), so a Hero/Wizard shooting goblins, kobolds, hobbits, sprites, gnomes, dwarves or giant wolves treated them all as mail. It now derives the index from the unit's melee DEFENCE class (LF→leather 1, HF→chain 4, AF→plate 6), matching the mass-fire armour groups: orc/elf/hobgoblin 4, giant orc 6, the Light-Foot races + giant wolf 1, wolf-rider 4. Rules ruling applied: Giant Wolf now attacks AND defends as Light Horse (was defend Heavy Horse / "Wight-grade"); wolf defence-class tests updated to match. Self-tests lock each race's missile armour. No change to the mass-fire MASS_ARMOR_BY_TYPE map. Built on v0.11.163. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.163</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.164</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.163';
+const SIM_VERSION = '0.11.164';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -825,7 +825,7 @@ const TYPES = Object.freeze([
   // defend as a Wight (FANTASY_DEFEND_CLASS.WIGHT = HH), move as Medium Horse.
   // RAW gives them no morale/loss line, so they borrow Light Horse's. The "two
   // attacks as men vs fantastic opponents" attack mode is a separate slice.
-  { id:'WOLF',   name:'Giant Wolf',     cls:'LH', defendCls:'HH', morale:6, loss:{ pct:0.25, score:8 } },
+  { id:'WOLF',   name:'Giant Wolf',     cls:'LH', defendCls:'LH', morale:6, loss:{ pct:0.25, score:8 } },
   // Goblin Wolf-Riders (fantasy supp.): a goblin mounted on a Giant Wolf, modelled
   // as a single fused cavalry unit (Chainmail cavalry already bundles rider+mount —
   // no separate mount entity). The rider is a clean three-way trade against the
@@ -931,7 +931,7 @@ const MASS_ARMOR_BY_TYPE = {
   LH:'half', MH:'half', HH:'fully', MK:'fully',
   ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', HOBGOBLIN:'half', DWARF:'half', GNOME:'half',
   ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
-  WOLF:'unarmored',   // natural beast — no armour vs missiles (melee defence is Wight-grade)
+  WOLF:'unarmored',   // natural beast — no armour vs missiles (defends as Light Horse)
   WOLFRIDER:'unarmored',   // unarmored goblin on a bare wolf
 };
 
@@ -2742,7 +2742,16 @@ function targetArmorIdx(target) {
     if (target.armor) return armorIndexMtm(target.armor);
     return FANTASY_TO_INDIV_ARMOR_IDX[target.type] ?? 4;
   }
-  return MASS_TO_INDIV_ARMOR_IDX[target.type] ?? 4;
+  // Mass target: explicit override first, else derive the index from the unit's
+  // melee DEFENCE class (how hard it is to hit should track how it defends), else
+  // a man-at-arms default. This stops fantasy races (orc, goblin, wolf, …) from
+  // all falling through to chain (idx 4); e.g. LF-defenders read as leather (1),
+  // HF as chain (4), AF as plate (6), matching their mass-fire armour group.
+  const explicit = MASS_TO_INDIV_ARMOR_IDX[target.type];
+  if (explicit !== undefined) return explicit;
+  const defCls = defendTypeForMass(target.type) || (typeById(target.type) || {}).cls;
+  const byClass = MASS_TO_INDIV_ARMOR_IDX[defCls];
+  return byClass !== undefined ? byClass : 4;
 }
 
 /* === F. FANTASY COMBAT (Appendix E matrix + Appendix D fighting strength) === */
@@ -11191,12 +11200,22 @@ renderBoard();
     console.assert(immune.destroyed !== true && res.anyImmune === true, 'giant boulder: a catapult-immune Giant under the area is spared (p.39)');
     state.units = save; }
 
-  // Giant Wolf (fantasy supp.): attacks as Light Horse, defends as a Wight (HH), moves as Medium Horse.
-  console.assert(typeById('WOLF') && typeById('WOLF').cls === 'LH' && typeById('WOLF').defendCls === 'HH', 'wolf: attacks as Light Horse, defends as a Wight (HH)');
-  console.assert(defendTypeForMass('WOLF') === 'HH', 'wolf: mass/mixed defence routes to Heavy Horse (the Wight defend class)');
+  // Giant Wolf (fantasy supp.): attacks AND defends as Light Horse (rules ruling), moves as Medium Horse.
+  console.assert(typeById('WOLF') && typeById('WOLF').cls === 'LH' && typeById('WOLF').defendCls === 'LH', 'wolf: attacks and defends as Light Horse');
+  console.assert(defendTypeForMass('WOLF') === 'LH', 'wolf: mass/mixed defence routes to Light Horse');
   console.assert(FANTASY_DEFEND_CLASS.WIGHT === 'HH', 'wolf: "killed as a Wight" == HH, matching the Wight defend class');
   console.assert(MOVE_ALLOWANCE.WOLF === 18 && CHARGE_ALLOWANCE.WOLF === 24, 'wolf: moves as Medium Horse (18, charge 24)');
   console.assert(sizeOf('WOLF') === 'man', 'wolf: man-scale (no bigger than Light Horse)');
+
+  // Individual-missile armour for fantasy-race masses derives from the defence
+  // class (v0.11.164) instead of defaulting every race to chain (idx 4).
+  { const idx = t => targetArmorIdx({ kind:'mass', type:t });
+    console.assert(idx('ORC') === 4 && idx('ELF') === 4 && idx('HOBGOBLIN') === 4, 'missile armour: HF-defenders (orc/elf/hobgoblin) read as chain');
+    console.assert(idx('GIANT_ORC') === 6, 'missile armour: giant orc reads as plate');
+    console.assert(idx('GOBLIN') === 1 && idx('KOBOLD') === 1 && idx('GNOME') === 1 && idx('HOBBIT') === 1 && idx('SPRITE') === 1, 'missile armour: LF-defenders read as leather, not chain');
+    console.assert(idx('DWARF') === 1, 'missile armour: dwarf reads by its Light-Foot defence (leather)');
+    console.assert(idx('WOLF') === 1, 'missile armour: giant wolf reads as a Light-Horse beast (leather-grade hide), not chain');
+    console.assert(idx('WOLFRIDER') === 4, 'missile armour: wolf-rider reads by its Medium-Horse defence'); }
 
   // Wolves "attack as two men" vs fantastic creatures (fantasy supp.): the mixed
   // resolver swaps the Light Horse row for a man's and doubles the swings, while
