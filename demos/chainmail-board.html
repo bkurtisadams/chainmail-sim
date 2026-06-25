@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.159 · Missile arc-of-fire fix + mounted-individual movement. BUG (arc never drawn): renderUnit COMPUTED the firing-arc path into `arc` but the return template never interpolated ${arc}, so no unit (mass or individual) ever showed its missile arc. With no visible 45deg cone you could not tell whether a target sat inside the firing arc, which also made fire seem dead ("the bow does not exist") — the missile button correctly disables when the target is outside the arc, but silently. Now ${arc} is emitted inside the unit's rotated group (facing-relative coords), behind the token. BUG (mounted individual): baseMoveAllowanceOf/chargeAllowanceOf ignored u.mounted, so a mounted Hero moved/charged as if on foot. A mounted individual now rides as Heavy Horse (12" move / 18" charge; Hero "ranges to Heavy Horse", p.30) via isMountedIndividual; arc/facing/road already keyed off mounted. Selected panel now shows an individual's Missile weapon (+range) and the mounted ride class, so the bow/horse are confirmable at a glance. Self-tested. Built on v0.11.158. -->
+<!-- chainmail-board.html · v0.11.162 · THE missile bug: Fire button never rendered with phases enforced. renderTurnUI relocates action buttons from the hidden #action-bank into the visible #phase-dock per phase. The enforced-mode dock list for the missile phase listed only the wizard/magic missile buttons and OMITTED btn-missile, so the regular "Fire missiles" button stayed stranded in the hidden bank — it existed in the DOM (updateButtons even enabled it, so cmMissile read disabled=false) but was never visible, and there was no way to loose an arrow. Advisory mode docks every button, which is why freeform play and all headless freeform repros worked and this never reproduced until the diagnostic showed enforcePhases=true. Fix: btn-missile is now first in the enforced missile-phase dock list (also restores the Giant boulder hurl, which shares that button). Regression self-test added: btn-missile docks in the missile phase and leaves it at melee. Diagnostics from v0.11.161 (window.cmMissile / window.CM_DEBUG) retained. Built on v0.11.161. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.159</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.162</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.159';
+const SIM_VERSION = '0.11.162';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -8629,7 +8629,8 @@ function resolveMissilePhase() {
 function onResolveMissile() {
   const a = state.units.find(u => u.id === state.selectedId);
   const d = state.units.find(u => u.id === state.targetId);
-  if (!a || !d || !a.weapon) return;
+  if (window.CM_DEBUG) console.log('[fire] onResolveMissile click — firer=', a && `${a.side} ${a.type}/${a.weapon}`, 'target=', d && `${d.side} ${d.type}`, '| arc=', a && d && inFiringArc(a, d), 'shots=', a && missileShotsRemaining(a), 'range=', a && d && inMissileRange(a, d));
+  if (!a || !d || !a.weapon) { if (window.CM_DEBUG) console.log('[fire] BAIL: missing firer / target / weapon'); return; }
   if (!canActInDark(a)) return;
   pushUndo('fire');
   if (activeFigures(a) === 0) {
@@ -8646,6 +8647,7 @@ function onResolveMissile() {
     return;
   }
   if (!inFiringArc(a, d)) {
+    if (window.CM_DEBUG) console.log('[fire] BAIL: target outside firing arc');
     const aT = typeById(a.type), dT = typeById(d.type);
     const arcTxt = isHorseman(a) ? '180° left / 45° right' : '45° to either side';
     appendTurn(missileTitle(a, d),
@@ -8677,6 +8679,7 @@ function onResolveMissile() {
   // Dispatch by weapon, then shooter kind. Arquebus uses the p.13 gunpowder
   // table (ignores armour) regardless of firer/target kind; bows & thrown use
   // the Appendix-B individual table or the mass missile table.
+  if (window.CM_DEBUG) console.log('[fire] dispatch →', a.weapon === 'arquebus' ? 'onArquebusFire' : a.kind === 'individual' ? 'onIndivMissile' : d.kind === 'individual' ? 'onMassMissileAtIndiv' : 'mass→mass');
   if (a.weapon === 'arquebus') return onArquebusFire(a, d);
   if (a.kind === 'individual') return onIndivMissile(a, d);
   if (d.kind === 'individual') return onMassMissileAtIndiv(a, d);
@@ -8793,9 +8796,15 @@ function onIndivMissile(a, d) {
   const indirectBlocked = indirectWanted && !indirect;
   const dCover = effectiveCoverVs(d, a);   // woods (p.12) or a friendly mantlet screen (p.22)
   const coverPenalty = indirect ? 0 : coverDiceMinus(dCover);
+  // Range band uses the edge gap (matches the button's in-range check, p.11),
+  // clamped to >= 1" so a point-blank / in-contact shot reads as the close band
+  // rather than a null band (which would wrongly report "out of range").
+  const bandDistance = Math.max(reach.edgeIn ?? reach.distanceIn, 1);
+  if (window.CM_DEBUG) console.log('[fire] onIndivMissile — edge=', reach.edgeIn, 'centre=', reach.distanceIn, 'bandDistance=', bandDistance, 'armorIdx=', armorIdx, 'weaponRange=', weapon.range);
   const r = resolveIndividualMissile({
-    weapon, distance: reach.distanceIn, armorIdx, cover: coverPenalty, bonus: missileDieBonus(a), diePenalty: lightDiePenalty(a), indirect, rng: state.rng,
+    weapon, distance: bandDistance, armorIdx, cover: coverPenalty, bonus: missileDieBonus(a), diePenalty: lightDiePenalty(a), indirect, rng: state.rng,
   });
+  if (window.CM_DEBUG) console.log('[fire] resolveIndividualMissile →', r);
 
   const tags = [];
   if (indirect) tags.push('indirect (range −⅓, +1 armor cat)');
@@ -8993,7 +9002,7 @@ function onArquebusFire(a, d) {
   const shooters = a.kind === 'individual' ? 1 : Math.min(activeFigures(a), a.cols * 2);
   const rankCapped = a.kind !== 'individual' && shooters < a.count;
   const cov = arquebusCover(effectiveCoverVs(d, a));
-  const res = resolveArquebus({ rangeIn: reach.distanceIn, shooters, cover: cov, support: false, diePenalty: lightDiePenalty(a), rng: state.rng });
+  const res = resolveArquebus({ rangeIn: reach.edgeIn ?? reach.distanceIn, shooters, cover: cov, support: false, diePenalty: lightDiePenalty(a), rng: state.rng });
   if (!res.inRange) { appendTurn(missileTitle(a, d), `<div class="step">${a.side} · ${aT.name} → ${d.side} · ${dT.name}</div><div class="verdict v-noeffect">out of arquebus range (${reach.distanceIn.toFixed(1)}″ > 18″)</div>`); return; }
   const n = res.kills;
   const rankNote = rankCapped ? ` <small style="color:var(--ink-soft); font-family:var(--sans)">· ${shooters} firing (front 2 ranks of ${a.count})</small>` : '';
@@ -9925,7 +9934,7 @@ function renderTurnUI() {
     ? (ph.id === 'initiative' ? ['btn-roll-init']
       : ph.id === 'move1' ? ['btn-elect-order']
       : ph.id === 'artillery' ? ['btn-fire-engine', 'btn-cannon-shot']
-      : ph.id === 'missile' ? ['btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell']
+      : ph.id === 'missile' ? ['btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell']
       : ph.id === 'melee' ? ['btn-melee', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach']
       : [])
     : ['btn-roll-init', 'btn-elect-order', 'btn-melee', 'btn-missile', 'btn-wizard-missile', 'btn-missile-type', 'btn-counter-magic', 'dock-spell', 'dock-element', 'dock-poly', 'dock-hallu-mode', 'dock-hallu-type', 'btn-cast-spell', 'btn-fire-engine', 'btn-cannon-shot', 'btn-batter-ram', 'btn-batter-creature', 'btn-escalade', 'btn-rock', 'btn-oil', 'btn-breach'];
@@ -10579,6 +10588,19 @@ renderBoard();
     state.phaseIdx = 1;
     console.assert(primaryActionId() === 'btn-phase-fwd' && /Side A moves/.test(phaseHint()), 'move phase → the forward arrow is lit, hint names the mover');
     state.phaseIdx = _pi; state.initiativeRoll = _ir; state.firstMover = _fm; state.units = _u; }
+
+  // Regression (v0.11.162): with phases enforced, the Fire-missiles button must be
+  // relocated into the visible dock during the missile phase — it was omitted from
+  // the missile dock list, so it stayed stranded in the hidden #action-bank and no
+  // fire button rendered at all.
+  { const _pi = state.phaseIdx, _su = state.setup, _ep = state.settings.enforcePhases, _ir = state.initiativeRoll, _fm = state.firstMover, _tn = state.turn;
+    state.setup = false; state.settings.enforcePhases = true; state.turn = 1;
+    state.initiativeRoll = { a:5, b:3, winner:'A' }; state.firstMover = 'A';
+    state.phaseIdx = 4; renderTurnUI();
+    console.assert(document.getElementById('btn-missile').parentElement.id === 'phase-dock', 'enforced missile phase → Fire missiles button is docked (visible), not stranded in the hidden action bank');
+    state.phaseIdx = 5; renderTurnUI();
+    console.assert(document.getElementById('btn-missile').parentElement.id !== 'phase-dock', 'enforced melee phase → Fire missiles button leaves the dock');
+    state.phaseIdx = _pi; state.setup = _su; state.settings.enforcePhases = _ep; state.initiativeRoll = _ir; state.firstMover = _fm; state.turn = _tn; renderTurnUI(); }
 
   // Phase arrows drive the whole turn: the forward arrow is the lit primary mid-turn
   // AND at Melee once melees are resolved (it ends the turn). It is not the primary
@@ -11609,6 +11631,58 @@ renderBoard();
     console.assert(on === 1 && off === 0, 'missile: lightning rect covers the head figure, misses a distant one'); })();
   { const _su = state.setup; state.setup = true; console.assert(canSideMoveNow('A') === true && canSideMoveNow('B') === true, 'setup: both sides move freely'); state.setup = _su; }
   console.log(`[chainmail-board v${SIM_VERSION}] tests OK`);
+
+  // ---- Console diagnostic: run cmMissile() with your firer SELECTED and the
+  // target TARGETED to see exactly which gate blocks the shot. Set
+  // window.CM_DEBUG = true to also log the resolve path's bail reason on each
+  // Fire click. Both are dev aids; remove the block to strip them.
+  window.cmMissile = function () {
+    const a = state.units.find(u => u.id === state.selectedId);
+    const d = state.units.find(u => u.id === state.targetId);
+    const ok = v => v ? '%cPASS' : '%cFAIL';
+    const css = v => v ? 'color:#2e7d32;font-weight:700' : 'color:#c62828;font-weight:700';
+    const line = (label, v, extra = '') => console.log(`${ok(v)}%c  ${label}${extra ? '  — ' + extra : ''}`, css(v), 'color:inherit;font-weight:400');
+    console.log('%c=== cmMissile diagnostic (v' + SIM_VERSION + ') ===', 'font-weight:700');
+    if (!a) { console.log('%cNo unit SELECTED. Click your hero, then run cmMissile() again.', 'color:#c62828'); return; }
+    if (!d) { console.log('%cNo TARGET set. Target the orcs (the target picker / right-click), then re-run.', 'color:#c62828'); return; }
+    console.log(`firer  : ${a.side} ${a.type} (kind=${a.kind}) weapon=${a.weapon} mounted=${!!a.mounted} facing=${a.facing}° acted=${JSON.stringify(a.acted || {})} shotsThisTurn=${a.shotsThisTurn || 0}`);
+    console.log(`target : ${d.side} ${d.type} (kind=${d.kind}) count=${d.count}`);
+    const phaseId = PHASES[state.phaseIdx].id;
+    const valid = a && d && !a.destroyed && !d.destroyed && a.side !== d.side && a.kind !== 'works' && d.kind !== 'works';
+    const canAct = valid && activeFigures(a) > 0;
+    const splitFireCase   = !!(atHalfMovePause(a) && canSplitMoveFire(a) && canSideMoveNow(a.side));
+    const passThroughCase = !!canPassThroughFire(a, d);
+    const missileOk = !state.settings.enforcePhases || phaseId === 'missile' || splitFireCase || passThroughCase;
+    const reach = inMissileRange(a, d);
+    const arc = inFiringArc(a, d);
+    const shots = missileShotsRemaining(a);
+    console.log(`context: enforcePhases=${state.settings.enforcePhases} phase='${phaseId}' enforceMovement=${state.settings.enforceMovement}`);
+    line('different sides / not destroyed / not works (valid)', valid);
+    line('canAct (has active figures)', canAct, `activeFigures=${activeFigures(a)}`);
+    line('missileOk (right phase or split/pass-through)', missileOk, `split=${splitFireCase} passthrough=${passThroughCase}`);
+    line('has a missile weapon', !!a.weapon, String(a.weapon));
+    line('shots remaining > 0', shots > 0, `remaining=${shots}`);
+    line('in range (edge-to-edge)', reach.ok, `edge=${reach.edgeIn != null ? reach.edgeIn.toFixed(1) : '—'}″ centre=${reach.distanceIn.toFixed(1)}″ max=${WEAPON_RANGES[a.weapon] ?? '?'}″${reach.reason ? ' · ' + reach.reason : ''}`);
+    line('in firing arc', arc, isHorseman(a) ? '180° left / 45° right' : '45° either side');
+    line('can act in current light', canActInDark(a));
+    line('can perceive target', canPerceive(a, d));
+    const missileEnabled = canAct && missileOk && a.weapon && shots > 0 && reach.ok && arc && canActInDark(a) && canPerceive(a, d);
+    console.log(`${ok(missileEnabled)}%c  → Fire button should be ${missileEnabled ? 'ENABLED' : 'DISABLED'}  (actual #btn-missile.disabled = ${document.getElementById('btn-missile').disabled})`, css(missileEnabled), 'color:inherit;font-weight:700');
+    // Dispatch + range-band detail for the individual table (the Hero's path).
+    const dispatch = a.weapon === 'arquebus' ? 'onArquebusFire' : a.kind === 'individual' ? 'onIndivMissile' : d.kind === 'individual' ? 'onMassMissileAtIndiv' : 'mass→mass';
+    console.log(`dispatch: ${dispatch}`);
+    if (a.kind === 'individual' && a.weapon !== 'arquebus' && reach.ok) {
+      const w = rangedWeaponById(a.weapon);
+      const armorIdx = targetArmorIdx(d);
+      const bandDist = Math.max(reach.edgeIn ?? reach.distanceIn, 1);
+      const band = rangeBand(bandDist, w ? w.range : 0);
+      console.log(`band   : using ${bandDist.toFixed(1)}″ (edge ${(reach.edgeIn ?? reach.distanceIn).toFixed(1)}″, clamped ≥1) vs range ${w ? w.range : '?'}″ → band='${band}'  (null = out of range)  targetArmorIdx=${armorIdx}`);
+      if (!band) console.log('%c⚠ band is null even though the button is enabled — report this.', 'color:#c62828');
+    }
+    const gate = (function () { try { return overHalfMoveFire(a, d, () => 0.5); } catch (e) { return null; } })();
+    if (gate) console.log(`move-gate: firer moved ${gate.moved.toFixed(1)}″ (> ½ of ${(gate.half * 2).toFixed(0)}″) — under enforceMovement a failed opposed roll spends the shot for nothing.`);
+    return { missileEnabled, reach, arc, shots, missileOk, canAct, phaseId, dispatch };
+  };
 })();
 </script>
 </body>
