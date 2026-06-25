@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.164 · Fantasy-race armour vs individual missile fire + wolf defence-class ruling. targetArmorIdx() defaulted every mass type missing from MASS_TO_INDIV_ARMOR_IDX to chain (idx 4), so a Hero/Wizard shooting goblins, kobolds, hobbits, sprites, gnomes, dwarves or giant wolves treated them all as mail. It now derives the index from the unit's melee DEFENCE class (LF→leather 1, HF→chain 4, AF→plate 6), matching the mass-fire armour groups: orc/elf/hobgoblin 4, giant orc 6, the Light-Foot races + giant wolf 1, wolf-rider 4. Rules ruling applied: Giant Wolf now attacks AND defends as Light Horse (was defend Heavy Horse / "Wight-grade"); wolf defence-class tests updated to match. Self-tests lock each race's missile armour. No change to the mass-fire MASS_ARMOR_BY_TYPE map. Built on v0.11.163. -->
+<!-- chainmail-board.html · v0.11.166 · Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -325,7 +325,7 @@
 <div class="page">
   <div class="toolbar">
     <div class="tb-row tb-setup">
-      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.164</sub></h1>
+      <h1 class="brand">Battlefield<sub class="version-tag">v0.11.166</sub></h1>
       <button id="btn-grid" class="secondary">Grid: off</button>
       <button id="btn-measure" class="secondary" title="Measure distance (m)">Measure</button>
       <button id="btn-terrain" class="secondary" title="Place terrain (t)">Terrain</button>
@@ -732,7 +732,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.164';
+const SIM_VERSION = '0.11.166';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -874,6 +874,29 @@ function elementalMeleeBonus(atk, def) {
 // normal kills in either direction when they fight (Appendix D).
 const DWARF_HALFKILL_VS = new Set(['TROLL', 'OGRE', 'GIANT']);
 
+// Appendix D hatreds & infighting (surfaced as GM reminders, never auto-resolved —
+// the sandbox doesn't move units for you). Dwarves/Goblins and Gnomes/Kobolds are
+// sworn enemies that charge each other on sight; Orcs of differing bands brawl.
+const HATRED_PAIRS = [['DWARF', 'GOBLIN'], ['GNOME', 'KOBOLD']];
+const ORC_INFIGHTING = new Set(['ORC', 'GIANT_ORC']);
+const hatesAcross = (a, b) => HATRED_PAIRS.some(([x, y]) => (a === x && b === y) || (a === y && b === x));
+function hatredNotes(u) {
+  if (!u || u.kind === 'works' || u.destroyed) return [];
+  const out = [];
+  const reachPx = inchesToPx(chargeAllowanceOf(u));
+  const within = (o) => o && !o.destroyed && o.id !== u.id && o.kind !== 'works' && footprintGapPx(u, o) <= reachPx + 1e-6;
+  const foes = state.units.filter(o => o.side !== u.side && within(o) && hatesAcross(u.type, o.type));
+  if (foes.length) {
+    const names = [...new Set(foes.map(o => typeById(o.type).name))].join(' / ');
+    out.push(`will charge the ${names} within reach before any other enemy, regardless of orders`);
+  }
+  if (ORC_INFIGHTING.has(u.type)) {
+    const bands = state.units.filter(o => o.side === u.side && within(o) && ORC_INFIGHTING.has(o.type));
+    if (bands.length) out.push(`another Orc band within a charge move — unless meleed by the enemy, they brawl unless a 4+ is rolled on an Obedience die`);
+  }
+  return out;
+}
+
 const COMBAT = Object.freeze({
   LF: { LF:{dice:1,perMen:1,kills:[6]},     HF:{dice:1,perMen:2,kills:[6]},     AF:{dice:1,perMen:3,kills:[6]},
         LH:{dice:1,perMen:2,kills:[6]},     MH:{dice:1,perMen:3,kills:[6]},     HH:{dice:1,perMen:4,kills:[6]} },
@@ -929,7 +952,7 @@ const MASS_ARMOR_BY_TYPE = {
   PE:'unarmored', LF:'unarmored', LV:'half',
   HF:'half', EHF:'half', SP:'half', AF:'fully',
   LH:'half', MH:'half', HH:'fully', MK:'fully',
-  ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', HOBGOBLIN:'half', DWARF:'half', GNOME:'half',
+  ORC:'half', GIANT_ORC:'fully', GOBLIN:'unarmored', KOBOLD:'unarmored', HOBGOBLIN:'half', DWARF:'unarmored', GNOME:'unarmored',
   ELF:'half', HOBBIT:'unarmored', SPRITE:'unarmored',
   WOLF:'unarmored',   // natural beast — no armour vs missiles (defends as Light Horse)
   WOLFRIDER:'unarmored',   // unarmored goblin on a bare wolf
@@ -5646,6 +5669,7 @@ function updateSidebar() {
     const moveLeft = Math.max(0, effectiveMoveAllowance(u) - spentIn);
     const overMove = spentIn > moveAllow + 1e-9;
     const turnedDeg = (u.turnStartFacing != null) ? angDist(u.facing, u.turnStartFacing) : 0;
+    const hates = hatredNotes(u);
     el.innerHTML =
       `<div class="stat"><span class="k">Side</span><span class="v">${u.side}</span></div>` +
       `<div class="stat"><span class="k">Kind</span><span class="v">${isIndiv ? 'individual' : 'mass'}</span></div>` +
@@ -5658,6 +5682,7 @@ function updateSidebar() {
       ((u.pendingHits || 0) > 0 ? `<div class="stat"><span class="k">Incoming</span><span class="v" style="color:#a3322a">${u.pendingHits} hit${u.pendingHits>1?'s':''} pending — applied before melee (p.9)</span></div>` : '') +
       (u.charged ? `<div class="stat"><span class="k">Charging</span><span class="v" style="color:#8a6d3b">YES · +1 die/man · charge ${chargeAllowanceOf(u)}″</span></div>` : '') +
       (!u.charged && u.chargedLastTurn ? `<div class="stat"><span class="k">Charge</span><span class="v" style="color:var(--ink-soft)">charged last turn · normal speed only</span></div>` : '') +
+      hates.map(n => `<div class="stat"><span class="k">Hatred</span><span class="v" style="color:#a8400f">${n} (Appendix D)</span></div>`).join('') +
       (u.fatigued ? `<div class="stat"><span class="k">Fatigue</span><span class="v" style="color:#8a6d3b">FATIGUED</span></div>` : '') +
       (u.prisoners > 0 ? `<div class="stat"><span class="k">Prisoners</span><span class="v" style="color:#8a6d3b">${u.prisoners} (guard ${Math.ceil(u.prisoners/5)}+)</span></div>` : '') +
       (u.indirect ? `<div class="stat"><span class="k">Indirect fire</span><span class="v" style="color:#8a6d3b">ON · range −⅓, +1 armor cat</span></div>` : '') +
@@ -7459,7 +7484,10 @@ function canPauseAtHalf(u) {
 // effectiveMoveAllowance once the unit has fired from its pause (u.splitFired).
 const BOW_WEAPONS = new Set(['short_bow', 'horsebow', 'longbow', 'composite']);
 const isBowArmed = (u) => BOW_WEAPONS.has(u.weapon);
-const canSplitMoveFire = (u) => isHorseman(u) && isBowArmed(u);
+// Horsemen split-move-fire; Elves and Fairies (Sprites) may too, "even though they
+// are footmen" (Appendix D), provided they carry a bow.
+const SPLIT_FIRE_FOOT = new Set(['ELF', 'SPRITE']);
+const canSplitMoveFire = (u) => !!u && (isHorseman(u) || SPLIT_FIRE_FOOT.has(u.type)) && isBowArmed(u);
 function effectiveMoveAllowance(u) {
   // T2b: terrain slow is charged per-inch along the path (pathMoveCost), no longer
   // by scaling the budget at the unit's centre. The allowance is the plain move
@@ -10925,6 +10953,50 @@ renderBoard();
     console.assert(unitPointValue(hero) - unitPointValue(plain) === 10, 'points: a Hero\u2019s magic sword adds 10 (super-swords carry no premium)'); }
   console.assert(elfMagicBonus('GIANT') === 0 && elfMagicBonus('OGRE') === 0 && elfMagicBonus('TROLL') === 0, 'elf vs fantastics → Appendix E scores (deferred → 0)');
   console.assert(DWARF_HALFKILL_VS.has('OGRE') && DWARF_HALFKILL_VS.has('TROLL') && DWARF_HALFKILL_VS.has('GIANT') && !DWARF_HALFKILL_VS.has('HF'), 'dwarf half-kills vs ogres/trolls/giants only');
+  // Dwarves & Gnomes (Appendix D): unarmoured vs missiles (their edge is small-size
+  // half-kills vs big creatures, not armour); operate day or night (no light gate);
+  // Morale 5, Point Value 2.
+  console.assert(MASS_ARMOR_BY_TYPE.DWARF === 'unarmored' && MASS_ARMOR_BY_TYPE.GNOME === 'unarmored', 'dwarves/gnomes: unarmoured vs mass missile fire (not half-armoured)');
+  console.assert(targetArmorIdx({ kind:'mass', type:'DWARF' }) === 1 && targetArmorIdx({ kind:'mass', type:'GNOME' }) === 1, 'dwarves/gnomes: leather vs individual missile fire (Light-Foot defence)');
+  console.assert(lightDiePenalty({ type:'DWARF' }) === 0 && lightDiePenalty({ type:'GNOME' }) === 0 && !LIGHT_DIE_PENALTY_TYPES.has('DWARF') && !LIGHT_DIE_PENALTY_TYPES.has('GNOME'), 'dwarves/gnomes: no bright-light penalty (operate day or night)');
+  console.assert(typeById('DWARF').morale === 5 && typeById('GNOME').morale === 5 && unitPointValue({ kind:'mass', type:'DWARF', count:1 }) === 2 && unitPointValue({ kind:'mass', type:'GNOME', count:1 }) === 2, 'dwarves/gnomes: Morale 5, Point Value 2');
+
+  // Goblins/Orcs/Elves RAW lock (Appendix D).
+  console.assert(['GOBLIN','KOBOLD','ORC','GIANT_ORC'].every(t => LIGHT_DIE_PENALTY_TYPES.has(t) && LIGHT_MORALE_PENALTY_TYPES.has(t)), 'goblin/kobold/orc/giant-orc: bright light costs a die AND a morale point');
+  console.assert(!LIGHT_DIE_PENALTY_TYPES.has('ELF') && !LIGHT_MORALE_PENALTY_TYPES.has('ELF'), 'elves: unaffected by bright light');
+  console.assert(typeById('HOBGOBLIN').cls === 'AF' && defendTypeForMass('HOBGOBLIN') === 'HF', 'hobgoblin: attacks Armored Foot, defends Heavy Foot');
+  console.assert(typeById('GIANT_ORC').cls === 'AF', 'giant orc: attacks as Armored Foot');
+  { const pv = t => unitPointValue({ kind:'mass', type:t, count:1 });
+    console.assert(pv('GOBLIN') === 1.5 && pv('KOBOLD') === 1.5 && pv('HOBGOBLIN') === 2.5 && pv('ORC') === 2 && pv('GIANT_ORC') === 2.5 && pv('ELF') === 4, 'fantasy points: goblin/kobold 1½, hobgoblin/giant-orc 2½, orc 2, elf 4'); }
+  console.assert(typeById('ELF').morale === 6, 'elf: Morale 6');
+  // Elves & Fairies split-move-fire even as footmen (with a bow).
+  console.assert(canSplitMoveFire({ type:'ELF', weapon:'longbow', kind:'mass' }) === true && canSplitMoveFire({ type:'SPRITE', weapon:'longbow', kind:'mass' }) === true, 'elves/fairies: may split-move-fire as footmen');
+  console.assert(canSplitMoveFire({ type:'ELF', weapon:null, kind:'mass' }) === false, 'elf: needs a bow to split-fire');
+  console.assert(canSplitMoveFire({ type:'HF', weapon:'longbow', kind:'mass' }) === false, 'plain footmen still cannot split-move-fire');
+
+  // Hatreds & infighting reminders (Appendix D) — GM flags when rivals are in reach.
+  { const _su = state.units, _ss = state.setup, _fs = state.settings.figureScale;
+    state.setup = false; state.settings.figureScale = 1;
+    const mk = (id, side, type, x) => ({ id, kind:'mass', side, type, count:10, x, y:100, facing:0, spacing:'close', cols:5, rows:2 });
+    const dwarf = mk(-71,'A','DWARF',100), goblin = mk(-72,'B','GOBLIN',130), farGob = mk(-73,'B','GOBLIN',6000);
+    state.units = [dwarf, goblin, farGob];
+    console.assert(hatredNotes(dwarf).some(n => /charge the Goblin/i.test(n)), 'hatred: a dwarf flags goblins within a charge move');
+    console.assert(hatredNotes(goblin).some(n => /charge the Dwarf/i.test(n)), 'hatred: reciprocal — goblins flag the dwarves');
+    state.units = [dwarf, farGob];
+    console.assert(hatredNotes(dwarf).length === 0, 'hatred: nothing flagged when the goblins are out of reach');
+    const gnome = mk(-74,'A','GNOME',100), kobold = mk(-75,'B','KOBOLD',130), hob = mk(-76,'B','HOBGOBLIN',130);
+    state.units = [gnome, kobold];
+    console.assert(hatredNotes(gnome).some(n => /Kobold/i.test(n)), 'hatred: gnomes charge kobolds');
+    state.units = [gnome, hob];
+    console.assert(hatredNotes(gnome).length === 0, 'hatred: gnomes have no quarrel with hobgoblins');
+    const orcA = mk(-77,'A','ORC',100), orcB = mk(-78,'A','ORC',130), giantOrc = mk(-79,'A','GIANT_ORC',130);
+    state.units = [orcA, orcB];
+    console.assert(hatredNotes(orcA).some(n => /Orc band/i.test(n)), 'infighting: two Orc bands within a charge move flag a brawl');
+    state.units = [orcA, giantOrc];
+    console.assert(hatredNotes(orcA).some(n => /Orc band/i.test(n)), 'infighting: giant Orcs count as an Orc band');
+    state.units = [orcA, goblin];
+    console.assert(hatredNotes(orcA).length === 0, 'infighting: orcs only brawl with other orcs');
+    state.units = _su; state.setup = _ss; state.settings.figureScale = _fs; }
   const elfVsGob = resolveMassMelee({ attacker:{ type:'ELF', count:10, bonusDice: elfMagicBonus('GOBLIN') }, defender:{ type:'GOBLIN', count:20, defendType:'LF' }, rng: always(6) });
   console.assert(elfVsGob.attacker.totalDice === 13, 'elf magic +3 vs goblins adds 3 dice (10 + 3)');
   console.assert(Math.floor(4 * 1.5) === 6 && Math.floor(5 * 1.5) === 7, 'hobbit sling: every two firing count three');
