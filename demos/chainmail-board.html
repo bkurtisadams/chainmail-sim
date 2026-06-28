@@ -1,10 +1,10 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.170 · Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
+<!-- chainmail-board.html · v0.11.171 · Cannon now actually kills + bands labelled. FIX: figuresUnderDowel required a figure's CENTRE to fall within half the ball diameter of the dowel line (heavy field gun = ±0.375″) with no allowance for the figure's own base, so the moment the d6 variation deviated the line the target's centre sat outside the band and the shot killed nobody. It now adds the figure's base radius (pip/2) as slack on perp, along, and both span ends — mirroring figuresUnderCircle's reach = radiusPx + pip/2 and figuresUnderRect's slack — so a figure dies when the ball TOUCHES its base (p.14), not only when it is centred on the line. The unitBounds destructure moved above the hit closures so pip can feed the slack (no duplicate later). LABEL: the cannon overlay's side-coloured kill bands read as anonymous blue/red rectangles, so renderCannonShot now prints a horizontal caption at the muzzle — "cannon SHORT · white sections / LONG · black sections — shaded bands kill any figure touched". Also re-synced the <title> version literal, which had drifted to v0.11.150. PRIOR (v0.11.170): Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
   PRIOR (v0.11.166): Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.150</title>
+<title>Chainmail — Battlefield · v0.11.171</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -768,7 +768,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.170';
+const SIM_VERSION = '0.11.171';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4358,14 +4358,18 @@ function figuresUnderCircle(target, cx, cy, radiusPx) {
 // that fall along one of the named-colour `hitSpans` (inch ranges from the muzzle).
 function figuresUnderDowel(target, mx, my, ux, uy, rangePx, halfWidthPx, hitSpans) {
   if (!target || target.destroyed) return 0;
-  const inSpan = (alongPx) => { const ai = pxToInches(alongPx); return hitSpans.some(s => ai >= s.start && ai <= s.end); };
+  const { w, h, pip, gap, pad } = unitBounds(target);
+  // p.14: the ball kills any figure it TOUCHES, not only those whose centre sits on
+  // the line. Add the figure's base radius (pip/2) as slack — same convention as
+  // figuresUnderCircle (reach = radiusPx + pip/2) and figuresUnderRect.
+  const slack = pip / 2, slackIn = pxToInches(slack);
+  const inSpan = (alongPx) => { const ai = pxToInches(alongPx); return hitSpans.some(s => ai >= s.start - slackIn && ai <= s.end + slackIn); };
   const hit = (wx, wy) => {
     const along = (wx - mx) * ux + (wy - my) * uy;
     const perp = Math.abs((wx - mx) * (-uy) + (wy - my) * ux);
-    return along >= 0 && along <= rangePx && perp <= halfWidthPx && inSpan(along);
+    return along >= -slack && along <= rangePx + slack && perp <= halfWidthPx + slack && inSpan(along);
   };
   if (target.kind === 'individual') return hit(target.x, target.y) ? 1 : 0;
-  const { w, h, pip, gap, pad } = unitBounds(target);
   const cols = target.cols, f = (target.facing || 0) * Math.PI / 180, cos = Math.cos(f), sin = Math.sin(f);
   let n = 0;
   for (let i = 0; i < target.count; i++) {
@@ -5516,9 +5520,11 @@ function renderCannonShot() {
     const x0 = inchesToPx(sp.start);
     bands += `<rect x="${x0.toFixed(1)}" y="${(-hw).toFixed(1)}" width="${(inchesToPx(sp.end) - x0).toFixed(1)}" height="${(2 * hw).toFixed(1)}" fill="${kill}"/>`;
   }
+  const callTxt = s.color === 'W' ? 'SHORT · white sections' : 'LONG · black sections';
+  const label = `<text x="${(s.mx + 9).toFixed(1)}" y="${(s.my - 9).toFixed(1)}" font-size="11" font-family="var(--sans, system-ui, sans-serif)" fill="${col}" stroke="#000" stroke-width="0.5" paint-order="stroke" pointer-events="none">cannon ${callTxt} — shaded bands kill any figure touched</text>`;
   return `<g transform="translate(${s.mx} ${s.my}) rotate(${ang.toFixed(2)})" pointer-events="none">` +
     `<line x1="0" y1="0" x2="${s.rangePx.toFixed(1)}" y2="0" stroke="${col}" stroke-width="1" stroke-dasharray="3 3"/>${bands}` +
-    `<circle cx="0" cy="0" r="2.2" fill="${col}"/></g>`;
+    `<circle cx="0" cy="0" r="2.2" fill="${col}"/></g>` + label;
 }
 
 function renderOverlay() {
