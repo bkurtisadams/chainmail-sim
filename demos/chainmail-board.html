@@ -1,10 +1,10 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.171 · Cannon now actually kills + bands labelled. FIX: figuresUnderDowel required a figure's CENTRE to fall within half the ball diameter of the dowel line (heavy field gun = ±0.375″) with no allowance for the figure's own base, so the moment the d6 variation deviated the line the target's centre sat outside the band and the shot killed nobody. It now adds the figure's base radius (pip/2) as slack on perp, along, and both span ends — mirroring figuresUnderCircle's reach = radiusPx + pip/2 and figuresUnderRect's slack — so a figure dies when the ball TOUCHES its base (p.14), not only when it is centred on the line. The unitBounds destructure moved above the hit closures so pip can feed the slack (no duplicate later). LABEL: the cannon overlay's side-coloured kill bands read as anonymous blue/red rectangles, so renderCannonShot now prints a horizontal caption at the muzzle — "cannon SHORT · white sections / LONG · black sections — shaded bands kill any figure touched". Also re-synced the <title> version literal, which had drifted to v0.11.150. PRIOR (v0.11.170): Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
+<!-- chainmail-board.html · v0.11.172 · Resizable board via a vertical splitter. The board was sized only by the browser window: .layout was a fixed grid (1fr board · 240px controls · 320px log), so the board's width was just "viewport minus 560px of fixed rail." Added a draggable splitter between the board and the side rail. The two rail columns are now calc(var(--rail) * 0.4286) / calc(var(--rail) * 0.5714), so they keep their 240:320 ratio and shrink together as --rail drops; dragging the grip right narrows the rail (board grows), clamped to a usable minimum (MIN 450 → controls ≈193px, log ≈257px). Drag ~60px past the min and the rail snaps shut (.rail-collapsed zeroes both columns) for a full-width board; the grip stays pinned at the right edge and re-opens it, with 60px hysteresis so it doesn't flicker. Max rail is bounded so the board keeps ≥360px. Double-click the grip resets to 560. Size persists in localStorage (key cm-rail; "x" = collapsed). Pure presentation — no resize listener exists and the SVG reads its rect/CTM live per pointer event (getScreenCTM/getBoundingClientRect), so clicks stay accurate with no re-render. New: .rail-splitter / .rail-collapsed styles, a #rail-splitter handle after #board, initRailSplitter() called in boot. PRIOR (v0.11.171): Cannon now actually kills + bands labelled. figuresUnderDowel required a figure's CENTRE within half the ball diameter of the line (heavy field gun = ±0.375″) with no base allowance, so any non-straight variation roll killed nobody; it now adds the base radius (pip/2) as slack so a figure dies when the ball TOUCHES it (p.14). renderCannonShot captions the side-coloured kill bands. <title> re-synced. PRIOR (v0.11.170): Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
   PRIOR (v0.11.166): Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.171</title>
+<title>Chainmail — Battlefield · v0.11.172</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -120,7 +120,18 @@
   .toolbar .phase-dock button { padding: 4px 9px; font-size: 10.5px; letter-spacing: 0.4px;
     background: #faf6ea; border: 0.5px solid #b8923a; color: #7a5c1e; }
 
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px 320px; gap: 10px; }
+  /* Board | splitter | controls | log. The two rail columns keep their 240:320
+     ratio (0.4286 / 0.5714) as --rail shrinks, so dragging the splitter narrows
+     them together; .rail-collapsed zeroes both for a full-width board. */
+  .layout { display: grid; gap: 10px;
+    grid-template-columns: minmax(0, 1fr) 7px calc(var(--rail, 560px) * 0.4286) calc(var(--rail, 560px) * 0.5714); }
+  .layout.rail-collapsed { grid-template-columns: minmax(0, 1fr) 7px 0 0; }
+  .layout.rail-collapsed > aside { overflow: hidden; }
+  .rail-splitter { grid-column: 2; align-self: stretch; min-height: 220px; cursor: col-resize;
+    background: var(--rule); border-radius: 3px; opacity: 0.45; touch-action: none;
+    transition: opacity 0.12s, background 0.12s; }
+  .rail-splitter:hover, .rail-splitter.dragging { opacity: 1; background: var(--gold); }
+  .layout.rail-collapsed .rail-splitter { opacity: 0.85; background: var(--gold); }
   aside.side-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0;
     max-height: calc(100vh - 160px); overflow-y: auto; padding-right: 4px; }
   aside.log-panel  { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -438,6 +449,7 @@
 
   <div class="layout">
     <svg id="board" viewBox="0 0 960 540"></svg>
+    <div class="rail-splitter" id="rail-splitter" title="Drag to resize board ↔ panels · double-click to reset"></div>
     <aside class="side-panel">
       <div class="panel">
         <h2 class="sel-head">Selected <span class="swatch" id="selected-swatch" style="display:none"></span><span class="sel-actions"><button id="btn-fly" class="edit-btn" hidden title="Take off / land (airborne uses fly speed; fliers must descend to melee)">Fly</button><button id="btn-vanish" class="edit-btn" hidden title="Become invisible / reappear (hidden until it attacks; Hobbits only in cover)">Vanish</button><button id="btn-edit" class="edit-btn" hidden title="Edit the selected unit's definition">Edit</button></span></h2>
@@ -768,7 +780,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.171';
+const SIM_VERSION = '0.11.172';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -10476,6 +10488,45 @@ startTurnInitiative();   // Slice 8D: initiative for turn 1
 renderTurnUI();
 renderBoard();
 { const vt = $('#version-tag'); if (vt) vt.textContent = `v${SIM_VERSION}`; }   // v0.11.169: brand tag mirrors SIM_VERSION (no more hand-sync)
+
+// Vertical splitter between the board and the side rail. Drags right to shrink the
+// rail (both columns shrink proportionally via --rail), clamps at a usable minimum,
+// and snaps the rail closed past a threshold for a full-width board; the handle
+// re-opens it. Pure presentation — the SVG reads its rect/CTM live per pointer
+// event, so a CSS resize needs no re-render. Size persists in localStorage.
+function initRailSplitter() {
+  const layout = document.querySelector('.layout');
+  const grip = document.getElementById('rail-splitter');
+  if (!layout || !grip) return;
+  const DEF = 560, MIN = 450, COLLAPSE = MIN - 60, CAP = 820, BOARD_MIN = 360;
+  let collapsed = false;
+  const curRail = () => collapsed ? 0 : (parseFloat(getComputedStyle(layout).getPropertyValue('--rail')) || DEF);
+  const apply = (rail) => {
+    if (rail <= 0) { collapsed = true;  layout.classList.add('rail-collapsed');    layout.style.removeProperty('--rail'); }
+    else           { collapsed = false; layout.classList.remove('rail-collapsed'); layout.style.setProperty('--rail', rail + 'px'); }
+  };
+  const persist = () => { try { localStorage.setItem('cm-rail', collapsed ? 'x' : String(curRail())); } catch (e) {} };
+  try { const s = localStorage.getItem('cm-rail');
+        if (s === 'x') apply(0); else if (s) apply(Math.min(CAP, Math.max(MIN, parseFloat(s) || DEF))); } catch (e) {}
+
+  let startX = 0, startRail = DEF, dragging = false, maxRail = CAP;
+  grip.addEventListener('pointerdown', (e) => {
+    dragging = true; startX = e.clientX; startRail = curRail();
+    maxRail = Math.min(CAP, layout.clientWidth - BOARD_MIN - 17);   // reserve board + 7px grip + 10px gap
+    grip.classList.add('dragging'); try { grip.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const raw = startRail - (e.clientX - startX);   // drag right → rail shrinks
+    if (raw < COLLAPSE) apply(0); else apply(Math.min(maxRail, Math.max(MIN, raw)));
+  });
+  const end = (e) => { if (!dragging) return; dragging = false; grip.classList.remove('dragging');
+    try { grip.releasePointerCapture(e.pointerId); } catch (_) {} persist(); };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  grip.addEventListener('dblclick', () => { apply(DEF); persist(); });
+}
+initRailSplitter();
 
 /* === J. TESTS (geometry + casualty + class bump) ====================== */
 (function tests() {
