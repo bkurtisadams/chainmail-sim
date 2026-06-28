@@ -1,10 +1,10 @@
 <!doctype html>
-<!-- chainmail-board.html · v0.11.172 · Resizable board via a vertical splitter. The board was sized only by the browser window: .layout was a fixed grid (1fr board · 240px controls · 320px log), so the board's width was just "viewport minus 560px of fixed rail." Added a draggable splitter between the board and the side rail. The two rail columns are now calc(var(--rail) * 0.4286) / calc(var(--rail) * 0.5714), so they keep their 240:320 ratio and shrink together as --rail drops; dragging the grip right narrows the rail (board grows), clamped to a usable minimum (MIN 450 → controls ≈193px, log ≈257px). Drag ~60px past the min and the rail snaps shut (.rail-collapsed zeroes both columns) for a full-width board; the grip stays pinned at the right edge and re-opens it, with 60px hysteresis so it doesn't flicker. Max rail is bounded so the board keeps ≥360px. Double-click the grip resets to 560. Size persists in localStorage (key cm-rail; "x" = collapsed). Pure presentation — no resize listener exists and the SVG reads its rect/CTM live per pointer event (getScreenCTM/getBoundingClientRect), so clicks stay accurate with no re-render. New: .rail-splitter / .rail-collapsed styles, a #rail-splitter handle after #board, initRailSplitter() called in boot. PRIOR (v0.11.171): Cannon now actually kills + bands labelled. figuresUnderDowel required a figure's CENTRE within half the ball diameter of the line (heavy field gun = ±0.375″) with no base allowance, so any non-straight variation roll killed nobody; it now adds the base radius (pip/2) as slack so a figure dies when the ball TOUCHES it (p.14). renderCannonShot captions the side-coloured kill bands. <title> re-synced. PRIOR (v0.11.170): Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
+<!-- chainmail-board.html · v0.11.173 · No cannon fire into woods (p.14). Added inWoodsAt(x,y) — true when a point lies in a region whose REAL type is woods (hallucinatory disguise is reality-governed, so r.type rules). engineFireState now reports intoWoods = !isCatapult && inWoodsAt(target) — guns only; a catapult plunges, so its canopy negates the hit elsewhere rather than being forbidden. intoWoods is deliberately kept OUT of `ok`, so the Fire button stays clickable: clicking it logs "cannon fire into woods is not permitted (p.14) — shot held, no reload spent" and aborts before pushUndo, rather than dying as a silent disabled button. The button title also warns on hover ("… target stands in woods"). Self-test locks it: a gun aimed into a wood is flagged, a catapult is not, a gun on clear ground is not. PRIOR (v0.11.172): Resizable board via a vertical splitter — rail columns are calc(var(--rail)*0.4286/0.5714), drag the grip to narrow them together, snaps shut past the min for a full-width board, persists in localStorage. PRIOR (v0.11.171): Cannon now actually kills + bands labelled — figuresUnderDowel now adds the figure base radius (pip/2) as slack so a touched figure dies (p.14); renderCannonShot captions the kill bands. PRIOR (v0.11.170): Pan moved from middle-drag to right-drag. onBoardMouseDown now starts a pan on evt.button === 2 (was 1), gated by !state.terrainMode so terrain right-click keeps adding/removing vertices; units already stopPropagation, so right-click on a unit still opens its context menu (board pan only fires on empty board). The board contextmenu handler already preventDefault()s, so no browser menu pops on right-drag. Help updated: toolbar hint and the shortcuts table now read "right-drag -> pan", and the right-click row is clarified to "right-click unit". PRIOR (v0.11.169): Brand version tag bound to SIM_VERSION. The header <sub class="version-tag"> was a hand-typed literal (stuck at v0.11.166) that drifted from the SIM_VERSION const; gave it id="version-tag", dropped the literal, and set its text from SIM_VERSION in the boot sequence (after renderBoard), so line 364 and the const can never disagree again. PRIOR (v0.11.168): Joust picker id fix. FIX: onJoustPick stored the <select> value (a string) into state.joustA/joustB, but unit ids are numbers, so renderJoustDuel's state.units.find(u => u.id === state.joustA) never matched after a manual pick — the duel fell back to its empty "pick two knights" state and a picked knight (Heroes included) appeared invisible. Value is now Number()-coerced (empty option -> null) and the dedup uses ?? . joustEligibleUnits was already correct: it admits every non-destroyed, non-works unit, so individual/mass/attached Heroes were never filtered out. PRIOR (v0.11.167): Joust section visual upgrade — ported the odd-chainmail sheet's Appendix-C interactive aim-target shield, heraldic coat-of-arms, the legal-defence "orb" position picker, and a per-knight Bout Status panel into joust mode. Engine unchanged (the matrix/PDP-AP/scoring were already identical to jousting.mjs). New: joustAimTargetSVG() replaces joustShieldSVG (9 polygon shield regions + helm circle, real shield outline, per-side selection tint); joustArmsSVG()/randomJoustArms()/JOUST_TINCTURE_HEX/JOUST_CHARGE_PATHS render and roll arms; renderJoustDuel() column rebuilt around target + def list + bout + arms; runJoustRide() now logs aCode/bCode so Bout Status can show lance/helm from the last ride; state.joustArms persists each side's arms; onJoustModeAction handles .jt-hit aim clicks, .jm-defrow position clicks, and data-jact="arms". Built on v0.11.166.
   PRIOR (v0.11.166): Appendix D hatreds/infighting reminders + elf split-fire + goblin/orc/elf RAW audit. Added hatredNotes(): the Selected panel now flags, in amber, when a Dwarf/Gnome and an enemy Goblin/Kobold are within a charge move (mutual sworn-enemy auto-charge) and when two friendly Orc bands (incl. giant Orcs) are within a charge move (brawl unless meleed by the enemy or a 4+ obedience die). Reminders only — never auto-resolved. Fixed: Elves and Fairies (Sprites) can now split-move-and-fire even though footmen (RAW), provided bow-armed (canSplitMoveFire + SPLIT_FIRE_FOOT). Audited goblins/kobolds, orcs, elves against RAW and confirmed already faithful (self-tests added to lock): point values 1½/1½/2½/2/2½/4, morale 5/5/5/5/6, goblin+kobold+orc+giant-orc bright-light −1 die AND −1 morale, dark vision, hobgoblin AF/HF and giant-orc AF classes. OPEN (need your ruling): hobgoblins are still penalised in bright light though the RAW text grants that only to goblins/kobolds/orcs; the elf Fantasy-Combat-Table scores vs Hero/SuperHero/Wizard/Wraith/Wight/Lycanthrope and elf invisibility remain unmodelled; elves are not auto-armed with a bow, so split-fire needs a bow equipped. Built on v0.11.165. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Chainmail — Battlefield · v0.11.172</title>
+<title>Chainmail — Battlefield · v0.11.173</title>
 <style>
   :root {
     --bg:#ece0c4; --panel:#f5eedb; --field:#a8b094; --field-edge:#6d735a; --ink:#2c2316; --ink-soft:#6e6047; --rule:#b6a682;
@@ -780,7 +780,7 @@
 </div>
 
 <script type="module">
-const SIM_VERSION = '0.11.172';
+const SIM_VERSION = '0.11.173';
 const PX_PER_INCH = 24;
 let BOARD_W = 2304; // 96" wide  (8 ft length — Chainmail p.5: length ≥ 8', width 4–7') — resizable via Settings ▸ Board size
 let BOARD_H = 1152; // 48" deep  (4 ft) — resizable via Settings ▸ Board size
@@ -4012,6 +4012,12 @@ function terrainTypesAt(x, y) {
   for (const r of state.terrain) if (inTerrainRect(x, y, r)) { const t = TERRAIN_TYPES[r.type]; if (t) out.push(t); }
   return out;
 }
+// Cannon fire into woods is not permitted (p.14). True when (x,y) lies in a region
+// whose REAL type is woods — hallucinatory disguise is reality-governed (r.type rules).
+function inWoodsAt(x, y) {
+  for (const r of state.terrain) if (r.type === 'wooded' && inTerrainRect(x, y, r)) return true;
+  return false;
+}
 // Most-restrictive (lowest) move multiplier under a point; 1 on clear ground.
 function terrainMoveMultAt(x, y) {
   let m = 1;
@@ -5797,7 +5803,8 @@ function engineFireState(a, d) {
   const inArc = isCatapult ? inFiringArc(a, d) : true;   // 45° L/R for all catapult fire (p.12)
   const ready = worksReadyToFire(a, state.turn);
   const mode = isStructure ? 'batter' : (isCatapult ? 'antipersonnel' : 'cannonLine');
-  return { wt, f, r, inRange, inArc, ready, mode, ok: inRange && inArc && ready };
+  const intoWoods = !isCatapult && inWoodsAt(d.x, d.y);   // p.14: no cannon fire into woods (catapults plunge — canopy negates instead)
+  return { wt, f, r, inRange, inArc, ready, mode, intoWoods, ok: inRange && inArc && ready };
 }
 function resolveEngineFire() {
   if (state.settings.enforcePhases && PHASES[state.phaseIdx].id !== 'artillery') return;
@@ -5805,6 +5812,12 @@ function resolveEngineFire() {
   const d = state.units.find(u => u.id === state.targetId);
   const es = engineFireState(a, d);
   if (!es || !es.ok) return;
+  if (es.intoWoods) {
+    const tn = d.kind === 'works' ? (WORKS_TYPES[d.worksType]?.name || 'target') : (typeById(d.type)?.name || 'target');
+    appendTurn(`${es.wt.name} — held`,
+      `<div class="step">${a.side} ${es.wt.name} → ${d.side} ${tn}: <b>cannon fire into woods is not permitted</b> (p.14). Shot held — no reload spent.</div>`);
+    return;
+  }
   pushUndo('engine-fire');
   if (es.f.mode === 'catapult') a.readyTurn = state.turn + worksReloadTurns(a);
   if (es.mode === 'antipersonnel') { resolveCatapultAntipersonnel(a, d, es); renderBoard(); return; }
@@ -6393,6 +6406,7 @@ function updateButtons() {
       !es.inRange ? `Out of range (${es.r.toFixed(1)}″ — fires ${es.f.mode === 'catapult' ? `${CATAPULTS[es.f.key].min}–${CATAPULTS[es.f.key].max}` : `0–${CANNON[es.f.key].range}`}″)` :
       es.inArc === false ? `Outside the 45° arc — rotate the ${es.wt.name} to bear` :
       !es.ready ? `Reloading until turn ${a.readyTurn}` :
+      es.intoWoods ? `Cannon fire into woods is not permitted (p.14)${d ? ` — ${d.side} target stands in woods` : ''}` :
       !artilleryOk ? 'Resolve in the Artillery phase' :
       es.mode === 'antipersonnel' ? `Drop the ${CATAPULTS[es.f.key].hitArea}″ hit area on ${d ? d.side + ' ' : ''}troops at ${es.r.toFixed(1)}″ — kills figures under it (scatter applies)` :
       es.mode === 'cannonLine' ? `Fire ${es.wt.name} at ${es.r.toFixed(1)}″ — dowel line, ${a && a.cannonLong ? 'LONG (black)' : 'SHORT (white)'} sections, d6 lateral variation (p.14)` :
@@ -11585,6 +11599,18 @@ initRailSplitter();
     console.assert(flank && !flank.ok && flank.inArc === false, 'engine: a target on the flank is outside the 45° arc');
     const bat = engineFireState(cat(), wall(240, 480 - inchesToPx(20)));
     console.assert(bat && bat.ok && bat.mode === 'batter', 'engine: a structure target still resolves as battering');
+    // Cannon fire into woods is not permitted (p.14): a gun is flagged intoWoods (button still
+    // clickable so the refusal can be logged); a catapult is never flagged (its canopy negates instead).
+    { const gun = (facing=0) => ({ kind:'works', worksType:'gunLight', side:'A', x:240, y:480, facing, crew:4 });
+      const _tr = state.terrain;
+      state.terrain = [{ id:'tw', type:'wooded', x:240, y:480 - inchesToPx(20), w:inchesToPx(10), h:inchesToPx(8), rot:0 }];
+      const gw = engineFireState(gun(), foe(240, 480 - inchesToPx(20)));
+      console.assert(gw && gw.intoWoods === true, 'engine: a cannon aimed at troops standing in woods is flagged intoWoods (p.14)');
+      const cw = engineFireState(cat(), foe(240, 480 - inchesToPx(20)));
+      console.assert(cw && !cw.intoWoods, 'engine: a catapult is never blocked by woods (canopy negates the hit instead)');
+      const gclear = engineFireState(gun(), foe(240, 480 - inchesToPx(25)));   // 25" ahead, clear of the wood
+      console.assert(gclear && !gclear.intoWoods, 'engine: a cannon aimed at troops on clear ground is not flagged');
+      state.terrain = _tr; }
     state.turn = _t; }
   console.assert(arquebusHitOn(3) === 2 && arquebusHitOn(9) === 4 && arquebusHitOn(15) === 5 && arquebusHitOn(20) === null, 'arquebus bands 2/4/5, none beyond 18"');
   console.assert(resolveArquebus({ rangeIn: 9, shooters: 1, rng: always(4) }).kills === 1, 'arquebus: die 4 at 9" (need 4) hits');
